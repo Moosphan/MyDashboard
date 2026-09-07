@@ -2,7 +2,8 @@ import { BrowserWindow, ipcMain } from 'electron'
 import { getDatabase } from '../database/connection'
 import { AISubscriptionRepository, AIToolRepository } from '../database/repositories/ai-repository'
 import { getCodexUsageDashboard } from '../services/codex-usage-service'
-import { getResetRadarSnapshot, refreshChatGPTAccountUsage } from '../services/reset-radar/reset-radar-service'
+import { getResetRadarSnapshot } from '../services/reset-radar/reset-radar-service'
+import { refreshChatGPTUsageNow } from '../services/reset-radar/usage-refresh-scheduler'
 
 const AI_CHANNELS = {
   GET_SUBSCRIPTIONS: 'ai:getSubscriptions',
@@ -36,7 +37,7 @@ export function registerAiIpcHandlers(): void {
 
   ipcMain.handle('ai:refreshCodexUsageDashboard', async () => {
     try {
-      await refreshChatGPTAccountUsage()
+      await refreshChatGPTUsageNow({ rebuildSession: true })
       await getResetRadarSnapshot(true)
       for (const window of BrowserWindow.getAllWindows()) {
         if (!window.isDestroyed()) window.webContents.send('reset-radar:updated')

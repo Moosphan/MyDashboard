@@ -27,18 +27,19 @@ function buildRequestHeaders(accessToken?: string): HeadersInit {
   return accessToken ? { ...REQUEST_HEADERS, authorization: `Bearer ${accessToken}` } : REQUEST_HEADERS
 }
 
-async function requestJson(fetcher: ChatGPTUsageFetcher, path: string, accessToken?: string): Promise<unknown> {
+async function requestJson(fetcher: ChatGPTUsageFetcher, path: string, accessToken?: string, signal?: AbortSignal): Promise<unknown> {
   const response = await fetcher.fetch(`${CHATGPT_ORIGIN}${path}`, {
     headers: buildRequestHeaders(accessToken),
+    signal,
   })
   if (!response.ok) throw new Error(`ChatGPT usage request failed: HTTP ${response.status}`)
   return response.json()
 }
 
-async function requestFirstAvailable(fetcher: ChatGPTUsageFetcher, paths: string[], accessToken?: string): Promise<unknown | null> {
+async function requestFirstAvailable(fetcher: ChatGPTUsageFetcher, paths: string[], accessToken?: string, signal?: AbortSignal): Promise<unknown | null> {
   for (const path of paths) {
     try {
-      return await requestJson(fetcher, path, accessToken)
+      return await requestJson(fetcher, path, accessToken, signal)
     } catch {
       // Optional metadata endpoints can change independently from the quota endpoint.
     }
@@ -46,13 +47,13 @@ async function requestFirstAvailable(fetcher: ChatGPTUsageFetcher, paths: string
   return null
 }
 
-export async function fetchChatGPTAccountUsage(fetcher: ChatGPTUsageFetcher, accessToken?: string): Promise<ChatGPTAccountUsagePayload> {
-  const usage = await requestJson(fetcher, '/backend-api/wham/usage', accessToken)
+export async function fetchChatGPTAccountUsage(fetcher: ChatGPTUsageFetcher, accessToken?: string, signal?: AbortSignal): Promise<ChatGPTAccountUsagePayload> {
+  const usage = await requestJson(fetcher, '/backend-api/wham/usage', accessToken, signal)
   const [credits, subscription, authSession, accountProfile] = await Promise.all([
-    requestFirstAvailable(fetcher, ['/backend-api/wham/rate-limit-reset-credits'], accessToken),
-    requestFirstAvailable(fetcher, ['/backend-api/subscriptions', '/backend-api/subscription'], accessToken),
-    requestFirstAvailable(fetcher, ['/api/auth/session'], accessToken),
-    requestFirstAvailable(fetcher, ['/backend-api/accounts/check/v4-2023-04-27', '/backend-api/accounts/check'], accessToken),
+    requestFirstAvailable(fetcher, ['/backend-api/wham/rate-limit-reset-credits'], accessToken, signal),
+    requestFirstAvailable(fetcher, ['/backend-api/subscriptions', '/backend-api/subscription'], accessToken, signal),
+    requestFirstAvailable(fetcher, ['/api/auth/session'], accessToken, signal),
+    requestFirstAvailable(fetcher, ['/backend-api/accounts/check/v4-2023-04-27', '/backend-api/accounts/check'], accessToken, signal),
   ])
 
   return {

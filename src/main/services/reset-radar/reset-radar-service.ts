@@ -197,12 +197,14 @@ export function ingestChatGPTAccountUsage(
   return nextSnapshot
 }
 
-export async function refreshChatGPTAccountUsage(accessToken?: string): Promise<ResetRadarSnapshot> {
+export async function refreshChatGPTAccountUsage(accessToken?: string, signal?: AbortSignal): Promise<ResetRadarSnapshot> {
   const status = await getChatGPTAccountStatus()
   if (status !== 'connected') throw new Error('当前没有可用的 ChatGPT 登录会话')
+  if (signal?.aborted) throw new Error('ChatGPT usage refresh timed out')
 
   const chatGPTSession = session.fromPartition(CHATGPT_SESSION_PARTITION)
-  const payload = await fetchChatGPTAccountUsage(chatGPTSession, accessToken)
+  const payload = await fetchChatGPTAccountUsage(chatGPTSession, accessToken, signal)
+  if (signal?.aborted) throw new Error('ChatGPT usage refresh timed out')
   return ingestChatGPTAccountUsage(payload.usage, payload.credits, payload.subscription, payload.session)
 }
 

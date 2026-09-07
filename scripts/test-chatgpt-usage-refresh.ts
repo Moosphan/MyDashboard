@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 import { CHATGPT_USAGE_REFRESH_INTERVAL_MS, fetchChatGPTAccountUsage } from '../src/main/services/reset-radar/chatgpt-usage-refresh'
 
@@ -60,4 +62,29 @@ test('uses the page access token when the session requires bearer authentication
   }, 'short-lived-token')
 
   assert.equal(authorization, 'Bearer short-lived-token')
+})
+
+test('passes a cancellation signal to each usage request', async () => {
+  const controller = new AbortController()
+  const signals: AbortSignal[] = []
+
+  await fetchChatGPTAccountUsage({
+    fetch: async (_url: string, init?: RequestInit) => {
+      if (init?.signal instanceof AbortSignal) signals.push(init.signal)
+      return jsonResponse({ rate_limit: { primary_window: { used_percent: 1 } } })
+    },
+  }, undefined, controller.signal)
+
+  assert.ok(signals.length > 0)
+  assert.ok(signals.every((signal) => signal === controller.signal))
+})
+
+test('routes manual refresh and wake recovery through the resilient usage scheduler', () => {
+  const aiIpcSource = readFileSync(join(__dirname, '../src/main/ipc/ai.ts'), 'utf8')
+  const schedulerSource = readFileSync(join(__dirname, '../src/main/services/reset-radar/usage-refresh-scheduler.ts'), 'utf8')
+
+  assert.match(aiIpcSource, /refreshChatGPTUsageNow/)
+  assert.match(schedulerSource, /powerMonitor\.on\('resume'/)
+  assert.match(schedulerSource, /export function refreshChatGPTUsageNow/)
+  assert.match(schedulerSource, /if \(options\.rebuildSession\) activeRefreshController\?\.abort\(\)/)
 })

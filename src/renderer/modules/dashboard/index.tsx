@@ -68,7 +68,10 @@ export default function Dashboard() {
           onOpenArticle={(articleId) => setArticleDetailId(articleId)}
         />
         {/* <CalendarWidget /> */}
-        <PriorityTaskList onOpenBoard={() => setShowProjectManager(true)} />
+        <PriorityTaskList
+          onOpenBoard={() => setShowProjectManager(true)}
+          onChanged={() => setProjectRevision((value) => value + 1)}
+        />
       </div>
 
       {/* Right Sidebar: Weather + Activity + Ideas */}

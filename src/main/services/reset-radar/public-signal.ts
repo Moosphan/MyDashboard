@@ -7,7 +7,10 @@ import {
 } from '../../../shared/reset-radar'
 
 export const OPENAI_STATUS_URL = 'https://status.openai.com/api/v2/summary.json'
-export const CODEX_LEAD_X_URL = process.env.CODEX_LEAD_X_URL || 'https://api.dayclaw.com/api/source/public/x/thsottiaux/items'
+export const CODEX_RESET_FEED_URL = process.env.CODEX_RESET_FEED_URL || 'https://codex-reset.com/api/feed'
+
+const OFFICIAL_CODEX_LEAD_HANDLE = 'thsottiaux'
+const ACTIVE_CONFIRMATION_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 export interface OpenAIStatusSummary {
   indicator: 'none' | 'minor' | 'major' | 'critical' | 'unknown'
@@ -25,9 +28,11 @@ export interface XResetAnnouncement {
   publishedAt: string
   url: string
   resetType: ResetRadarResetType
+  confidence: ResetRadarConfidence
+  kind: 'confirmed-global' | 'announced-global' | 'banked'
 }
 
-export type XSourceStatus = 'ok' | 'error'
+export type XSourceStatus = 'ok' | 'stale' | 'error'
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? value as Record<string, unknown> : {}
@@ -53,6 +58,10 @@ function asIsoDate(value: unknown): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
 }
 
+function asBoolean(value: unknown): boolean {
+  return value === true
+}
+
 function isResetAnnouncement(text: string): boolean {
   const normalized = text.toLowerCase().replace(/\s+/g, ' ')
   if (/password reset|git reset|reset button|reset config|reset cache|重置密码|重置配置/.test(normalized)) return false
@@ -66,6 +75,39 @@ export function classifyResetType(text: string): ResetRadarResetType {
   if (/banked reset|reset credit|gift(?:ed|ing)? reset|赠送|重置卡|credits? to everyone/.test(normalized)) return 'gift'
   if (/global reset|all (?:paid )?users|all plans|all chatgpt|all codex|全局|所有用户|全部用户/.test(normalized)) return 'global'
   return 'unknown'
+}
+
+function getOfficialResetKind(
+  text: string,
+  explicitResetClaim: boolean,
+): XResetAnnouncement['kind'] | null {
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ')
+  const isBanked = /banked reset|reset credit|gift(?:ed|ing)? reset|赠送|重置卡/.test(normalized)
+  if (isBanked) return 'banked'
+
+  const explicitGlobalReset = /\b(?:reset all|all reset|global reset)\b|全部.*重置|所有.*重置/.test(normalized)
+  if (explicitResetClaim && explicitGlobalReset) return 'confirmed-global'
+
+  const announcedGlobalReset = /\b(?:will|going to|plan to|do)\b.{0,64}\b(?:global|full)?\s*reset\b.{0,96}\b(?:all|everyone|paid|subscriptions|users)\b/.test(normalized)
+    || /\b(?:global|full) reset\b.{0,96}\b(?:all|everyone|paid|subscriptions|users)\b/.test(normalized)
+  return announcedGlobalReset ? 'announced-global' : null
+}
+
+function createXAnnouncement(input: {
+  externalId: string
+  title: string
+  detail: string
+  author: string
+  publishedAt: string
+  url: string
+  kind: XResetAnnouncement['kind']
+}): XResetAnnouncement {
+  const resetType: ResetRadarResetType = input.kind === 'banked' ? 'gift' : 'global'
+  return {
+    ...input,
+    resetType,
+    confidence: input.kind === 'confirmed-global' ? 'high' : 'medium',
+  }
 }
 
 export function parseXResetAnnouncements(payload: unknown): XResetAnnouncement[] {
@@ -83,10 +125,60 @@ export function parseXResetAnnouncements(payload: unknown): XResetAnnouncement[]
     if (!externalId || !detail || !publishedAt || !isResetAnnouncement(`${title} ${detail}`)) return null
     const author = asString(item.author ?? asRecord(item.metadata).author_user_name, sourceAuthor)
     const url = asString(item.url, `https://x.com/${author}/status/${externalId}`)
-    return { externalId, title, detail, author, publishedAt, url, resetType: classifyResetType(`${title} ${detail}`) }
+    const resetType = classifyResetType(`${title} ${detail}`)
+    return createXAnnouncement({
+      externalId,
+      title,
+      detail,
+      author,
+      publishedAt,
+      url,
+      kind: resetType === 'gift' ? 'banked' : 'confirmed-global',
+    })
   }).filter((item): item is XResetAnnouncement => item !== null)
     .filter((item, index, items) => items.findIndex((candidate) => candidate.externalId === item.externalId) === index)
     .sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime())
+}
+
+export function parseOfficialXResetAnnouncements(payload: unknown): XResetAnnouncement[] {
+  const root = asRecord(payload)
+  const profile = asRecord(root.profile)
+  const author = asString(profile.handle, '')
+  const tweets = Array.isArray(root.tweets) ? root.tweets : []
+  if (author !== OFFICIAL_CODEX_LEAD_HANDLE) return []
+
+  return tweets.map((value): XResetAnnouncement | null => {
+    const tweet = asRecord(value)
+    const externalId = asString(tweet.id, '')
+    const detail = asString(tweet.text, '')
+    const publishedAt = asIsoDate(tweet.at ?? tweet.declared_at)
+    if (!externalId || !detail || !publishedAt || asBoolean(tweet.is_reply)) return null
+
+    const kind = getOfficialResetKind(detail, asBoolean(tweet.explicit_reset_claim))
+    if (!kind) return null
+    return createXAnnouncement({
+      externalId,
+      title: detail,
+      detail,
+      author,
+      publishedAt,
+      url: asString(tweet.url, `https://x.com/${author}/status/${externalId}`),
+      kind,
+    })
+  }).filter((item): item is XResetAnnouncement => item !== null)
+    .filter((item, index, items) => items.findIndex((candidate) => candidate.externalId === item.externalId) === index)
+    .sort((left, right) => new Date(right.publishedAt).getTime() - new Date(left.publishedAt).getTime())
+}
+
+export function getOfficialXSourceStatus(payload: unknown, observedAt = new Date().toISOString()): XSourceStatus {
+  const root = asRecord(payload)
+  const profile = asRecord(root.profile)
+  if (asString(profile.handle, '') !== OFFICIAL_CODEX_LEAD_HANDLE) return 'error'
+  if (asBoolean(root.stale)) return 'stale'
+  const newestPostAt = asIsoDate(root.newest_post_at)
+  if (!newestPostAt) return 'stale'
+  const age = new Date(observedAt).getTime() - new Date(newestPostAt).getTime()
+  return age > ACTIVE_CONFIRMATION_MAX_AGE_MS ? 'stale' : 'ok'
 }
 
 export function parseOpenAIStatusPayload(payload: unknown, observedAt = new Date().toISOString()): OpenAIStatusSummary {
@@ -104,8 +196,10 @@ export function parseOpenAIStatusPayload(payload: unknown, observedAt = new Date
   }
 }
 
-function getConfidence(indicator: OpenAIStatusSummary['indicator']): ResetRadarConfidence {
-  return indicator === 'critical' || indicator === 'major' ? 'high' : 'medium'
+function isRecentConfirmation(announcement: XResetAnnouncement, observedAt: string): boolean {
+  return announcement.kind === 'confirmed-global'
+    && new Date(observedAt).getTime() - new Date(announcement.publishedAt).getTime() <= ACTIVE_CONFIRMATION_MAX_AGE_MS
+    && new Date(observedAt).getTime() >= new Date(announcement.publishedAt).getTime() - 5 * 60 * 1000
 }
 
 export function buildPublicResetRadarSnapshot(
@@ -115,18 +209,24 @@ export function buildPublicResetRadarSnapshot(
 ): ResetRadarSnapshot {
   const snapshot = createGuestResetRadarSnapshot(status.observedAt)
   const observedTimestamp = new Date(status.observedAt).getTime()
-  const latestAnnouncement = announcements.find((announcement) => {
+  const latestConfirmation = xSourceStatus === 'ok' ? announcements.find((announcement) => {
     const publishedTimestamp = new Date(announcement.publishedAt).getTime()
-    return publishedTimestamp <= observedTimestamp + 5 * 60 * 1000
-      && observedTimestamp - publishedTimestamp <= 72 * 60 * 60 * 1000
-  })
-  const hasStatusSignal = status.sourceStatus === 'warn'
-  const hasRecentXSignal = Boolean(latestAnnouncement)
-  const confidence = hasRecentXSignal ? 'high' : hasStatusSignal ? getConfidence(status.indicator) : 'low'
+    return isRecentConfirmation(announcement, status.observedAt)
+      && publishedTimestamp <= observedTimestamp + 5 * 60 * 1000
+  }) : undefined
+  const latestOfficialUpdate = xSourceStatus === 'ok' ? announcements.find((announcement) => {
+    const publishedTimestamp = new Date(announcement.publishedAt).getTime()
+    return announcement.kind !== 'confirmed-global'
+      && publishedTimestamp <= observedTimestamp + 5 * 60 * 1000
+      && observedTimestamp - publishedTimestamp <= ACTIVE_CONFIRMATION_MAX_AGE_MS
+  }) : undefined
+  const confidence = latestConfirmation ? 'high' : latestOfficialUpdate ? 'medium' : 'low'
 
   snapshot.forecast.confidence = confidence
-  snapshot.forecast.peakProbability = hasRecentXSignal ? 0.85 : hasStatusSignal ? (confidence === 'high' ? 0.35 : 0.2) : 0.12
-  snapshot.forecast.label = hasRecentXSignal ? '检测到 X 官方重置公告' : hasStatusSignal ? '检测到公开服务信号' : '暂无高置信公开信号'
+  snapshot.forecast.peakProbability = latestConfirmation ? 0.85 : latestOfficialUpdate ? 0.35 : 0.12
+  snapshot.forecast.label = latestConfirmation
+    ? '检测到官方确认的全局重置'
+    : latestOfficialUpdate ? '检测到官方重置相关动态，待账户核验' : '暂无官方重置信号'
   snapshot.sources[0] = {
     id: 'openai-status',
     label: 'OpenAI Status',
@@ -135,54 +235,55 @@ export function buildPublicResetRadarSnapshot(
   }
   snapshot.sources[1] = {
     id: 'codex-lead-x',
-    label: 'X / Codex 负责人',
-    status: xSourceStatus === 'error' ? 'error' : hasRecentXSignal ? 'ok' : 'stale',
+    label: 'X / Tibo (@OpenAI)',
+    status: xSourceStatus,
     detail: xSourceStatus === 'error'
       ? 'X 公开动态源暂时不可用'
-      : hasRecentXSignal ? `已读取 ${announcements.length} 条重置相关动态` : '暂未发现新的重置相关动态',
+      : xSourceStatus === 'stale' ? '官方动态源数据已过期，暂不用于雷达判断'
+        : announcements.length > 0 ? `已读取 ${announcements.length} 条重置相关动态` : '已检查官方动态，暂未发现重置相关公告',
   }
   snapshot.publicSignals = announcements.map((announcement): ResetRadarPublicSignal => ({
     id: `x:${announcement.externalId}`,
     title: announcement.title,
     detail: announcement.detail,
-    source: 'X / Codex 负责人',
+    source: 'X / Tibo (@OpenAI)',
     url: announcement.url,
     observedAt: announcement.publishedAt,
-    confidence: 'high',
+    confidence: announcement.confidence,
     resetType: announcement.resetType,
   }))
 
-  if (hasRecentXSignal && latestAnnouncement) {
+  if (latestConfirmation) {
     snapshot.activeSignal = {
-      id: `x:${latestAnnouncement.externalId}`,
-      title: latestAnnouncement.title,
-      detail: latestAnnouncement.detail,
-      source: 'X / Codex 负责人',
-      url: latestAnnouncement.url,
-      observedAt: latestAnnouncement.publishedAt,
+      id: `x:${latestConfirmation.externalId}`,
+      title: latestConfirmation.title,
+      detail: latestConfirmation.detail,
+      source: 'X / Tibo (@OpenAI)',
+      url: latestConfirmation.url,
+      observedAt: latestConfirmation.publishedAt,
       confidence: 'high',
-      resetType: latestAnnouncement.resetType,
+      resetType: 'global',
     }
     snapshot.advice = {
       kind: 'wait',
-      title: '官方 X 已发布重置相关动态',
-      detail: '这是公开公告信号，不代表每个账户都已完成同步；可刷新账户用量确认实际状态。',
+      title: '官方已确认全局重置',
+      detail: '这是公开公告信号；账户同步可能存在延迟，请刷新账户用量确认实际状态。',
     }
-  } else if (hasStatusSignal) {
+  } else if (latestOfficialUpdate) {
     snapshot.activeSignal = {
-      id: `status:${status.observedAt}`,
-      title: status.description,
-      detail: status.incidentCount > 0 ? `${status.incidentCount} 个公开事件仍在记录中` : '公开状态指标出现波动',
-      source: 'OpenAI Status',
-      url: 'https://status.openai.com',
-      observedAt: status.observedAt,
-      confidence,
-      resetType: 'unknown',
+      id: `x:${latestOfficialUpdate.externalId}`,
+      title: latestOfficialUpdate.title,
+      detail: latestOfficialUpdate.detail,
+      source: 'X / Tibo (@OpenAI)',
+      url: latestOfficialUpdate.url,
+      observedAt: latestOfficialUpdate.publishedAt,
+      confidence: 'medium',
+      resetType: latestOfficialUpdate.resetType,
     }
     snapshot.advice = {
-      kind: 'wait',
-      title: '先查看公开状态，再决定是否等待',
-      detail: '公开服务异常不等于 Codex 一定会重置，雷达只提供辅助判断。',
+      kind: 'check_account',
+      title: latestOfficialUpdate.resetType === 'gift' ? '官方提到定向重置卡' : '官方提到重置安排',
+      detail: '该动态不代表全部账户已完成重置，请刷新账户用量确认。',
     }
   }
 
@@ -193,7 +294,7 @@ export async function fetchPublicResetRadarSnapshot(signal?: AbortSignal): Promi
   const observedAt = new Date().toISOString()
   const [statusResult, xResult] = await Promise.allSettled([
     fetch(OPENAI_STATUS_URL, { headers: { Accept: 'application/json' }, signal }),
-    fetch(CODEX_LEAD_X_URL, { headers: { Accept: 'application/json' }, signal }),
+    fetch(CODEX_RESET_FEED_URL, { headers: { Accept: 'application/json' }, signal }),
   ])
   const errors: string[] = []
   let status = parseOpenAIStatusPayload({}, observedAt)
@@ -207,8 +308,9 @@ export async function fetchPublicResetRadarSnapshot(signal?: AbortSignal): Promi
   }
 
   if (xResult.status === 'fulfilled' && xResult.value.ok) {
-    xAnnouncements = parseXResetAnnouncements(await xResult.value.json() as unknown)
-    xSourceStatus = 'ok'
+    const payload = await xResult.value.json() as unknown
+    xAnnouncements = parseOfficialXResetAnnouncements(payload)
+    xSourceStatus = getOfficialXSourceStatus(payload, observedAt)
   } else {
     errors.push(xResult.status === 'fulfilled' ? `X source HTTP ${xResult.value.status}` : String(xResult.reason))
   }

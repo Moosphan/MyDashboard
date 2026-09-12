@@ -85,10 +85,17 @@ export function ResetRadarCard({ onOpenStatus, onOpenAccount, onOpenHistory, ref
     loadSnapshot().catch(() => {})
   }), [])
 
-  const source = snapshot.sources.find((item) => item.label === snapshot.activeSignal?.source) ?? snapshot.sources[0]
-  const signalResult = snapshot.activeSignal
-    ? snapshot.activeSignal.source.startsWith('X') ? '已发现官方重置公告' : '检测到公开服务信号'
-    : '暂无明确重置信号'
+  const source = snapshot.activeSignal
+    ? snapshot.sources.find((item) => item.label === snapshot.activeSignal?.source)
+    : snapshot.sources.find((item) => item.id === 'codex-lead-x')
+  const signalResult = !snapshot.activeSignal
+    ? '暂无明确重置信号'
+    : snapshot.activeSignal.confidence === 'high'
+      ? '官方确认全局重置'
+      : snapshot.activeSignal.resetType === 'gift'
+        ? '官方预告：定向重置卡'
+        : '官方预告：等待账户核验'
+  const publicEvidenceUrl = snapshot.activeSignal?.url ?? 'https://codex-reset.com/zh/radar'
   const accountConnected = snapshot.account.status === 'connected'
   const footerActions = getResetRadarFooterActions(snapshot.account.status)
 
@@ -159,12 +166,22 @@ export function ResetRadarCard({ onOpenStatus, onOpenAccount, onOpenHistory, ref
       </div>
 
       <div className="mt-auto border-t border-outline-variant/30 pt-sm">
-        <div className="mb-sm flex items-center justify-between gap-sm text-[11px]">
-          <span className="text-on-surface-variant">上次重置</span>
-          <span className="font-semibold text-on-surface">{formatDateTime(snapshot.account.lastResetAt)}</span>
+        <div className="mb-sm space-y-sm">
+          <div className="flex items-center justify-between gap-sm text-[11px]">
+            <span className="text-on-surface-variant">当前重置卡</span>
+            <span className="font-semibold text-on-surface">
+              {snapshot.resetCredits?.availableCount === null || snapshot.resetCredits?.availableCount === undefined
+                ? '暂无数据'
+                : `${snapshot.resetCredits.availableCount} 张`}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-sm text-[11px]">
+            <span className="text-on-surface-variant">上次重置</span>
+            <span className="truncate text-right font-semibold text-on-surface">{formatDateTime(snapshot.account.lastResetAt)}</span>
+          </div>
         </div>
         <div className="flex items-center justify-between gap-sm text-[11px] text-on-surface-variant">
-          <span className="truncate" title={error ?? source?.detail}>{error ?? source?.label ?? '公开信号'}</span>
+          <span className="truncate" title={error ?? source?.detail}>{error ?? source?.detail ?? '公开信号'}</span>
           <span className="shrink-0">{formatTime(snapshot.generatedAt)} 更新</span>
         </div>
         <div className="flex items-center gap-xs mt-sm">
@@ -172,7 +189,7 @@ export function ResetRadarCard({ onOpenStatus, onOpenAccount, onOpenHistory, ref
             type="button"
             onClick={() => footerActions.primaryAction === 'account'
               ? onOpenAccount()
-              : onOpenStatus('https://status.openai.com')}
+              : onOpenStatus(publicEvidenceUrl)}
             className="flex-1 h-8 rounded-full border border-outline-variant/50 text-on-surface-variant text-[11px] font-bold hover:bg-surface-container transition-colors"
           >
             {footerActions.primaryLabel}

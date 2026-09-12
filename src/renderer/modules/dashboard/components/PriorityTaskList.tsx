@@ -122,9 +122,10 @@ function TaskActionMenu({
 
 interface PriorityTaskListProps {
   onOpenBoard?: () => void
+  onChanged?: () => void
 }
 
-export function PriorityTaskList({ onOpenBoard }: PriorityTaskListProps) {
+export function PriorityTaskList({ onOpenBoard, onChanged }: PriorityTaskListProps) {
   const { data: tasks, loading, refetch } = useIpcData<Task[]>('tasks:getPending', 20)
   const { mutate: updateStatus } = useIpcMutation<boolean>('tasks:updateStatus')
   const { mutate: createTask } = useIpcMutation<number>('tasks:create')
@@ -136,26 +137,30 @@ export function PriorityTaskList({ onOpenBoard }: PriorityTaskListProps) {
 
   const handleToggle = async (task: Task) => {
     const newStatus = task.status === 'completed' ? 'pending' : 'completed'
-    await updateStatus(task.id, newStatus)
+    const result = await updateStatus(task.id, newStatus)
     refetch()
+    if (result) onChanged?.()
   }
 
   const handleCreate = async () => {
     if (!newTitle.trim()) return
-    await createTask({ title: newTitle.trim() })
+    const result = await createTask({ title: newTitle.trim() })
     setNewTitle('')
     setShowInput(false)
     refetch()
+    if (result !== null) onChanged?.()
   }
 
   const handleAction = async (action: string, id: number) => {
+    let changed = false
     if (action === 'delete') {
-      await deleteTask(id)
+      changed = Boolean(await deleteTask(id))
     } else if (action.startsWith('priority:')) {
       const priority = action.replace('priority:', '')
-      await updateTask(id, { priority })
+      changed = Boolean(await updateTask(id, { priority }))
     }
     refetch()
+    if (changed) onChanged?.()
   }
 
   return (

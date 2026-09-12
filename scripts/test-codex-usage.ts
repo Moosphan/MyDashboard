@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 import { buildCodexUsageDashboard } from '../src/shared/codex-usage'
 import { buildUsageRhythmBars } from '../src/shared/codex-usage-display'
@@ -77,4 +79,10 @@ test('builds visible labels for token rhythm bars', () => {
     { dateLabel: '08/26', valueLabel: '1.4K', heightPercent: 11, isEmpty: false },
     { dateLabel: '08/27', valueLabel: '12.5K', heightPercent: 100, isEmpty: false },
   ])
+})
+
+test('does not show a noisy sync warning inside the usage card', () => {
+  const tokenUsageSource = readFileSync(join(__dirname, '../src/renderer/modules/ai-lab/components/TokenUsage.tsx'), 'utf8')
+
+  assert.doesNotMatch(tokenUsageSource, /同步异常/)
 })

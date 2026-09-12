@@ -234,7 +234,6 @@ export function TokenUsage({ refreshKey = 0 }: { refreshKey?: number }) {
       <div className="mt-auto">
         <div className="mb-xs flex items-center justify-between">
           <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-on-surface-variant">账户活跃度</span>
-          {error && <span className="truncate text-[10px] text-error" title={error}>同步异常</span>}
         </div>
         <div className="grid grid-cols-2 gap-xs sm:grid-cols-5">
           <ActivityMetric label="近 7 天 Token" value={`约 ${formatUsageTokens(activity.totalTokens)}`} />

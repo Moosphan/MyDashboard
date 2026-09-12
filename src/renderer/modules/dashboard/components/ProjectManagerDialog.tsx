@@ -239,18 +239,22 @@ export function ProjectManagerDialog({ open, onClose, onChanged, initialProjectI
   const handleCreateTask = async () => {
     if (!taskForm.title.trim() || !selectedProject) return
     try {
-      await createTask({ title: taskForm.title.trim(), description: taskForm.description.trim() || undefined, priority: taskForm.priority, due_date: taskForm.due_date || undefined, project_id: selectedProject.id })
+      const result = await createTask({ title: taskForm.title.trim(), description: taskForm.description.trim() || undefined, priority: taskForm.priority, due_date: taskForm.due_date || undefined, project_id: selectedProject.id })
+      if (result === null) throw new Error('Failed to create task')
       toast({ title: 'Task created', variant: 'success' })
       setShowTaskForm(false)
       setTaskForm({ title: '', description: '', priority: 'medium', due_date: '' })
       fetchTasks()
+      onChanged?.()
     } catch { toast({ title: 'Failed to create task', variant: 'error' }) }
   }
 
   const handleDeleteTask = async (taskId: number) => {
     try {
-      await deleteTask(taskId)
+      const result = await deleteTask(taskId)
+      if (!result) throw new Error('Failed to delete task')
       setTasks(prev => prev.filter(t => t.id !== taskId))
+      onChanged?.()
     } catch { /* ignore */ }
   }
 
@@ -316,7 +320,12 @@ export function ProjectManagerDialog({ open, onClose, onChanged, initialProjectI
     if (newStatus !== originalStatus) {
       setTasks(prev => prev.map(t => t.id === activeId ? { ...t, status: newStatus } : t))
       try {
-        await updateTaskStatus(activeId, newStatus)
+        const result = await updateTaskStatus(activeId, newStatus)
+        if (!result) {
+          setTasks(prev => prev.map(t => t.id === activeId ? { ...t, status: originalStatus } : t))
+        } else {
+          onChanged?.()
+        }
       } catch {
         // Revert to the original status on failure
         setTasks(prev => prev.map(t => t.id === activeId ? { ...t, status: originalStatus } : t))

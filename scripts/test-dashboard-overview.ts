@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 import Database from 'better-sqlite3'
 import { runMigrations } from '../src/main/database/migrations'
@@ -38,4 +40,15 @@ test('prioritizes overdue and high-priority tasks in the today overview', () => 
   } finally {
     db.close()
   }
+})
+
+test('wires task mutations to the dashboard overview refresh', () => {
+  const dashboardSource = readFileSync(join(__dirname, '../src/renderer/modules/dashboard/index.tsx'), 'utf8')
+  const priorityTaskListSource = readFileSync(join(__dirname, '../src/renderer/modules/dashboard/components/PriorityTaskList.tsx'), 'utf8')
+  const projectManagerSource = readFileSync(join(__dirname, '../src/renderer/modules/dashboard/components/ProjectManagerDialog.tsx'), 'utf8')
+
+  assert.match(dashboardSource, /<PriorityTaskList[\s\S]*onChanged=\{\(\) => setProjectRevision\(/)
+  assert.match(priorityTaskListSource, /onChanged\?: \(\) => void/)
+  assert.equal((priorityTaskListSource.match(/onChanged\?\./g) ?? []).length, 3)
+  assert.equal((projectManagerSource.match(/onChanged\?\./g) ?? []).length, 6)
 })

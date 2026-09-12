@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import test from 'node:test'
 import { createGuestResetRadarSnapshot, getResetRadarFooterActions, getResetRadarTone } from '../src/shared/reset-radar'
 import {
   buildPublicResetRadarSnapshot,
   classifyResetType,
+  getOfficialXSourceStatus,
   parseOpenAIStatusPayload,
+  parseOfficialXResetAnnouncements,
   parseXResetAnnouncements,
 } from '../src/main/services/reset-radar/public-signal'
 import { hasChatGPTSessionCookie, waitForChatGPTSession } from '../src/main/services/reset-radar/account-session'
@@ -18,6 +22,17 @@ test('guest radar snapshot never presents private quota data', () => {
   assert.equal(snapshot.quotaWindows.length, 0)
   assert.equal(snapshot.resetCredits, null)
   assert.equal(snapshot.forecast.confidence, 'low')
+})
+
+test('reset radar card displays the current reset credit count', () => {
+  const cardSource = readFileSync(join(__dirname, '../src/renderer/modules/ai-lab/components/ResetRadarCard.tsx'), 'utf8')
+
+  assert.match(cardSource, /snapshot\.resetCredits\?\.availableCount/)
+  assert.match(cardSource, /当前重置卡/)
+  assert.match(cardSource, /space-y-sm/)
+  assert.match(cardSource, /官方确认全局重置/)
+  assert.match(cardSource, /source\?\.detail/)
+  assert.equal((cardSource.match(/justify-between gap-sm text-\[11px\]/g) ?? []).length, 3)
 })
 
 test('radar tone follows deterministic confidence and signal state', () => {
@@ -46,7 +61,7 @@ test('parses an operational OpenAI status response without creating a reset sign
   assert.equal(buildPublicResetRadarSnapshot(status).activeSignal, null)
 })
 
-test('turns a public service incident into a cautious radar signal', () => {
+test('keeps a public service incident as source health instead of a reset signal', () => {
   const status = parseOpenAIStatusPayload({
     status: { indicator: 'minor', description: 'Some systems are experiencing issues' },
     incidents: [{ name: 'Elevated errors for Codex' }],
@@ -54,9 +69,8 @@ test('turns a public service incident into a cautious radar signal', () => {
 
   const snapshot = buildPublicResetRadarSnapshot(status)
 
-  assert.equal(snapshot.activeSignal?.source, 'OpenAI Status')
-  assert.equal(snapshot.activeSignal?.confidence, 'medium')
-  assert.equal(snapshot.forecast.confidence, 'medium')
+  assert.equal(snapshot.activeSignal, null)
+  assert.equal(snapshot.forecast.confidence, 'low')
   assert.equal(snapshot.sources[0].status, 'warn')
 })
 
@@ -101,14 +115,95 @@ test('makes the latest official X announcement the active public signal', () => 
       publishedAt: '2026-08-27T16:35:05.000Z',
       url: 'https://x.com/thsottiaux/status/2093014447833116908',
       resetType: 'global',
+      confidence: 'high',
+      kind: 'confirmed-global',
     }],
     'ok',
   )
 
-  assert.equal(snapshot.activeSignal?.source, 'X / Codex 负责人')
+  assert.equal(snapshot.activeSignal?.source, 'X / Tibo (@OpenAI)')
   assert.equal(snapshot.activeSignal?.url, 'https://x.com/thsottiaux/status/2093014447833116908')
   assert.equal(snapshot.publicSignals.length, 1)
   assert.equal(snapshot.forecast.confidence, 'high')
+})
+
+test('accepts a short, explicit Tibo global-reset confirmation without quota keywords', () => {
+  const announcements = parseOfficialXResetAnnouncements({
+    profile: { handle: 'thsottiaux' },
+    tweets: [{
+      id: 'confirmed-reset',
+      text: 'Reset all propagated. Sweet dreams.',
+      at: '2026-09-12T08:09:17.000Z',
+      url: 'https://x.com/thsottiaux/status/confirmed-reset',
+      is_reply: false,
+      tibo_lane: 'reset_announcement',
+      explicit_reset_claim: true,
+    }],
+  })
+
+  assert.equal(announcements.length, 1)
+  assert.equal(announcements[0].resetType, 'global')
+  assert.equal(announcements[0].confidence, 'high')
+})
+
+test('does not promote replies or scoped banked resets into high-confidence global resets', () => {
+  const announcements = parseOfficialXResetAnnouncements({
+    profile: { handle: 'thsottiaux' },
+    tweets: [
+      {
+        id: 'reply-tease',
+        text: 'Who says it will not reset in a while?',
+        at: '2026-09-12T08:09:17.000Z',
+        url: 'https://x.com/thsottiaux/status/reply-tease',
+        is_reply: true,
+        tibo_lane: 'reset_related',
+        explicit_reset_claim: false,
+      },
+      {
+        id: 'plus-banked',
+        text: 'Plus users without access will receive a banked reset by end of day.',
+        at: '2026-09-12T08:09:17.000Z',
+        url: 'https://x.com/thsottiaux/status/plus-banked',
+        is_reply: false,
+        tibo_lane: 'reset_related',
+        explicit_reset_claim: false,
+      },
+    ],
+  })
+  const snapshot = buildPublicResetRadarSnapshot(
+    parseOpenAIStatusPayload(
+      { status: { indicator: 'minor', description: 'Codex degradation' }, incidents: [{ name: 'Codex' }] },
+      '2026-09-12T09:00:00.000Z',
+    ),
+    announcements,
+    'ok',
+  )
+
+  assert.equal(announcements.length, 1)
+  assert.equal(announcements[0].resetType, 'gift')
+  assert.equal(announcements[0].confidence, 'medium')
+  assert.notEqual(snapshot.activeSignal?.confidence, 'high')
+  assert.notEqual(snapshot.activeSignal?.resetType, 'global')
+})
+
+test('keeps an OpenAI status incident informational when no official reset announcement exists', () => {
+  const status = parseOpenAIStatusPayload({
+    status: { indicator: 'major', description: 'Codex degradation' },
+    incidents: [{ name: 'Codex' }],
+  }, '2026-09-12T09:00:00.000Z')
+
+  const snapshot = buildPublicResetRadarSnapshot(status)
+
+  assert.equal(snapshot.activeSignal, null)
+  assert.equal(snapshot.forecast.confidence, 'low')
+  assert.equal(snapshot.sources[0].status, 'warn')
+})
+
+test('marks an old official X timeline as stale instead of treating HTTP success as fresh data', () => {
+  assert.equal(getOfficialXSourceStatus({
+    profile: { handle: 'thsottiaux' },
+    newest_post_at: '2026-09-10T08:00:00.000Z',
+  }, '2026-09-12T09:00:00.000Z'), 'stale')
 })
 
 test('deduplicates X announcements and ignores unrelated reset wording', () => {

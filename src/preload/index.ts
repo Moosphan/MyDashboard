@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '@shared/constants'
+import type { ToolboxAPI, ToolboxState } from '@shared/toolbox'
 
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
@@ -49,5 +50,21 @@ const electronAPI = {
 }
 
 contextBridge.exposeInMainWorld('electronAPI', electronAPI)
+
+const toolboxAPI: ToolboxAPI = {
+  get: () => ipcRenderer.invoke('toolbox:get'),
+  update: action => ipcRenderer.invoke('toolbox:update', action),
+  setActive: active => ipcRenderer.invoke('toolbox:active', active),
+  refresh: toolId => ipcRenderer.invoke('toolbox:refresh', toolId),
+  login: () => ipcRenderer.invoke('toolbox:login'),
+  logout: () => ipcRenderer.invoke('toolbox:logout'),
+  onUpdated: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: ToolboxState) => callback(state)
+    ipcRenderer.on('toolbox:updated', listener)
+    return () => ipcRenderer.removeListener('toolbox:updated', listener)
+  },
+}
+
+contextBridge.exposeInMainWorld('toolboxAPI', toolboxAPI)
 
 export type ElectronAPI = typeof electronAPI

@@ -10,6 +10,7 @@ import videoManifest from '@/modules/video/manifest'
 import insightsManifest from '@/modules/insights/manifest'
 import aiLabManifest from '@/modules/ai-lab/manifest'
 import settingsManifest from '@/modules/settings/manifest'
+import toolboxManifest from '@/modules/toolbox/manifest'
 
 const builtinManifests: ModuleManifest[] = [
   dashboardManifest,
@@ -17,6 +18,7 @@ const builtinManifests: ModuleManifest[] = [
   videoManifest,
   insightsManifest,
   aiLabManifest,
+  toolboxManifest,
   settingsManifest,
 ]
 

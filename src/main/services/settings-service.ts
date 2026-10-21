@@ -63,6 +63,16 @@ function writeSettingsFile(settings: Record<string, unknown>): void {
   writeFileSync(path, JSON.stringify(encrypted, null, 2), 'utf-8')
 }
 
+export function getStoredSetting(key: string): unknown {
+  return readSettingsFile()[key]
+}
+
+export function setStoredSetting(key: string, value: unknown): void {
+  const settings = readSettingsFile()
+  settings[key] = value
+  writeSettingsFile(settings)
+}
+
 export function registerSettingsIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SETTINGS_GET_ALL, () => {
     try {

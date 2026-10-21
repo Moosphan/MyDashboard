@@ -30,6 +30,7 @@ import { registerDashboardIpcHandlers } from './ipc/dashboard'
 import { registerTrendingIpcHandlers, startTrendingRefreshScheduler, stopTrendingRefreshScheduler } from './ipc/trending'
 import { registerTtsHandlers } from './services/tts-service'
 import { registerResetRadarIpcHandlers } from './ipc/reset-radar'
+import { registerToolboxIpcHandlers, stopToolbox } from './ipc/toolbox'
 import { registerBackupIpcHandlers } from './ipc/backup'
 import { registerResearchMaterialIpcHandlers } from './ipc/research-materials'
 import { registerResearchAssistantIpcHandlers } from './ipc/research-assistant'
@@ -234,6 +235,7 @@ app.whenReady().then(() => {
   registerTrendingIpcHandlers()
   registerTtsHandlers()
   registerResetRadarIpcHandlers()
+  registerToolboxIpcHandlers(() => mainWindow)
   registerResearchMaterialIpcHandlers()
   registerResearchAssistantIpcHandlers()
   registerContentVariantIpcHandlers()
@@ -280,6 +282,7 @@ app.on('before-quit', () => {
   stopTrendingRefreshScheduler()
   stopTaskReminderScheduler()
   stopChatGPTUsageRefreshScheduler()
+  stopToolbox()
   closeDatabase()
 })
 

@@ -19,5 +19,5 @@
       "@shared/*": ["./src/shared/*"]
     }
   },
-  "include": ["src/main/**/*", "src/shared/**/*"]
+  "include": ["src/main/**/*", "src/shared/**/*", "feature.config.ts"]
 }

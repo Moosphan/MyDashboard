@@ -22,6 +22,7 @@ export const featureConfig: FeatureConfig = {
     video: { enabled: true, order: 3 },
     insights: { enabled: true, order: 4 },
     'ai-lab': { enabled: true, order: 5 },
+    toolbox: { enabled: true, order: 6 },
     settings: { enabled: true, order: 99 }, // always last, always enabled
   },
   plugins: {

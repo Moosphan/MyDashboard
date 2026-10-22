@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "layout": {
+    "sidebar": "280px",
+    "topbar": "56px",
+    "page-padding": "48px",
+    "page-max": "1280px",
+    "section-gap": "24px",
+    "dashboard-gap": "48px",
+    "dashboard-aside": "320px",
+    "voice-width": "1040px",
+    "voice-height": "720px",
+    "voice-aside": "304px"
+  }
+}

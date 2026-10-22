@@ -1,0 +1,7 @@
+# UI design contract
+
+For any renderer UI work, read `docs/design-system/spec-v2.md` and the relevant entries in `docs/design-system/page-specs-v2.md` before editing. Design specification 2.0 supersedes the historical v1/v3 documents and HTML previews. Preserve its page structure, module order, grid ratios, and item internals; apply the item contracts in the page specification.
+
+Use HeroUI React/Styles 3.2.6 public variants with the existing project palette and saved theme preferences. Use HeroUI built-in icons first; supplement missing business icons with Heroicons 2.2.0 outline. Preserve existing desktop layout and compact content; layout changes need audit evidence and user confirmation. Ask the user before deciding uncertain business rules or interactions; read `docs/design-system/interaction-audit-v2.md`. Project layout values come from `docs/design-system/v2/layout.json`. Read the adoption proposal before dependency or theme migration. Keep existing business engines and narrow compatibility contracts; record exceptions in `docs/design-system/migration.md`.
+
+Run `pnpm design:check` and `pnpm design:build` for design assets. These checks do not prove production compliance. For renderer implementation, also run the type, build, Electron, theme, viewport, keyboard, and business checks in specification 2.0. Historical token generation is accessible only through `design:legacy:*` and does not define new UI.

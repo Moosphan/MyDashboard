@@ -1,0 +1,995 @@
+[
+  {
+    "id": "button",
+    "name": "按钮 Button",
+    "group": "操作",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "页面提交、保存、生成；每个操作区域只设一个 filled 主操作。",
+    "variants": "filled / neutral / tonal / outlined / text / elevated / danger",
+    "spec": {
+      "高度": "{{size.control}}；compact {{size.compact}}；touch {{size.touch}}",
+      "圆角": "{{shape.control}}，项目定制",
+      "标签": "{{type.label-lg.size}} / {{type.label-lg.line}} / {{type.label-lg.weight}}；高密度桌面标签，正文仍为14px",
+      "图标": "{{size.iconInline}}，间距6px",
+      "颜色": "filled primary/on-primary；neutral surface-low/on-surface；tonal为品牌强调的次要动作；danger默认柔和底，最终确认用solid",
+      "边框": "outlined {{size.divider}} outline-variant；输入 outline 与装饰边界不得混用",
+      "水平内距": "{{space.3}}；纯图标按钮使用正方形容器"
+    },
+    "behavior": "loading 保留宽度与标签，设置 aria-busy；focus-visible 独立描边；禁用不响应。"
+  },
+  {
+    "id": "icon-button",
+    "name": "图标按钮 Icon button",
+    "group": "操作",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "刷新、关闭、播放、更多；可见提示和可访问名称必须同时提供。",
+    "variants": "standard / filled / tonal / outlined / toggle",
+    "spec": {
+      "容器": "{{size.iconButton}} × {{size.iconButton}}；touch {{size.touch}}",
+      "图标": "{{size.icon}}，工具栏优先16px；wght400；图形居中",
+      "圆角": "{{shape.control}}；工具栏保持方形轮廓；播放主按钮可用 full",
+      "颜色": "standard on-surface-variant；selected primary-container/on-primary-container",
+      "边框": "outlined {{size.divider}} outline-variant；rest无需方框，hover使用中性底"
+    },
+    "behavior": "toggle 用 aria-pressed；tooltip 在 hover 与键盘聚焦出现，触屏不依赖 tooltip。"
+  },
+  {
+    "id": "fab",
+    "name": "浮动操作按钮 FAB",
+    "group": "操作",
+    "status": "预留",
+    "origin": "M3",
+    "usage": "窄屏页面唯一的高频创建动作；桌面工作台默认用普通按钮。",
+    "variants": "small / regular / large / extended / menu",
+    "spec": {
+      "尺寸": "{{size.fabSmall}} / {{size.fab}} / {{size.fabLarge}}",
+      "圆角": "small {{shape.nested}}；regular {{shape.fab}}；large {{shape.dialog}}",
+      "图标": "20 / 24 / 36px",
+      "扩展": "高 {{size.fab}}；左右 {{space.4}}；标签 {{type.label-lg.size}}",
+      "外观": "primary-container/on-primary-container；elevation 3"
+    },
+    "behavior": "固定在内容安全区，离边缘24px；菜单展开后 Escape 收起且焦点返回触发器。"
+  },
+  {
+    "id": "segmented",
+    "name": "分段按钮 Segmented buttons",
+    "group": "操作",
+    "status": "局部",
+    "origin": "M3",
+    "usage": "同一数据的视图、粒度或排序切换；不作为二级页面导航。",
+    "variants": "single / multiple",
+    "spec": {
+      "高度": "{{size.control}}；compact {{size.compact}}",
+      "圆角": "组 {{shape.control}}；内部 {{shape.inset}}，padding3px，间隙2px",
+      "边框": "中性surface-container底；选项无共享边框，不与connected按钮组混用",
+      "标签": "{{type.label-lg.size}} / 500；选中 check {{size.iconInline}}",
+      "颜色": "selected surface-lowest/on-surface + elevation1；inactive on-surface-variant"
+    },
+    "behavior": "单选用 radiogroup/方向键；多选用 aria-pressed；选中后宽度保持不变。"
+  },
+  {
+    "id": "button-group",
+    "name": "按钮组 / 拆分按钮",
+    "group": "操作",
+    "status": "预留",
+    "origin": "M3 扩展",
+    "usage": "相关动作组合；拆分按钮提供一个默认动作与可选动作菜单。",
+    "variants": "connected / split / toggle-group",
+    "spec": {
+      "高度": "{{size.control}}",
+      "圆角": "外侧 {{shape.control}}；内部 {{shape.tiny}}",
+      "间距": "connected 2px；loose {{space.2}}",
+      "菜单触发": "宽 {{size.iconButton}}；chevron {{size.icon}}",
+      "标签": "{{type.label-lg.size}} / 500"
+    },
+    "behavior": "默认动作与菜单触发器分别可聚焦、分别命名；不要把全部动作包成一个按钮。"
+  },
+  {
+    "id": "toolbar",
+    "name": "工具栏 Toolbar",
+    "group": "操作",
+    "status": "已有",
+    "origin": "M3 / 项目适配",
+    "usage": "编辑器、视频时间线、表格批量操作。",
+    "variants": "fixed / contextual / floating",
+    "spec": {
+      "高度": "标准 {{size.touch}}；宽松64px",
+      "图标": "{{size.icon}}；触发器 {{size.iconButton}}",
+      "圆角": "固定 {{shape.none}}；浮动 {{shape.nested}}",
+      "间距": "组内 {{space.1}}；组间 {{space.4}}",
+      "外观": "surface-lowest；分隔线 {{size.divider}} outline-variant"
+    },
+    "behavior": "role=toolbar；方向键移动、Home/End；上下文工具栏保留清晰的退出选择动作。"
+  },
+  {
+    "id": "textfield",
+    "name": "文本输入框 Text field",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "名称、链接、API地址和短文本；固定外置标签避免占位符代替标签。",
+    "variants": "outlined / filled / password / number / read-only",
+    "spec": {
+      "高度": "{{size.field}}；compact {{size.compact}}；touch {{size.fieldTouch}}",
+      "圆角": "{{shape.control}}，项目定制",
+      "文字": "{{type.body-md.size}} / {{type.body-md.line}} / 400",
+      "标签": "{{type.label-lg.size}} / 500，距控件6px",
+      "内距": "水平 {{space.3}}；图标 {{size.icon}}",
+      "边框": "1px control-border，基础表面对比≥3:1；focus 2px focus + 3px柔和光环；尺寸不变",
+      "颜色": "surface-lowest/on-surface；placeholder on-surface-variant"
+    },
+    "behavior": "label 关联 id；错误文案用 aria-describedby 与 aria-invalid；保留用户输入并给出修正方法。"
+  },
+  {
+    "id": "textarea",
+    "name": "多行输入 Textarea",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "配音文案、描述和提示词；长文章改用编辑器。",
+    "variants": "fixed / autosize / counter",
+    "spec": {
+      "最小高度": "112px；最大高度320px，之后内部滚动",
+      "圆角": "{{shape.control}}",
+      "文字": "{{type.body-md.size}} / {{type.body-md.line}} / 400",
+      "内距": "{{space.3}}",
+      "边框": "与 Text field 相同；计数 {{type.body-sm.size}}"
+    },
+    "behavior": "标签、帮助、错误、计数分离；超过限制明确说明，不在输入中途无提示截断。"
+  },
+  {
+    "id": "select",
+    "name": "选择器 Select",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "模型、音色、分类等有限选项；超过10项优先可搜索 Combobox。",
+    "variants": "single / grouped / multi",
+    "spec": {
+      "触发器": "高 {{size.field}}，圆角 {{shape.control}}",
+      "文字": "{{type.body-md.size}} / 400；标签 {{type.label-lg.size}}",
+      "图标": "expand_more {{size.iconInline}}，距右10px",
+      "弹层": "自绘浮层，圆角 {{shape.control}}；行高 {{size.menuRow}}；4px内距，避让视口边缘",
+      "颜色": "surface-lowest；选中 primary-container/on-primary-container",
+      "边框": "1px control-border；16px chevron；focus 2px focus；选中check，不使用系统菜单"
+    },
+    "behavior": "共享Select（生产推荐Radix）；自绘触发器与listbox，方向键/Home/End/字符定位/Enter/Escape/Tab；禁用项跳过；保留label与表单值。"
+  },
+  {
+    "id": "combobox",
+    "name": "自动完成 Combobox",
+    "group": "输入与选择",
+    "status": "局部",
+    "origin": "M3 适配",
+    "usage": "大量模型、工具、标签和可搜索数据源。",
+    "variants": "single / multiple / async",
+    "spec": {
+      "触发器": "{{size.field}}；圆角 {{shape.control}}",
+      "结果行": "{{size.menuRow}}；文字 {{type.body-md.size}}",
+      "弹层": "最大高320px；elevation 2",
+      "状态": "loading / no results / error / selected"
+    },
+    "behavior": "aria-expanded/controls/activedescendant；输入不直接提交；多选 Backspace 删除最后项前有清晰反馈。"
+  },
+  {
+    "id": "checkbox",
+    "name": "复选框 Checkbox",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "独立开关项、批量选择、明确的必要确认。",
+    "variants": "unchecked / checked / indeterminate",
+    "spec": {
+      "图形": "{{size.checkbox}}，4px圆角，1px control-border；自绘check与半选横线",
+      "目标": "{{size.iconButton}}；touch {{size.touch}}",
+      "标签": "{{type.body-md.size}} / 400；间距 {{space.2}}",
+      "颜色": "checked primary/on-primary；unchecked on-surface-variant"
+    },
+    "behavior": "保留input checkbox语义，appearance:none统一外观；Space切换；checked/unchecked/indeterminate/disabled齐全；forced-colors可回退系统外观。"
+  },
+  {
+    "id": "radio",
+    "name": "单选按钮 Radio",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "2–5个互斥配置，例如预设音色/声音克隆。",
+    "variants": "horizontal / vertical / description",
+    "spec": {
+      "图形": "{{size.radio}}，1px control-border；选中中心点6px，primary",
+      "目标": "{{size.iconButton}}；touch {{size.touch}}",
+      "文字": "{{type.body-md.size}} / 400",
+      "颜色": "selected primary；rest on-surface-variant",
+      "间距": "标签 {{space.2}}；选项 {{space.6}}"
+    },
+    "behavior": "同组共享 name 和可见组名；方向键切换、Tab 进入组；选中变化不能触发页面导航。"
+  },
+  {
+    "id": "switch",
+    "name": "开关 Switch",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3 行为 / DSH 桌面适配",
+    "usage": "立即生效的二元设置；需要提交的表单优先 Checkbox。",
+    "variants": "off / on / with-icon",
+    "spec": {
+      "轨道": "{{size.switchWidth}} × {{size.switchHeight}}",
+      "滑块": "{{size.switchThumb}}；on/off保持同尺寸，左右2px内距",
+      "圆角": "{{shape.full}}",
+      "边框": "1px control-border；on边框融入primary；触控48px命中区域",
+      "颜色": "on primary/on-primary；off surface-container + surface-lowest滑块"
+    },
+    "behavior": "role=switch 或原生可访问控件；Space 切换；说明影响范围；异步保存失败恢复并显示错误。"
+  },
+  {
+    "id": "slider",
+    "name": "滑动条 Slider",
+    "group": "输入与选择",
+    "status": "局部",
+    "origin": "M3 适配",
+    "usage": "语速、音高、音量、时间进度；精确数值可辅以数字输入。",
+    "variants": "continuous / discrete / range",
+    "spec": {
+      "轨道": "{{size.sliderTrack}}；激活 primary；未激活 surface-highest",
+      "滑块": "{{size.sliderThumb}} 圆形；surface-lowest，2px primary边界，elevation1",
+      "交互行": "{{size.sliderTarget}}；touch {{size.touch}}",
+      "数值": "{{type.body-sm.size}}，tabular-nums",
+      "间距": "滑块与旁侧标签至少 {{space.3}}"
+    },
+    "behavior": "原生 range；方向键步进、Home/End；aria-valuetext 带单位；双滑块分别命名，不能穿越。"
+  },
+  {
+    "id": "chips",
+    "name": "标签选项 Chips",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "筛选、多选标签、辅助动作和输入实体；静态状态改用 Badge。",
+    "variants": "assist / filter / input / suggestion",
+    "spec": {
+      "高度": "{{size.chip}}；compact {{size.chipCompact}}",
+      "圆角": "{{shape.chip}}",
+      "文字": "{{type.label-md.size}} / 500",
+      "内距": "左右10px；图标 {{size.iconInline}}；间距6px",
+      "颜色": "selected primary-container/on-primary-container",
+      "边框": "rest 1px outline-variant；selected低强度primary混色边界；不使用粗灰边框"
+    },
+    "behavior": "filter 用 aria-pressed；input 删除按钮独立命名；选择与移除时不发生布局跳动。"
+  },
+  {
+    "id": "search",
+    "name": "搜索 Search",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "全局命令搜索与工具目录过滤。",
+    "variants": "bar / expanded-view / command",
+    "spec": {
+      "高度": "桌面 {{size.control}}；独立搜索栏56px",
+      "圆角": "{{shape.control}}；expanded {{shape.dialog}}",
+      "图标": "search {{size.icon}}",
+      "颜色": "surface-low/on-surface；提示 on-surface-variant",
+      "快捷键": "{{type.label-md.size}}，独立 kbd"
+    },
+    "behavior": "Cmd/Ctrl+K 打开；结果可方向键选择；Escape 清空或关闭；公告结果数量但不逐键打断读屏。"
+  },
+  {
+    "id": "date-picker",
+    "name": "日期选择 Date picker",
+    "group": "输入与选择",
+    "status": "局部",
+    "origin": "M3",
+    "usage": "续费、截止日期、日期范围。",
+    "variants": "docked / modal / range / input",
+    "spec": {
+      "输入": "高 {{size.field}}；圆角 {{shape.control}}",
+      "弹层": "桌面docked312px；8px圆角、4px内距；touch380px，视口不足时收窄",
+      "日期格": "桌面36px；touch48px；gap2px",
+      "文字": "日期/月份 {{type.label-lg.size}}；月份500，日期400",
+      "选中": "primary/on-primary；区间 primary-container"
+    },
+    "behavior": "支持键盘手输；显示格式与本地时区；箭头移日、PageUp/Down 移月；禁用日期提供原因。"
+  },
+  {
+    "id": "time-picker",
+    "name": "时间选择 Time picker",
+    "group": "输入与选择",
+    "status": "预留",
+    "origin": "M3",
+    "usage": "提醒、定时任务和媒体片段时间。",
+    "variants": "dial / input / 12h / 24h",
+    "spec": {
+      "输入": "{{size.field}}；圆角 {{shape.control}}",
+      "弹窗": "桌面自绘listbox，与触发器所在字段等宽、最小220px；8px圆角",
+      "数值": "{{type.body-md.size}} / 400 / tabular-nums；列表13px",
+      "文字": "{{type.body-md.size}}；操作 {{type.label-lg.size}}"
+    },
+    "behavior": "桌面手输HH:mm到分钟，自绘快捷列表每30分钟；方向键/Enter/Escape；时区明确；越界输入保留并显示行内错误。12h/dial为预留变体。"
+  },
+  {
+    "id": "color-picker",
+    "name": "颜色选择 Color picker",
+    "group": "输入与选择",
+    "status": "局部",
+    "origin": "项目",
+    "usage": "封面、图表与内容自定义；主题色通过语义令牌管理。",
+    "variants": "swatches / hex / alpha",
+    "spec": {
+      "色块": "{{size.compact}}；目标 {{size.iconButton}}",
+      "圆角": "色块6px；弹层 {{shape.control}}；宽260px",
+      "输入": "{{size.field}}；mono {{type.body-md.size}}",
+      "选中": "check配中性圆底；HEX与可访问名称同时表达颜色；非仅颜色"
+    },
+    "behavior": "自绘色板与HEX字段；支持校验、键盘输入与行内错误；Escape关闭且焦点返回；alpha为预留变体，后续明确0–100%。"
+  },
+  {
+    "id": "upload",
+    "name": "文件上传 / 拖放区",
+    "group": "输入与选择",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "音色、图片、视频和文档导入。",
+    "variants": "button / dropzone / uploading / failed",
+    "spec": {
+      "区域": "最小高128px；padding {{space.6}}",
+      "圆角": "{{shape.control}}",
+      "边框": "1px dashed outline；dragover 2px primary",
+      "图标": "24px；正文 {{type.label-lg.size}} / 400",
+      "反馈": "文件名、格式、大小、进度、取消/重试"
+    },
+    "behavior": "可点击按钮与键盘导入；明确支持格式/大小；错误逐文件显示；不得仅支持拖放。"
+  },
+  {
+    "id": "card",
+    "name": "卡片 Card",
+    "group": "容器与数据",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "独立信息单元、工具、统计与订阅；嵌套优先无边框分区。",
+    "variants": "outlined / filled / elevated / interactive",
+    "spec": {
+      "圆角": "{{shape.card}}；嵌套 {{shape.nested}}",
+      "内距": "{{layout.cardPadding}}；compact {{space.4}}",
+      "标题": "{{type.title-md.size}} / 600",
+      "颜色": "outlined surface-lowest；filled surface-low",
+      "边框": "outlined 1px outline-variant；其余无",
+      "层级": "surface-lowest；1px outline-variant；静态卡片 elevation 0，不做悬浮位移"
+    },
+    "behavior": "整卡可点用链接或按钮语义；卡内多操作时卡体不再是嵌套按钮；hover 不上移。"
+  },
+  {
+    "id": "list",
+    "name": "列表 List",
+    "group": "容器与数据",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "任务、生成记录、设置、通知。",
+    "variants": "one-line / two-line / three-line / selectable",
+    "spec": {
+      "行高": "单行 {{size.row}}；两行72px；三行88px；compact {{size.rowCompact}}",
+      "文字": "主 {{type.body-md.size}}；副 {{type.body-sm.size}}",
+      "内距": "水平 {{space.4}}；元素间 {{space.3}}",
+      "图标": "{{size.icon}}；头像40px",
+      "边界": "分隔线1px outline-variant，按组使用"
+    },
+    "behavior": "列表项使用真实链接或按钮；操作不依赖 hover；多选与导航分清；长内容可增高。"
+  },
+  {
+    "id": "table",
+    "name": "数据表格 Table",
+    "group": "容器与数据",
+    "status": "已有",
+    "origin": "项目 / Material 数据模式",
+    "usage": "订阅、历史任务、资产和结构化数据。",
+    "variants": "standard / dense / selectable / sortable",
+    "spec": {
+      "行高": "{{size.row}}；dense {{size.rowCompact}}；表头48px",
+      "字号": "正文 {{type.body-md.size}}；表头 {{type.label-md.size}} / 500",
+      "内距": "水平 {{space.4}}",
+      "边框": "行底1px outline-variant；外框 {{shape.nested}}",
+      "数字": "tabular-nums，金额/数值右对齐",
+      "颜色": "header surface-low；row surface-lowest"
+    },
+    "behavior": "语义 table、th scope；排序 aria-sort；溢出保留横向滚动；主键列优先固定；窄屏可切列表。"
+  },
+  {
+    "id": "carousel",
+    "name": "轮播 Carousel",
+    "group": "容器与数据",
+    "status": "局部",
+    "origin": "M3",
+    "usage": "媒体、封面与有序内容预览；关键数据优先列表或网格。",
+    "variants": "multi-browse / uncontained / hero / fullscreen",
+    "spec": {
+      "圆角": "{{shape.card}}",
+      "间距": "{{space.2}}；容器内距 {{space.4}}",
+      "导航": "{{size.iconButton}} 圆形按钮",
+      "文字": "{{type.body-md.size}}",
+      "布局": "主项+部分下一项，提示可滚动"
+    },
+    "behavior": "手动切换为默认；键盘与滚动均可操作；自动播放提供暂停，遵循 reduced-motion。"
+  },
+  {
+    "id": "divider",
+    "name": "分隔线 Divider",
+    "group": "容器与数据",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "分组、卡片内部与工具栏分隔；不为每个子元素加框。",
+    "variants": "full / inset / vertical",
+    "spec": {
+      "粗细": "{{size.divider}}",
+      "颜色": "outline-variant",
+      "缩进": "{{space.4}}，带图标对齐文字列",
+      "间隔": "上下 {{space.4}}"
+    },
+    "behavior": "纯装饰 aria-hidden；有语义的分隔使用 hr 或 separator。"
+  },
+  {
+    "id": "tree",
+    "name": "树形目录 Tree",
+    "group": "容器与数据",
+    "status": "局部",
+    "origin": "项目",
+    "usage": "资源目录、文档层级与项目结构。",
+    "variants": "navigation / multi-select",
+    "spec": {
+      "行高": "{{size.compact}}；touch {{size.touch}}",
+      "缩进": "每级 {{space.4}}",
+      "圆角": "{{shape.control}}",
+      "图标": "{{size.iconInline}}；展开图标 {{size.iconSmall}}",
+      "文字": "{{type.body-md.size}}"
+    },
+    "behavior": "tree/treeitem；左右展开折叠，上下移动；避免靠缩进单独表达层级。"
+  },
+  {
+    "id": "chart",
+    "name": "图表 / 指标 Chart",
+    "group": "容器与数据",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "用量、趋势、热力图、财务与统计。",
+    "variants": "bar / line / heatmap / metric / donut",
+    "spec": {
+      "主指标": "{{type.headline-lg.size}} / 600 / tabular-nums",
+      "刻度": "{{type.body-sm.size}}；标签至少12px",
+      "颜色": "chart-1..4；语义状态用 success/warning/error",
+      "网格": "1px outline-variant；线宽2px",
+      "形状": "柱顶 {{shape.tiny}}；不要装饰性3D"
+    },
+    "behavior": "有标题、单位、时间范围、数据来源；提供文本摘要/数据表；未知值显示—，不伪装为0。"
+  },
+  {
+    "id": "appbar",
+    "name": "顶部应用栏 App bar",
+    "group": "导航",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "全局搜索、通知和个人入口；页面标题位于内容区。",
+    "variants": "small / medium / large / bottom",
+    "spec": {
+      "高度": "桌面 {{layout.topbar}}；移动 small64px / medium112px / large152px",
+      "颜色": "surface；scrolled surface-low",
+      "内距": "{{space.6}}；移动 {{space.4}}",
+      "图标": "{{size.icon}}，目标 {{size.iconButton}}",
+      "边界": "底部分隔线1px outline-variant"
+    },
+    "behavior": "macOS 拖拽区与交互控件分开；sticky 时不覆盖键盘焦点；bottom app bar 需安全区。"
+  },
+  {
+    "id": "navigation-drawer",
+    "name": "侧边导航 Navigation drawer",
+    "group": "导航",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "桌面主要模块；本项目固定侧栏。",
+    "variants": "standard / modal",
+    "spec": {
+      "宽度": "{{layout.sidebar}}；modal 320px",
+      "条目": "高 {{size.touch}}；圆角 {{shape.navigation}}",
+      "内距": "容器 {{space.3}}；条目 {{space.4}}",
+      "文字": "{{type.label-lg.size}} / 500",
+      "颜色": "背景 surface-low；selected primary-container/on-primary-container",
+      "图标": "{{size.icon}}；选中 FILL 1"
+    },
+    "behavior": "当前页面 aria-current=page；折叠不丢失标签；modal 困住焦点、Escape关闭、焦点返回。"
+  },
+  {
+    "id": "navigation-rail",
+    "name": "导航轨 Navigation rail",
+    "group": "导航",
+    "status": "预留",
+    "origin": "M3",
+    "usage": "600–1023px中等宽度，为内容释放空间。",
+    "variants": "standard / with-fab",
+    "spec": {
+      "宽度": "{{layout.rail}}",
+      "项目": "最小高64px；指示区56×32px",
+      "圆角": "指示区 {{shape.full}}",
+      "文字": "{{type.label-md.size}} / 500",
+      "图标": "24px；selected FILL 1"
+    },
+    "behavior": "3–7个主目的地；当前位置 aria-current；标签默认可见；更多模块放抽屉。"
+  },
+  {
+    "id": "navigation-bar",
+    "name": "底部导航 Navigation bar",
+    "group": "导航",
+    "status": "预留",
+    "origin": "M3",
+    "usage": "小于600px的3–5个顶层页面。",
+    "variants": "labeled / active-label",
+    "spec": {
+      "高度": "80px + safe-area",
+      "指示区": "64×32px；圆角 {{shape.full}}",
+      "图标": "24px；标签 {{type.label-md.size}}",
+      "颜色": "surface-low；selected primary-container",
+      "布局": "等宽，无横向滚动"
+    },
+    "behavior": "保持位置与项目稳定；不要把创建/删除当导航项；键盘可达。"
+  },
+  {
+    "id": "tabs",
+    "name": "页签 Tabs",
+    "group": "导航",
+    "status": "已有",
+    "origin": "M3 语义 / DSH inset适配",
+    "usage": "同一模块内平级内容页面；不能替代表单单选。",
+    "variants": "inset / underline / scrollable",
+    "spec": {
+      "高度": "inset {{size.tab}}，padding4px，内部32px；touch48px；underline40px",
+      "文字": "{{type.label-lg.size}} / 500",
+      "指示条": "inset选中surface-lowest/轻阴影；underline底部2px primary",
+      "颜色": "inset中性背景/选中on-surface；underline active primary；inactive on-surface-variant",
+      "圆角": "inset外 {{shape.tab}}、内 {{shape.control}}；underline无圆角",
+      "布局": "等宽或按内容宽；最多一个主页签层级"
+    },
+    "behavior": "tablist/tab/tabpanel；方向键、Home/End；无请求可自动激活，重内容用 Enter 激活。"
+  },
+  {
+    "id": "breadcrumb",
+    "name": "面包屑 Breadcrumb",
+    "group": "导航",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "三级以上层级定位；一级模块不显示。",
+    "variants": "standard / collapsed",
+    "spec": {
+      "高度": "最小 {{size.compact}}",
+      "文字": "{{type.body-sm.size}}；当前 on-surface",
+      "图标": "chevron_right {{size.iconSmall}}",
+      "间距": "{{space.2}}；圆角 {{shape.tiny}}"
+    },
+    "behavior": "nav aria-label=面包屑；当前页 aria-current；中间省略可展开且键盘可达。"
+  },
+  {
+    "id": "pagination",
+    "name": "分页 Pagination",
+    "group": "导航",
+    "status": "局部",
+    "origin": "项目",
+    "usage": "大量历史记录和服务端数据；显示总数与当前范围。",
+    "variants": "numbered / previous-next / load-more",
+    "spec": {
+      "按钮": "{{size.iconButton}}；圆角 {{shape.control}}",
+      "文字": "{{type.label-lg.size}} / 500",
+      "间距": "{{space.1}}",
+      "选中": "primary-container/on-primary-container"
+    },
+    "behavior": "当前页 aria-current=page；加载后保持焦点；禁用边界按钮；用户调整每页数量后说明范围。"
+  },
+  {
+    "id": "dialog",
+    "name": "弹窗 Dialog",
+    "group": "弹层",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "聚焦短任务与必要确认；复杂编辑使用工作区弹窗。",
+    "variants": "basic / alert / form / fullscreen",
+    "spec": {
+      "宽度": "small {{layout.dialogSmall}}；medium {{layout.dialogMedium}}；large {{layout.dialogLarge}}",
+      "圆角": "{{shape.dialog}}；fullscreen {{shape.none}}",
+      "内距": "{{layout.dialogPadding}}",
+      "标题": "{{type.title-lg.size}} / 500；正文 {{type.body-md.size}}",
+      "外观": "surface-lowest；elevation 3；scrim {{state.scrim}}",
+      "布局": "距窗口至少24px；最大高 calc(100dvh - 48px)"
+    },
+    "behavior": "Radix Dialog；标题/描述关联；焦点困住并返回；表单错误不关闭；操作固定底部、内容内部滚动。"
+  },
+  {
+    "id": "bottom-sheet",
+    "name": "底部面板 Bottom sheet",
+    "group": "弹层",
+    "status": "预留",
+    "origin": "M3",
+    "usage": "窄屏补充内容、选择与短任务。",
+    "variants": "standard / modal",
+    "spec": {
+      "圆角": "上侧 {{shape.sheet}}；底部 {{shape.none}}",
+      "拖柄": "32×4px；顶部间距 {{space.4}}",
+      "内距": "{{space.6}} + safe-area",
+      "高度": "最高90dvh；内容内滚动",
+      "外观": "surface-low；modal scrim {{state.scrim}}"
+    },
+    "behavior": "提供关闭按钮，不能只靠拖动；modal 焦点困住；标准面板允许背景操作。"
+  },
+  {
+    "id": "side-sheet",
+    "name": "侧面板 Side sheet",
+    "group": "弹层",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "详情、发布设置、通知和辅助编辑。",
+    "variants": "standard / modal",
+    "spec": {
+      "宽度": "{{layout.drawer}}；大编辑480px",
+      "圆角": "modal 左侧 {{shape.sheet}}；standard {{shape.none}}",
+      "内距": "{{space.6}}",
+      "标题": "{{type.title-lg.size}}",
+      "外观": "surface-lowest；modal elevation 3"
+    },
+    "behavior": "小屏转全屏；固定头部/底部与内部滚动；standard 不困住焦点，modal 要困住焦点。"
+  },
+  {
+    "id": "menu",
+    "name": "菜单 Menu",
+    "group": "弹层",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "更多动作、上下文菜单和嵌套命令。",
+    "variants": "dropdown / context / submenu / selection",
+    "spec": {
+      "行高": "{{size.menuRow}}；touch {{size.touch}}",
+      "宽度": "最小200px、最大320px",
+      "圆角": "{{shape.nested}}；内距 {{space.1}}",
+      "文字": "{{type.label-lg.size}}；辅助 {{type.body-sm.size}}",
+      "外观": "surface-lowest；elevation 2；无厚边框",
+      "图标": "{{size.iconInline}}；危险操作 error",
+      "行": "圆角 {{shape.inset}}；内距8px；危险项独立分隔"
+    },
+    "behavior": "Radix Menu；方向键、Home/End、输入定位、Escape；不能用 menu 盛放复杂表单。"
+  },
+  {
+    "id": "tooltip",
+    "name": "提示 Tooltip",
+    "group": "弹层",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "简短解释图标或截断内容；必要说明直接可见。",
+    "variants": "plain / rich",
+    "spec": {
+      "高度": "plain 最小 {{size.tooltip}}",
+      "圆角": "plain {{shape.tiny}}；rich {{shape.nested}}",
+      "文字": "{{type.body-sm.size}}；rich body-md",
+      "内距": "plain 4px 8px；rich {{space.4}}",
+      "颜色": "plain inverse-surface/inverse-on-surface",
+      "时机": "hover延迟500ms；focus立即；离开即关闭"
+    },
+    "behavior": "plain 不可交互；rich 有链接时用可聚焦非模态 popover；Escape 关闭；不遮住目标。"
+  },
+  {
+    "id": "popover",
+    "name": "浮层 Popover",
+    "group": "弹层",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "筛选、颜色选择与小型表单。",
+    "variants": "anchored / non-modal",
+    "spec": {
+      "圆角": "{{shape.nested}}",
+      "内距": "{{space.4}}",
+      "宽度": "按内容，最小240px、最大400px",
+      "外观": "surface-lowest；elevation 2；1px outline-variant",
+      "间隔": "距触发器 {{space.2}}"
+    },
+    "behavior": "可含表单；焦点策略明确；Escape关闭、焦点返回；可见区域不足时自动换向。"
+  },
+  {
+    "id": "badge",
+    "name": "徽标 Badge",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "M3 / 项目",
+    "usage": "未读数量、简短静态状态；可交互筛选使用 Chip。",
+    "variants": "dot / count / status",
+    "spec": {
+      "尺寸": "dot6px；count16px；status {{size.badge}}",
+      "圆角": "count {{shape.full}}；status {{shape.tiny}}",
+      "文字": "count {{type.label-sm.size}}；status {{type.label-md.size}} / 500",
+      "颜色": "未读 error/on-error；状态 success/warning/info对应container",
+      "内距": "status 左右 {{space.2}}",
+      "外观": "低强度语义混色底与细边界；组件成熟度使用中性badge，不用绿色成功态"
+    },
+    "behavior": "数量99+；状态有文字或图形；通知按钮 accessible name 包含未读数量。"
+  },
+  {
+    "id": "progress",
+    "name": "进度指示 Progress",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "真实任务进度、额度、等待状态；额度和任务语义需标注。",
+    "variants": "linear / circular / determinate / indeterminate",
+    "spec": {
+      "轨道": "{{size.progress}}；圆形24/40px",
+      "圆角": "{{shape.full}}",
+      "颜色": "active primary；track primary-container",
+      "文字": "{{type.body-sm.size}}；百分比 tabular-nums",
+      "布局": "进度条旁保留状态与取消入口"
+    },
+    "behavior": "role=progressbar；未知进度不显示虚假百分比；长任务允许离开页面、取消与恢复。"
+  },
+  {
+    "id": "loading-indicator",
+    "name": "加载指示 Loading indicator",
+    "group": "反馈",
+    "status": "局部",
+    "origin": "M3 扩展",
+    "usage": "短时未定进度；数据布局已知时用 Skeleton。",
+    "variants": "spinner / contained / expressive-reserved",
+    "spec": {
+      "尺寸": "inline20px；default40px；contained48px",
+      "颜色": "primary；背景透明或 primary-container",
+      "动效": "仅加载旋转；reduced-motion 显示静态图标+文字",
+      "文字": "{{type.body-sm.size}}"
+    },
+    "behavior": "aria-busy 在加载区域；status 只公告阶段变化；超过10秒显示进展与重试/取消信息。"
+  },
+  {
+    "id": "snackbar",
+    "name": "消息条 Snackbar / Toast",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "M3",
+    "usage": "操作结果、可撤销删除与非阻断反馈；表单错误就地显示。",
+    "variants": "message / action / error",
+    "spec": {
+      "高度": "单行至少48px；两行至少68px",
+      "宽度": "桌面320–560px",
+      "圆角": "{{shape.control}}",
+      "颜色": "inverse-surface/inverse-on-surface；action inverse-primary",
+      "文字": "{{type.body-md.size}}；动作 {{type.label-lg.size}}",
+      "时间": "普通5秒；含动作8秒；hover/focus暂停"
+    },
+    "behavior": "普通 role=status；紧急错误才 alert；只显示一条并排队；提供关闭；重要错误保留到处理。"
+  },
+  {
+    "id": "banner",
+    "name": "横幅 / 内联提示 Banner",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "连接状态、模型缺失、权限与持续性异常。",
+    "variants": "info / success / warning / error",
+    "spec": {
+      "圆角": "{{shape.control}}",
+      "内距": "{{space.3}} {{space.4}}",
+      "文字": "{{type.body-md.size}} / 400",
+      "图标": "{{size.icon}}；动作40px",
+      "颜色": "语义 container/on-container；非状态提示 surface-low"
+    },
+    "behavior": "消息解释问题、影响和下一步；不把所有异常提升为阻断弹窗；可恢复的重试入口明确。"
+  },
+  {
+    "id": "skeleton",
+    "name": "骨架屏 Skeleton",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "卡片、列表、数据表首屏加载。",
+    "variants": "text / avatar / card / row",
+    "spec": {
+      "圆角": "文本 {{shape.tiny}}；卡片跟随 {{shape.card}}",
+      "颜色": "surface-highest",
+      "动画": "1.5秒透明度呼吸；reduced-motion关闭",
+      "布局": "与最终内容尺寸一致，避免布局跳动"
+    },
+    "behavior": "aria-hidden；容器 aria-busy；不无限闪动，失败后切错误与重试。"
+  },
+  {
+    "id": "empty",
+    "name": "空白 / 错误 / 离线状态",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "首次使用、无结果、网络失败、无权限、数据缺失。",
+    "variants": "first-use / no-results / error / offline",
+    "spec": {
+      "内距": "{{space.8}}",
+      "图标": "{{size.iconHero}}；容器64px",
+      "标题": "{{type.title-md.size}}；说明 {{type.body-md.size}}",
+      "动作": "最多一个主按钮+一个文字链接",
+      "颜色": "surface；普通图标 on-surface-variant"
+    },
+    "behavior": "区分尚无内容与加载失败；保留筛选条件；提供创建、清空筛选、重试等对应动作。"
+  },
+  {
+    "id": "notification",
+    "name": "通知中心",
+    "group": "反馈",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "跨页面任务完成与需要后续处理的事件。",
+    "variants": "unread / read / actionable",
+    "spec": {
+      "面板": "宽 {{layout.drawer}}；side-sheet模式",
+      "列表": "两行72px起；圆角 {{shape.control}}",
+      "文字": "标题 {{type.title-sm.size}}；时间 {{type.body-sm.size}}",
+      "未读": "primary圆点+状态文字",
+      "操作": "全部已读、逐条跳转；数量用 Badge"
+    },
+    "behavior": "点击后定位相关任务；去重与已读状态持久化；不会抢焦点；不要广播无意义的频繁轮询。"
+  },
+  {
+    "id": "logo",
+    "name": "品牌标志 Logo",
+    "group": "品牌与内容",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "应用侧栏、关于、启动页与宣传资产。",
+    "variants": "symbol / horizontal-lockup / monochrome",
+    "spec": {
+      "资源": "assets/app-logo.svg；保持512×512原始画布比例",
+      "尺寸": "最小 {{brand.logoMin}}；默认 {{brand.logoDefault}}；展示48px",
+      "安全区": "默认32px时四周至少 {{brand.logoClear}}，按尺寸同比例缩放",
+      "颜色": "#8457FF / #9167FF / #F5BF2F 为固定品牌色",
+      "组合文字": "MyDashboard；20px / 600，标志间距8px"
+    },
+    "behavior": "不拉伸、不加阴影、不套任意渐变；深色放在有足够对比的中性底座；单独品牌链接有可访问名称。"
+  },
+  {
+    "id": "icon",
+    "name": "图标 Icon",
+    "group": "品牌与内容",
+    "status": "已有",
+    "origin": "Material Symbols",
+    "usage": "导航、操作、状态和辅助说明。",
+    "variants": "outlined / selected-filled / semantic",
+    "spec": {
+      "库": "Material Symbols Outlined，本地woff2；第三方品牌独立SVG",
+      "尺寸": "small {{size.iconSmall}} / inline {{size.iconInline}} / default {{size.icon}} / hero {{size.iconHero}}",
+      "轴": "wght400 / GRAD0 / opsz与尺寸匹配 / FILL0",
+      "选中": "FILL1，保持同一字形与尺寸",
+      "颜色": "继承 currentColor；状态用语义色"
+    },
+    "behavior": "装饰 aria-hidden；纯图标动作需命名；同义动作固定图标；不混用 emoji 与其他线性图标库。"
+  },
+  {
+    "id": "typography",
+    "name": "文字 Typography",
+    "group": "品牌与内容",
+    "status": "已有",
+    "origin": "M3 适配",
+    "usage": "页面标题、正文、标签、数字与长文。",
+    "variants": "display / headline / title / body / label",
+    "spec": {
+      "字体": "系统原生字体栈；Inter仅已安装时使用；中文PingFang SC / Microsoft YaHei回退",
+      "正文": "{{type.body-md.size}} / {{type.body-md.line}} / 400",
+      "标题": "页 {{type.headline-md.size}} / 600；卡片 {{type.title-md.size}} / 600",
+      "标签": "{{type.label-lg.size}} / 500；辅助 {{type.body-sm.size}} / 400",
+      "数字": "tabular-nums；代码 mono",
+      "色重": "on-surface主 / on-surface-variant次；disabled 38%"
+    },
+    "behavior": "字号由角色决定，不继承 label 的加粗；中文不加英文大写字距；正文不低于12px。"
+  },
+  {
+    "id": "avatar",
+    "name": "头像 Avatar",
+    "group": "品牌与内容",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "个人资料、成员与内容作者；第三方logo不是用户头像。",
+    "variants": "image / initials / group",
+    "spec": {
+      "尺寸": "24 / 32 / 40 / 56px",
+      "圆角": "{{shape.full}}",
+      "颜色": "fallback primary-container/on-primary-container",
+      "文字": "32px头像用 {{type.label-md.size}} / 500",
+      "状态": "在线点8px，边框2px surface"
+    },
+    "behavior": "装饰头像 alt为空；身份唯一来源时提供姓名；图片失败回退首字，避免破图。"
+  },
+  {
+    "id": "rich-editor",
+    "name": "富文本 / 代码编辑器",
+    "group": "品牌与内容",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "文章写作、Markdown、提示词与结构化内容。",
+    "variants": "rich / markdown / code / preview",
+    "spec": {
+      "正文": "16px / 28px / 400；列宽最大760px",
+      "代码": "mono 13px / 22px；tab-size2",
+      "外框": "{{shape.nested}}；1px outline-variant",
+      "工具栏": "{{size.touch}}；图标 {{size.icon}}",
+      "选择色": "primary-container；光标 primary"
+    },
+    "behavior": "编辑与预览切换不丢数据；工具栏可键盘操作；粘贴保持语义；语法高亮深浅色均验对比。"
+  },
+  {
+    "id": "audio",
+    "name": "音频播放器",
+    "group": "媒体与工作区",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "AI配音试听、参考音色与素材播放。",
+    "variants": "compact / waveform / workspace",
+    "spec": {
+      "播放": "{{size.iconButton}} 圆形；图标 {{size.icon}}",
+      "进度": "Slider；时间 {{type.body-sm.size}} / tabular-nums",
+      "容器": "{{shape.nested}}；padding {{space.4}}",
+      "位置": "工作区固定试听区；列表内明确当前播放项",
+      "颜色": "surface-low；播放 primary/on-primary"
+    },
+    "behavior": "一次播放一个音频；支持暂停/拖动/静音；标明时长与加载错误；不隐藏在长表单底部。"
+  },
+  {
+    "id": "video",
+    "name": "视频 / 时间线 / 资产卡",
+    "group": "媒体与工作区",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "Video Studio预览、封面、剪辑和资产管理。",
+    "variants": "16:9 / 9:16 / timeline / asset",
+    "spec": {
+      "画面": "保持原始比例；容器圆角 {{shape.nested}}",
+      "控制器": "高 {{size.touch}}；图标 {{size.icon}}；按钮 {{size.iconButton}}",
+      "缩略图": "默认16:9；状态 Badge；名称 body-md",
+      "时间线": "轨道高48px；时间码 mono 12px",
+      "颜色": "中性底；选中 primary 2px；焦点独立"
+    },
+    "behavior": "空格播放需避免截获输入；字幕可开关；导出进度独立展示；长任务离开页面继续。"
+  },
+  {
+    "id": "split-pane",
+    "name": "分栏 / 工作区弹窗",
+    "group": "媒体与工作区",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "AI Voiceover、浏览器、研究和编辑预览。",
+    "variants": "editor-preview / three-pane / resizable",
+    "spec": {
+      "宽度": "弹窗最大 {{layout.dialogLarge}}；预览栏320px",
+      "分隔": "{{size.divider}} outline-variant；拖拽目标8px",
+      "圆角": "外侧 {{shape.dialog}}；内部无嵌套大圆角",
+      "内距": "{{space.6}}；窄屏 {{space.4}}",
+      "滚动": "头部/主操作固定；内容独立滚动"
+    },
+    "behavior": "小于1024px堆叠；拖拽分隔器可方向键调整；不能因内容变长丢失播放器或提交入口。"
+  },
+  {
+    "id": "stepper",
+    "name": "步骤 / 时间轴 Stepper",
+    "group": "媒体与工作区",
+    "status": "局部",
+    "origin": "项目",
+    "usage": "生成、导入、发布等有顺序的流程；不为简单表单增加步骤。",
+    "variants": "linear / non-linear / task-timeline",
+    "spec": {
+      "节点": "24px；目标 {{size.iconButton}}",
+      "标签": "{{type.label-lg.size}}；说明 {{type.body-sm.size}}",
+      "连接线": "2px outline-variant；completed primary",
+      "颜色": "current primary；complete success；error error"
+    },
+    "behavior": "标注当前/完成/失败；可返回修正；后台任务用真实阶段；不能仅靠颜色标进度。"
+  },
+  {
+    "id": "keyboard",
+    "name": "快捷键 / 拖拽 / 选中态",
+    "group": "媒体与工作区",
+    "status": "已有",
+    "origin": "项目",
+    "usage": "全局命令、排序、批量选择和高效桌面交互。",
+    "variants": "kbd / drag-handle / selection",
+    "spec": {
+      "键帽": "最小20px；mono12px；圆角 {{shape.tiny}}",
+      "拖柄": "drag_indicator {{size.iconInline}}；目标 {{size.compact}}",
+      "选中": "primary-container + check；focus {{size.focus}}描边",
+      "拖拽": "state层 {{state.dragged}}；elevation2",
+      "反馈": "位置、总数、可撤销"
+    },
+    "behavior": "快捷键可发现且不与文本输入冲突；拖拽有移动上/下替代动作；可见焦点不可被裁切。"
+  }
+]

@@ -8,6 +8,9 @@ docs/*
 !docs/screenshots/
 !docs/screenshots/*.png
 !docs/notification-center.zh-CN.md
+!docs/design-guidelines.md
+!docs/design-system/
+!docs/design-system/**
 !docs/backlogs/
 !docs/backlogs/notification-center.zh-CN.md
 !docs/superpowers/

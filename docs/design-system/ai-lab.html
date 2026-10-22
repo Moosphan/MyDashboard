@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-density="standard">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI Lab · MyDashboard v3 设计提案</title>
+    <link rel="icon" href="../../assets/app-logo.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="tokens.generated.css" />
+    <link rel="stylesheet" href="preview.css" />
+    <link rel="stylesheet" href="preview-controls.css" />
+    <script src="system.generated.js" defer></script>
+    <script src="preview-controls.js" defer></script>
+    <script src="preview.js" defer></script>
+  </head>
+  <body class="product-root" data-page="ai-lab">
+    <a href="#product-main" class="skip">跳到主内容</a>
+    <div id="product"></div>
+    <div id="snackbar" class="snackbar" role="status" hidden></div>
+    <dialog id="demo-dialog" class="dialog" aria-labelledby="demo-dialog-title">
+      <form id="subscription-form">
+        <div class="dialog-heading">
+          <h2 id="demo-dialog-title">添加订阅</h2>
+          <button type="button" class="btn icon-btn" data-close-dialog aria-label="关闭">
+            <span class="sym" aria-hidden="true">close</span>
+          </button>
+        </div>
+        <p class="muted">此处为设计演示，数据仅保留在当前页面。</p>
+        <div class="form-stack">
+          <label class="field-label"
+            >服务商<select name="provider" class="field">
+              <option>OpenAI</option>
+              <option>Anthropic</option>
+              <option>Google</option>
+              <option>DeepSeek</option>
+            </select></label
+          ><label class="field-label"
+            >套餐名称<input
+              name="plan"
+              class="field"
+              placeholder="例如：Plus"
+              required
+              maxlength="40" /></label
+          ><label class="field-label"
+            >月费用（USD）<input
+              name="cost"
+              class="field"
+              type="number"
+              value="20"
+              min="0"
+              max="99999"
+              step="0.01"
+              required
+          /></label>
+        </div>
+        <div class="dialog-actions">
+          <button class="btn text" type="button" data-close-dialog>取消</button
+          ><button class="btn filled" type="submit">添加订阅</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

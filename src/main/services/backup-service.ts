@@ -39,6 +39,7 @@ function listFiles(rootPath: string, relativePath: string): string[] {
   if (statSync(fullPath).isFile()) return [relativePath]
 
   return readdirSync(fullPath, { withFileTypes: true })
+    .filter(entry => entry.name !== '.trash')
     .flatMap((entry) => listFiles(rootPath, join(relativePath, entry.name)))
 }
 

@@ -886,6 +886,98 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 33,
+    name: '033_voiceover_profiles_jobs',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS voice_profiles (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          current_revision INTEGER NOT NULL,
+          revisions_json TEXT NOT NULL,
+          deleted_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS voice_jobs (
+          id TEXT PRIMARY KEY,
+          client_request_id TEXT NOT NULL UNIQUE,
+          request_json TEXT NOT NULL,
+          state TEXT NOT NULL,
+          phase TEXT NOT NULL,
+          revision INTEGER NOT NULL DEFAULT 1,
+          attempt_id TEXT NOT NULL,
+          audio_asset_id INTEGER UNIQUE REFERENCES video_assets(id) ON DELETE SET NULL,
+          error TEXT,
+          elapsed_seconds REAL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_voice_jobs_created ON voice_jobs(created_at DESC);
+      `)
+    },
+  },
+  {
+    version: 34,
+    name: '034_video_creation_workflow',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE video_projects (
+          id TEXT PRIMARY KEY, title TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1,
+          archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE video_workflow_revisions (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES video_projects(id),
+          stage TEXT NOT NULL, version INTEGER NOT NULL, payload TEXT NOT NULL, dependencies TEXT NOT NULL,
+          status TEXT NOT NULL, approved_at TEXT, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
+          UNIQUE(project_id, stage, version)
+        );
+        CREATE TABLE video_workflow_requests (
+          request_id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES video_projects(id), fingerprint TEXT NOT NULL
+        );
+        CREATE TABLE video_workflow_jobs (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES video_projects(id), stage TEXT NOT NULL,
+          request_id TEXT NOT NULL UNIQUE, expected_revision INTEGER NOT NULL, executor TEXT NOT NULL, input_fingerprint TEXT NOT NULL,
+          state TEXT NOT NULL, phase TEXT NOT NULL, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        CREATE TABLE video_workflow_files (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES video_projects(id),
+          path TEXT NOT NULL UNIQUE, sha256 TEXT NOT NULL, size INTEGER NOT NULL, mime TEXT NOT NULL
+        );
+        CREATE TABLE video_workflow_publications (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES video_projects(id), platform TEXT NOT NULL,
+          revision_id TEXT NOT NULL REFERENCES video_workflow_revisions(id), metadata TEXT NOT NULL,
+          export_path TEXT NOT NULL, url TEXT, created_at TEXT NOT NULL, published_at TEXT
+        );
+        CREATE INDEX idx_video_workflow_revisions ON video_workflow_revisions(project_id, stage, version DESC);
+        CREATE INDEX idx_video_workflow_jobs ON video_workflow_jobs(project_id, created_at DESC);
+      `)
+    },
+  },
+  {
+    version: 35,
+    name: '035_workflow_audio_progress',
+    up: (db) => {
+      db.exec('ALTER TABLE video_workflow_jobs ADD COLUMN audio_progress TEXT')
+    },
+  },
+  {
+    version: 36,
+    name: '036_workflow_motion_and_templates',
+    up: (db) => {
+      db.exec(`
+        ALTER TABLE video_workflow_jobs ADD COLUMN kind TEXT NOT NULL DEFAULT 'generation';
+        ALTER TABLE video_workflow_jobs ADD COLUMN motion_plan TEXT;
+        CREATE TABLE video_style_templates (
+          id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+          source_project_id TEXT NOT NULL REFERENCES video_projects(id),
+          source_revision_id TEXT NOT NULL REFERENCES video_workflow_revisions(id),
+          payload TEXT NOT NULL, created_at TEXT NOT NULL
+        );
+      `)
+    },
+  },
 ]
 
 export function runMigrations(db: Database.Database): void {

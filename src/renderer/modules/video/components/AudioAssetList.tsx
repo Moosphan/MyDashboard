@@ -11,6 +11,7 @@ interface AudioAsset {
   file_format: string | null
   duration_seconds: number | null
   file_size: number | null
+  metadata: string
 }
 
 export function AudioAssetList() {
@@ -23,19 +24,23 @@ export function AudioAssetList() {
     isPlaying,
     currentTime,
     duration,
-    volume,
     isLoading: audioLoading,
     play,
     pause,
     stop,
     seek,
-    setVolume,
     getWaveformData,
   } = useAudioPlayer()
 
   const [playingId, setPlayingId] = useState<number | null>(null)
   const [audioDataUrl, setAudioDataUrl] = useState<string | null>(null)
   const [waveformData, setWaveformData] = useState<Record<number, number[]>>({})
+  useEffect(() => window.electronAPI.onVideoAssetsChanged(() => refetch()), [refetch])
+  useEffect(() => {
+    const pauseOther = (event: Event) => { if ((event as CustomEvent).detail !== 'assets') pause() }
+    window.addEventListener('video:audioPlaying', pauseOther)
+    return () => window.removeEventListener('video:audioPlaying', pauseOther)
+  }, [pause])
 
   const formatDuration = (sec: number | null) => {
     if (!sec) return '--:--'
@@ -62,6 +67,7 @@ export function AudioAssetList() {
   }
 
   const handleDelete = async (id: number) => {
+    window.dispatchEvent(new CustomEvent('video:audioPlaying', { detail: 'none' }))
     if (playingId === id) {
       stop()
       setPlayingId(null)
@@ -75,7 +81,7 @@ export function AudioAssetList() {
 
   const loadAudioData = useCallback(async (audio: AudioAsset) => {
     try {
-      const res = await window.electronAPI.invoke('video:getAudioData', audio.file_path)
+      const res = await window.electronAPI.invoke('video:getAudioDataById', audio.id)
       if (res?.success && res.data?.dataUrl) {
         setAudioDataUrl(res.data.dataUrl)
 
@@ -106,6 +112,7 @@ export function AudioAssetList() {
   }, [getWaveformData, waveformData, audioDurations])
 
   const handlePlay = async (audio: AudioAsset) => {
+    window.dispatchEvent(new CustomEvent('video:audioPlaying', { detail: 'assets' }))
     if (playingId === audio.id && isPlaying) {
       pause()
       return
@@ -144,7 +151,7 @@ export function AudioAssetList() {
       for (const audio of audios) {
         if (!audio.duration_seconds && !audioDurations[audio.id]) {
           try {
-            const res = await window.electronAPI.invoke('video:getAudioData', audio.file_path)
+            const res = await window.electronAPI.invoke('video:getAudioDataById', audio.id)
             if (res?.success && res.data?.dataUrl) {
               const ctx = new AudioContext()
               const response = await fetch(res.data.dataUrl)
@@ -160,7 +167,7 @@ export function AudioAssetList() {
     loadDurations()
   }, [audios]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const filtered = filter ? audios?.filter((a) => a.title.toLowerCase().includes('voiceover') || a.title.toLowerCase().includes('narration')) : audios
+  const filtered = filter ? audios?.filter(audio => { const metadata = JSON.parse(audio.metadata || '{}'); return metadata.source === 'voiceover' || metadata.source === 'legacy-voiceover' }) : audios
 
   return (
     <div className="lg:col-span-2">
@@ -237,6 +244,7 @@ export function AudioAssetList() {
                   <h4 className="font-label-md text-label-md text-on-surface truncate">{audio.title}</h4>
                   <div className="flex items-center gap-sm text-body-sm text-on-surface-variant">
                     <span>{audio.file_format?.toUpperCase() || 'Audio'}</span>
+                    {JSON.parse(audio.metadata || '{}').engine && <span>{JSON.parse(audio.metadata).engine}</span>}
                     <span>•</span>
                     <span>{formatDuration(audio.duration_seconds || audioDurations[audio.id])}</span>
                     {audio.file_size && (

@@ -3,42 +3,56 @@ import { VideoCoverGrid } from './components/VideoCoverGrid'
 import { AudioAssetList } from './components/AudioAssetList'
 import { PresentationList } from './components/PresentationList'
 import { VoiceoverDialog } from './components/VoiceoverDialog'
+import { Button } from '@/components/ui/button'
+import { WorkflowStudio } from './workflow/WorkflowStudio'
+import { WorkflowSettings } from './workflow/WorkflowSettings'
+import './workflow/workflow.css'
 
 export default function Video() {
   const [showVoiceover, setShowVoiceover] = useState(false)
+  const [activeJobs, setActiveJobs] = useState(0)
+  const [showSettings, setShowSettings] = useState(false)
+  const [view, setView] = useState<'workflow' | 'assets'>('workflow')
 
   return (
-    <div className="p-lg space-y-lg animate-fade-in max-w-[1280px] mx-auto w-full">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="font-headline-xl text-headline-xl">Video Studio</h2>
-          <p className="text-body-lg text-on-surface-variant mt-2">
-            Manage your video covers, audio assets, and HTML presentations.
-          </p>
+    <div className="workflow-page voiceover-dialog p-lg space-y-md max-w-[1280px] mx-auto w-full">
+      {view === 'workflow' ? (
+        <WorkflowStudio
+          onVoiceover={() => setShowVoiceover(true)}
+          onSettings={() => setShowSettings(true)}
+          onAssets={() => setView('assets')}
+          activeJobs={activeJobs}
+        />
+      ) : (
+        <div className="workflow-section">
+          <div className="workflow-toolbar">
+            <div>
+              <h1 className="workflow-page-title">视频素材库</h1>
+              <p className="workflow-muted mt-2">封面、音频与演示文稿</p>
+            </div>
+            <div className="workflow-actions">
+              <Button size="sm" variant="ghost" onClick={() => setView('workflow')}>
+                所有视频项目
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => setShowVoiceover(true)}>
+                AI 配音{activeJobs > 0 ? ` · ${activeJobs}` : ''}
+              </Button>
+            </div>
+          </div>
+          <VideoCoverGrid />
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg items-start">
+            <AudioAssetList />
+            <PresentationList />
+          </div>
         </div>
-        <button
-          onClick={() => setShowVoiceover(true)}
-          className="flex items-center gap-xs px-md py-2 bg-primary text-on-primary rounded-full font-label-md hover:brightness-110 active:scale-95 transition-all"
-        >
-          <span className="material-symbols-outlined text-[18px]">mic</span>
-          AI Voiceover
-        </button>
-      </div>
-
-      {/* Video Covers Grid */}
-      <VideoCoverGrid />
-
-      {/* Audio + Presentations */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg items-start">
-        <AudioAssetList />
-        <PresentationList />
-      </div>
+      )}
+      <WorkflowSettings open={showSettings} onClose={() => setShowSettings(false)} />
 
       {/* Voiceover Dialog */}
       <VoiceoverDialog
         open={showVoiceover}
         onClose={() => setShowVoiceover(false)}
+        onActiveJobsChange={setActiveJobs}
       />
     </div>
   )

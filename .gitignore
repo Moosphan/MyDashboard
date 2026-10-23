@@ -1,5 +1,6 @@
 node_modules/
 out/
+node_modules
 dist/
 .dev-logs/
 docs/
@@ -16,6 +17,9 @@ docs/*
 !docs/superpowers/
 !docs/superpowers/plans/
 !docs/superpowers/plans/2026-08-31-notification-center.md
+!docs/video-studio-workflow-implementation.zh-CN.md
+*.tsbuildinfo
+docs/design-system/v2/node_modules
 data/db/*.db
 data/cache/
 *.db

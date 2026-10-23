@@ -1,0 +1,674 @@
+import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import {
+  VoiceInput,
+  VoiceTextArea,
+  VoiceSlider,
+  VoiceRadioGroup,
+} from '../components/voiceover/VoiceControls'
+import { VoiceSelect, VoiceNumber } from '../components/voiceover/VoiceEngineFields'
+import { Toggle } from '@/components/ui/toggle'
+import type { VoiceProfile } from '@shared/voiceover'
+import {
+  stageValue,
+  type VideoProject,
+  type WorkflowVoice,
+  type PublishPayload,
+  type VideoPlatform,
+  type RenderPayload,
+  type StoryboardPayload,
+  type AudioPayload,
+  type StagePayloads,
+} from '@shared/video-workflow'
+import { ipcInvoke } from '@/lib/ipc'
+import { mediaUrl, workflowCall } from './useWorkflow'
+import { ScenePreview } from './StoryboardEditor'
+import { AudioTrackPlayer } from './AudioTrackPlayer'
+import { RenderActions } from './RenderActions'
+
+export function AudioPanel({
+  project,
+  voice,
+  onVoice,
+  onConfigure,
+  disabled,
+}: {
+  project: VideoProject
+  voice: WorkflowVoice
+  onVoice: (voice: WorkflowVoice) => void
+  onConfigure: () => void
+  disabled: boolean
+}) {
+  const [profiles, setProfiles] = useState<VoiceProfile[]>([]),
+    [error, setError] = useState('')
+  useEffect(() => {
+    void ipcInvoke<VoiceProfile[]>('tts:listProfiles')
+      .then(setProfiles)
+      .catch((failure) => setError(failure.message))
+  }, [])
+  const audio = stageValue(project, 'audio')
+  const latestJob = project.jobs.find((job) => job.stage === 'audio')
+  const pendingJob =
+    latestJob &&
+    latestJob.state !== 'succeeded' &&
+    latestJob.state !== 'stale' &&
+    latestJob.expectedRevision === project.revision
+      ? latestJob
+      : undefined
+  const progress = pendingJob?.audioProgress
+  const tracks = pendingJob ? (progress?.tracks ?? []) : (audio?.tracks ?? [])
+  const total = progress?.total ?? stageValue(project, 'narration')?.scenes.length ?? 0
+  return (
+    <div className="workflow-section">
+      <div className="workflow-fields">
+        <VoiceSelect
+          label="配音引擎"
+          value={voice.engine}
+          onChange={(engine) =>
+            onVoice({
+              engine: engine as WorkflowVoice['engine'],
+              options: {},
+              ...(engine === 'edge' ? { voiceId: 'zh-CN-XiaoxiaoNeural' } : {}),
+            })
+          }
+          options={[
+            { value: 'edge', label: 'Edge TTS · 在线预设' },
+            { value: 'voxcpm2', label: 'VoxCPM2 · 本地克隆' },
+            { value: 'qwen3-tts', label: 'Qwen3-TTS · 本地克隆' },
+          ]}
+        />
+        {voice.engine === 'edge' ? (
+          <VoiceInput
+            label="Edge 音色 ID"
+            value={voice.voiceId ?? ''}
+            onChange={(event) => onVoice({ ...voice, voiceId: event.target.value })}
+            placeholder="zh-CN-XiaoxiaoNeural"
+            disabled={disabled}
+          />
+        ) : (
+          <VoiceSelect
+            label="已保存参考音色（冻结版本）"
+            value={voice.profileId ? `${voice.profileId}:${voice.profileRevision}` : ''}
+            onChange={(value) => {
+              const [profileId, revision] = value.split(':')
+              onVoice({ ...voice, profileId, profileRevision: Number(revision) })
+            }}
+            options={profiles
+              .filter((profile) => !profile.deletedAt)
+              .flatMap((profile) =>
+                profile.revisions.map((revision) => ({
+                  value: `${profile.id}:${revision.revision}`,
+                  label: `${profile.name} · v${revision.revision}${revision.revision === profile.currentRevision ? '（当前）' : ''}`,
+                })),
+              )}
+          />
+        )}
+      </div>
+      <div className="workflow-toolbar">
+        <p className="text-body-sm">
+          {pendingJob
+            ? `已生成 ${tracks.length} / ${total} 段 · ${pendingJob.state === 'running' ? '生成中，可先试听' : '任务未完成，已成功片段可试听'}`
+            : audio
+              ? audio.tracks.length + ' 个配音段落'
+              : '等待生成配音'}
+        </p>
+        <Button size="sm" variant="ghost" onClick={onConfigure}>
+          打开配音工具
+        </Button>
+      </div>
+      {error && (
+        <p className="workflow-error" role="alert">
+          {error}
+        </p>
+      )}
+      {pendingJob && (
+        <div className="workflow-notice" role="status" data-audio-progress>
+          {pendingJob.state === 'running' ? (
+            <div className="workflow-actions">
+              <span
+                className="material-symbols-outlined animate-spin motion-reduce:animate-none"
+                aria-hidden="true"
+              >
+                progress_activity
+              </span>
+              <span>{pendingJob.phase}</span>
+            </div>
+          ) : (
+            <p>
+              本次任务
+              {pendingJob.state === 'failed'
+                ? '失败'
+                : pendingJob.state === 'cancelled'
+                  ? '已取消'
+                  : '已中断'}
+              。成功片段已保留，可试听；完整音频生成成功后才能审核。
+            </p>
+          )}
+          {progress && (
+            <progress
+              className="workflow-audio-progress"
+              max={total}
+              value={tracks.length}
+              aria-label="已完成配音段落"
+            />
+          )}
+          {audio && (
+            <p className="workflow-muted">
+              当前显示本次任务片段。此前完整配音仍保留在下方，版本审核仅适用于完整产物。
+            </p>
+          )}
+        </div>
+      )}
+      {tracks.length > 0 ? (
+        <>
+          <section aria-label="逐镜试听">
+            <div className="workflow-section">
+              {tracks.map((track, index) => (
+                <AudioTrackPlayer
+                  key={track.file.id}
+                  projectId={project.id}
+                  track={track}
+                  index={index}
+                  title={
+                    stageValue(project, 'storyboard')?.scenes.find(
+                      (scene) => scene.id === track.sceneId,
+                    )?.title ?? '配音片段'
+                  }
+                />
+              ))}
+            </div>
+          </section>
+        </>
+      ) : (
+        <div className="workflow-notice">
+          {pendingJob?.state === 'running'
+            ? '首段配音完成后会立即显示，无需等待全部生成。'
+            : '尚未生成音频。也可按分镜顺序导入外部配音文件。'}
+        </div>
+      )}
+      {audio && (
+        <details className="workflow-divider">
+          <summary className="workflow-muted cursor-pointer">
+            {pendingJob ? '此前完整配音与总时长' : '完整配音与总时长'}
+          </summary>
+          <div className="workflow-section mt-4">
+            {' '}
+            <div className="workflow-toolbar">
+              <h4 className="workflow-section-title">完整配音</h4>
+              <span className="workflow-muted">
+                {audio.duration.toFixed(1)} 秒 · {audio.tracks.length} 段
+              </span>
+            </div>
+            <audio
+              controls
+              preload="metadata"
+              src={mediaUrl(project.id, audio.file)}
+              className="w-full"
+              aria-label="完整配音试听"
+            />
+          </div>
+        </details>
+      )}
+      <details className="workflow-notice">
+        <summary className="cursor-pointer">配音参数</summary>
+        <div className="workflow-section mt-4">
+          {voice.engine === 'edge' ? (
+            <>
+              {(['rate', 'pitchHz', 'volume'] as const).map((key, index) => (
+                <VoiceSlider
+                  key={key}
+                  label={['语速', '音调', '音量'][index]}
+                  value={voice.options[key] ?? 0}
+                  min={-50}
+                  max={key === 'rate' ? 100 : 50}
+                  unit={key === 'pitchHz' ? ' Hz' : '%'}
+                  onChange={(value) =>
+                    onVoice({ ...voice, options: { ...voice.options, [key]: value } })
+                  }
+                />
+              ))}
+            </>
+          ) : (
+            <>
+              {voice.engine === 'voxcpm2' ? (
+                <>
+                  <VoiceRadioGroup
+                    label="生成质量"
+                    value={String(voice.options.steps ?? 20)}
+                    onChange={(value) =>
+                      onVoice({
+                        ...voice,
+                        options: { ...voice.options, steps: Number(value) as 10 | 20 },
+                      })
+                    }
+                    options={[
+                      { value: '10', label: '快速 · 10 步' },
+                      { value: '20', label: '精细 · 20 步' },
+                    ]}
+                    compact
+                  />
+                  <VoiceNumber
+                    label="引导强度 CFG"
+                    min={1}
+                    max={3}
+                    step={0.1}
+                    value={voice.options.cfg ?? 2}
+                    onChange={(cfg) => onVoice({ ...voice, options: { ...voice.options, cfg } })}
+                  />
+                </>
+              ) : (
+                <>
+                  <VoiceNumber
+                    label="采样温度"
+                    min={0.1}
+                    max={1}
+                    step={0.1}
+                    value={voice.options.temperature ?? 0.7}
+                    onChange={(temperature) =>
+                      onVoice({ ...voice, options: { ...voice.options, temperature } })
+                    }
+                  />
+                  <VoiceSelect
+                    label="口播语言"
+                    value={voice.options.language ?? 'zh'}
+                    onChange={(language) =>
+                      onVoice({
+                        ...voice,
+                        options: { ...voice.options, language: language as 'zh' | 'en' },
+                      })
+                    }
+                    options={[
+                      { value: 'zh', label: '中文' },
+                      { value: 'en', label: '英文' },
+                    ]}
+                  />
+                </>
+              )}
+              <VoiceSlider
+                label="响度增益"
+                min={-12}
+                max={6}
+                unit=" dB"
+                value={voice.options.gainDb ?? 0}
+                onChange={(gainDb) => onVoice({ ...voice, options: { ...voice.options, gainDb } })}
+              />
+              <div className="workflow-toolbar">
+                <span>参考音频降噪</span>
+                <Toggle
+                  pressed={voice.options.denoise ?? false}
+                  onPressedChange={(denoise) =>
+                    onVoice({ ...voice, options: { ...voice.options, denoise } })
+                  }
+                  aria-label="参考音频降噪"
+                />
+              </div>
+            </>
+          )}
+          <p className="workflow-muted">
+            参数用于下一次生成，当前音轨保持原样。重新生成后需要再次审核。
+          </p>
+        </div>
+      </details>
+
+      <p className="workflow-muted">
+        按已审核口播逐镜配音，长文本自动拆段并复用现有任务队列。字幕按段落真实时长分配，需人工试听校对。
+      </p>
+    </div>
+  )
+}
+export function RenderPanel({
+  project,
+  final,
+  disabled,
+  run,
+}: {
+  project: VideoProject
+  final: boolean
+  disabled: boolean
+  run: (action: () => Promise<unknown>, message?: string) => Promise<boolean>
+}) {
+  const [versionId, setVersionId] = useState('current')
+  const [time, setTime] = useState(0)
+  const versions = project.history.filter(
+    (revision) => revision.stage === (final ? 'render' : 'roughcut'),
+  )
+  const selectedVersion =
+    versionId === 'current'
+      ? project.stages[final ? 'render' : 'roughcut']
+      : versions.find((revision) => revision.id === versionId)
+  const render = selectedVersion?.payload as RenderPayload | undefined
+  const storyboard = (project.history.find((revision) => revision.id === render?.sourceStoryboard)
+    ?.payload ?? stageValue(project, 'storyboard')) as StoryboardPayload | undefined
+  const audio = (project.history.find((revision) => revision.id === render?.sourceAudio)?.payload ??
+    stageValue(project, 'audio')) as AudioPayload | undefined
+  const narration = (project.history.find((revision) => revision.id === render?.sourceNarration)
+    ?.payload ?? stageValue(project, 'narration')) as StagePayloads['narration'] | undefined
+  const [activeScene, setActiveScene] = useState(0)
+  const player = useRef<HTMLVideoElement>(null)
+  const scene = storyboard?.scenes[activeScene]
+  const latestPlan = project.jobs.find((job) => job.kind === 'motion-plan')
+  const pendingPlan =
+    !final &&
+    latestPlan?.state === 'succeeded' &&
+    latestPlan.motionPlan &&
+    latestPlan.expectedRevision === project.revision
+  return (
+    <div className="workflow-section">
+      {render ? (
+        <>
+          {pendingPlan && (
+            <div
+              className="workflow-notice workflow-section"
+              role="status"
+              aria-label="修改计划尚未应用"
+            >
+              <strong className="text-body-sm">修改计划已生成，视频尚未更新</strong>
+              <p className="workflow-muted">
+                当前预览仍为粗剪 v{selectedVersion?.version}。请确认计划后合成粗剪 v
+                {(project.stages.roughcut?.version ?? 0) + 1}，完成后再审核新版。
+              </p>
+              <div className="workflow-actions">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => {
+                    const details = document.getElementById(
+                      'workflow-motion-plan',
+                    ) as HTMLDetailsElement | null
+                    if (details) {
+                      details.open = true
+                      details.scrollIntoView({ block: 'start' })
+                      details.querySelector('summary')?.focus({ preventScroll: true })
+                    }
+                  }}
+                >
+                  查看计划并确认合成
+                </Button>
+              </div>
+            </div>
+          )}
+          {versions.length > 1 && (
+            <VoiceSelect
+              label="预览版本（审核针对当前版本）"
+              value={versionId}
+              onChange={(value) => {
+                setVersionId(value)
+                setTime(0)
+                setActiveScene(0)
+              }}
+              options={[
+                {
+                  value: 'current',
+                  label: `当前 v${project.stages[final ? 'render' : 'roughcut']!.version}`,
+                },
+                ...versions.slice(1).map((revision) => ({
+                  value: revision.id,
+                  label: `历史 v${revision.version} · ${new Date(revision.createdAt).toLocaleString('zh-CN')}`,
+                })),
+              ]}
+            />
+          )}
+          <video
+            key={render.file.id}
+            ref={player}
+            className="workflow-media"
+            controls
+            preload="metadata"
+            src={mediaUrl(project.id, render.file)}
+            poster={mediaUrl(project.id, render.cover)}
+            aria-label={final ? '最终成片预览' : '粗剪预览'}
+            onTimeUpdate={(event) => {
+              const current = event.currentTarget.currentTime
+              setTime(current)
+              let start = 0
+              for (const [index, item] of (storyboard?.scenes ?? []).entries()) {
+                const duration =
+                  audio?.tracks
+                    .filter((track) => track.sceneId === item.id)
+                    .reduce((total, track) => total + track.duration, 0) ?? 0
+                if (current >= start && current < start + duration) {
+                  setActiveScene(index)
+                  break
+                }
+                start += duration
+              }
+            }}
+          />
+          <div className="workflow-toolbar">
+            <span>{render.duration.toFixed(1)} 秒 · 1920 × 1080 · 30 fps</span>
+            <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
+          </div>
+          {storyboard && (
+            <>
+              <div className="workflow-scenes" role="group" aria-label="视频分镜定位">
+                {storyboard.scenes.map((item, index) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="workflow-scene"
+                    aria-pressed={activeScene === index}
+                    onClick={() => {
+                      setActiveScene(index)
+                      if (player.current && audio) {
+                        let time = 0
+                        for (const track of audio.tracks) {
+                          if (track.sceneId === item.id) break
+                          time += track.duration
+                        }
+                        player.current.currentTime = time
+                        setTime(time)
+                      }
+                    }}
+                  >
+                    <ScenePreview
+                      projectId={project.id}
+                      value={storyboard}
+                      scene={item}
+                      thumbnail
+                    />
+                    <span>
+                      {String(index + 1).padStart(2, '0')} · {item.title}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              {scene && (
+                <div className="workflow-scene-notes">
+                  <div>
+                    <p className="workflow-muted">屏幕文字</p>
+                    <p className="text-body-sm font-semibold mt-1">{scene.title}</p>
+                  </div>
+                  <div>
+                    <p className="workflow-muted">对应口播</p>
+                    <p className="text-body-sm leading-relaxed mt-1">
+                      {narration?.scenes.find((item) => item.id === scene.id)?.text}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          <RenderActions
+            project={project}
+            final={final}
+            sceneId={scene?.id}
+            time={time}
+            disabled={disabled || versionId !== 'current'}
+            run={run}
+          />
+          {final ? (
+            <div className="workflow-facts">
+              <span>MP4 · H.264 / AAC</span>
+              <span>完整观看后审核</span>
+              <span>两平台共用</span>
+            </div>
+          ) : (
+            <p className="workflow-muted">
+              时间轴检查：字幕按实际音频时长分配；请试听校对字幕与画面。
+            </p>
+          )}
+        </>
+      ) : (
+        <div className="workflow-preview grid place-items-center">
+          <span className="workflow-muted">{final ? '等待最终渲染' : '等待合成粗剪'}</span>
+        </div>
+      )}
+      <p className="workflow-muted">
+        {final
+          ? '复用已审核粗剪的冻结 HyperFrames 工程，以交付质量渲染。'
+          : render?.motion
+            ? '保留 HTML 元素，用可定位时间的动效合成配音与字幕；修改计划确认后生成新版本。'
+            : '此版本由静态截图合成。可提出元素动效修改，生成新版粗剪后重新审核。'}
+      </p>
+    </div>
+  )
+}
+export function PublishingPanel({
+  disabled,
+  project,
+  value,
+  onChange,
+  approved,
+  run,
+}: {
+  disabled: boolean
+  project: VideoProject
+  value: PublishPayload
+  onChange: (payload: PublishPayload) => void
+  approved: boolean
+  run: (action: () => Promise<unknown>, message?: string) => void
+}) {
+  const [urls, setUrls] = useState<Record<string, string>>({})
+  const [platform, setPlatform] = useState<VideoPlatform>('bilibili')
+  return (
+    <div className="workflow-section">
+      <VoiceRadioGroup
+        label="发布平台"
+        value={platform}
+        onChange={(value) => setPlatform(value as VideoPlatform)}
+        options={[
+          { value: 'bilibili', label: 'Bilibili' },
+          { value: 'douyin', label: '抖音' },
+        ]}
+        compact
+      />
+      {stageValue(project, 'render') && (
+        <div className="workflow-publish-asset">
+          <img
+            src={mediaUrl(project.id, stageValue(project, 'render')!.cover)}
+            alt="共用成片封面"
+          />
+          <div>
+            <strong className="text-body-sm">共用成片 · 横版 1920×1080</strong>
+            <p className="workflow-muted mt-2">
+              {stageValue(project, 'render')!.duration.toFixed(1)} 秒 · Bilibili / 抖音
+            </p>
+          </div>
+        </div>
+      )}
+      <p className="workflow-muted">
+        两平台发布同一份横版成片。先审核发布信息，再导出对应平台发布包；上传成功后回填链接。
+      </p>
+      <div className="workflow-section">
+        {[platform].map((platform) => {
+          const metadata = value.platforms[platform],
+            records = project.publications.filter((item) => item.platform === platform)
+          const update = (changes: Partial<typeof metadata>) =>
+            onChange({ platforms: { ...value.platforms, [platform]: { ...metadata, ...changes } } })
+          return (
+            <div key={platform}>
+              <div className="workflow-section">
+                <VoiceInput
+                  disabled={disabled}
+                  label={`发布标题（最多 ${platform === 'bilibili' ? 80 : 30} 字）`}
+                  value={metadata.title}
+                  onChange={(event) => update({ title: event.target.value })}
+                  maxLength={platform === 'bilibili' ? 80 : 30}
+                />
+                <VoiceTextArea
+                  disabled={disabled}
+                  label="发布简介"
+                  maxLength={2000}
+                  value={metadata.description}
+                  onChange={(event) => update({ description: event.target.value })}
+                />
+                <VoiceInput
+                  disabled={disabled}
+                  label="标签（用逗号分隔）"
+                  value={metadata.tags.join(',')}
+                  onChange={(event) =>
+                    update({
+                      tags: event.target.value.split(/[,，]/),
+                    })
+                  }
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={!approved}
+                  onClick={() =>
+                    run(
+                      () => workflowCall('export', project.id, platform),
+                      '发布包已导出，请手动上传并回填链接',
+                    )
+                  }
+                >
+                  导出{platform === 'bilibili' ? ' Bilibili ' : '抖音'}发布包
+                </Button>
+                {records.map((record) => (
+                  <div key={record.id} className="workflow-divider space-y-3">
+                    <div className="workflow-toolbar">
+                      <span className="workflow-muted">
+                        {new Date(record.createdAt).toLocaleString()} ·{' '}
+                        {record.url ? '已回填（人工记录）' : '待上传 / 回填'}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          run(() => workflowCall('revealExport', project.id, record.id))
+                        }
+                      >
+                        打开发布包
+                      </Button>
+                    </div>
+                    <VoiceInput
+                      label="平台发布链接"
+                      type="url"
+                      value={urls[record.id] ?? record.url ?? ''}
+                      onChange={(event) => setUrls({ ...urls, [record.id]: event.target.value })}
+                      placeholder={
+                        platform === 'bilibili'
+                          ? 'https://www.bilibili.com/video/…'
+                          : 'https://www.douyin.com/video/…'
+                      }
+                    />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={!(urls[record.id] ?? record.url)}
+                      onClick={() =>
+                        run(
+                          () =>
+                            workflowCall(
+                              'receipt',
+                              project.id,
+                              record.id,
+                              urls[record.id] ?? record.url,
+                            ),
+                          '已保存人工发布记录',
+                        )
+                      }
+                    >
+                      保存发布链接
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}

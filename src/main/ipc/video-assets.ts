@@ -4,6 +4,8 @@ import { VideoAssetRepository } from '../database/repositories/video-asset-repos
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'fs'
 import { join, basename, extname } from 'path'
 import { app } from 'electron'
+import { getVoiceoverService } from '../services/tts-service'
+import { managedPath } from '../services/voiceover/media'
 
 const VIDEO_CHANNELS = {
   GET_BY_TYPE: 'video:getByType',
@@ -64,6 +66,14 @@ export function registerVideoAssetIpcHandlers(): void {
 
   ipcMain.handle(VIDEO_CHANNELS.DELETE, (_event, id: number) => {
     try {
+      const asset = getRepo().findById(id)
+      if (asset && ['voiceover', 'legacy-voiceover'].includes(JSON.parse(asset.metadata).source)) {
+        getVoiceoverService().assets.trash(id)
+        for (const window of BrowserWindow.getAllWindows()) {
+          if (!window.isDestroyed() && window.webContents === _event.sender) window.webContents.send('video:assetsChanged', { type: 'audio' })
+        }
+        return { success: true, data: true }
+      }
       return { success: true, data: getRepo().deleteById(id) }
     } catch (err) {
       return { success: false, error: (err as Error).message }
@@ -116,6 +126,7 @@ export function registerVideoAssetIpcHandlers(): void {
 
   ipcMain.handle(VIDEO_CHANNELS.GET_AUDIO_DATA, (_event, filePath: string) => {
     try {
+      filePath = managedPath(app.getPath('userData'), filePath)
       if (!existsSync(filePath)) {
         return { success: false, error: 'File not found' }
       }

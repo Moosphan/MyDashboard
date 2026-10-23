@@ -3,6 +3,8 @@ import { join } from 'node:path'
 import { getDatabase, closeDatabase } from '../database/connection'
 import { getUserDataPath } from '../services/file-service'
 import { createBackup, restoreBackup, validateBackup } from '../services/backup-service'
+import { stopVoiceover } from '../services/tts-service'
+import { stopVideoWorkflow } from './video-workflow'
 
 function getFocusedWindow(): BrowserWindow | undefined {
   return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
@@ -42,6 +44,8 @@ export function registerBackupIpcHandlers(): void {
     try {
       const backupPath = result.filePaths[0]
       validateBackup(backupPath)
+      await stopVideoWorkflow()
+      await stopVoiceover()
       checkpointDatabase()
       const safetyBackup = createBackup(getUserDataPath(), join(getUserDataPath(), 'backups'))
       closeDatabase()
@@ -58,9 +62,11 @@ export function registerBackupIpcHandlers(): void {
     }
   })
 
-  ipcMain.handle('backup:restart', () => {
+  ipcMain.handle('backup:restart', async () => {
+    await stopVideoWorkflow()
+    await stopVoiceover()
     app.relaunch()
-    app.exit(0)
+    app.quit()
     return { success: true }
   })
 }

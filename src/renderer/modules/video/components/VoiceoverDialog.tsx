@@ -1,420 +1,195 @@
-import { useState, useEffect, useRef } from 'react'
-import { useToast } from '@/components/ui/toast'
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel } from '@/components/ui/select'
-import { cn } from '@/lib/utils'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import * as Dialog from '@radix-ui/react-dialog'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { VOICE_TERMINAL, type VoiceJob, type VoiceRequest } from '@shared/voiceover'
+import { useVoiceover, voiceCall } from '../hooks/useVoiceover'
+import { VoiceSelect, VoiceNumber } from './voiceover/VoiceEngineFields'
+import { VoiceRuntimePanel } from './voiceover/VoiceRuntimePanel'
+import { VoiceProfilePanel } from './voiceover/VoiceProfilePanel'
+import { VoiceJobList } from './voiceover/VoiceJobList'
+import { VoiceButton, VoiceInput, VoiceRadioGroup, VoiceSlider, VoiceTextArea } from './voiceover/VoiceControls'
+import { VoiceAudioPlayer } from './voiceover/VoiceAudioPlayer'
+import { Toggle } from '@/components/ui/toggle'
+import './voiceover/voiceover.css'
 
-interface Voice {
-  name: string
-  shortName: string
-  gender: string
-  locale: string
-  friendlyName: string
-}
+interface EdgeVoice { shortName: string; friendlyName: string; locale: string; gender: string }
 
-function formatVoiceName(voice: Voice): string {
-  // Extract name from FriendlyName: "Microsoft Xiaoxiao Online (Natural) - Chinese (Mainland)"
-  let name = ''
-  const match = voice.friendlyName.match(/Microsoft\s+(\w+)\s+Online/)
-  if (match) {
-    name = match[1]
-  } else {
-    // Fallback: extract from ShortName: "zh-CN-XiaoxiaoNeural"
-    const shortMatch = voice.shortName.match(/^[a-z]{2}-[A-Z]{2}-(.+?)Neural$/)
-    name = shortMatch ? shortMatch[1] : voice.shortName
-  }
-
-  // Extract region from ShortName: "zh-CN" -> "CN", "en-US" -> "US"
-  const regionMatch = voice.shortName.match(/^[a-z]{2}-([A-Z]{2})/)
-  const region = regionMatch ? regionMatch[1] : ''
-
-  // Extract gender indicator
-  const gender = voice.gender === 'Female' ? '♀' : '♂'
-
-  return region ? `${name} ${gender} (${region})` : `${name} ${gender}`
-}
-
-interface VoiceoverDialogProps {
-  open: boolean
-  onClose: () => void
-}
-
-const LANGUAGE_GROUPS = [
-  { locale: 'zh', label: 'Chinese' },
-  { locale: 'en', label: 'English' },
-  { locale: 'ja', label: 'Japanese' },
-  { locale: 'ko', label: 'Korean' },
-  { locale: 'fr', label: 'French' },
-  { locale: 'de', label: 'German' },
-  { locale: 'es', label: 'Spanish' },
-  { locale: 'pt', label: 'Portuguese' },
-]
-
-export function VoiceoverDialog({ open, onClose }: VoiceoverDialogProps) {
-  const { toast } = useToast()
-
-  // State
-  const [voices, setVoices] = useState<Voice[]>([])
-  const [filteredVoices, setFilteredVoices] = useState<Voice[]>([])
-  const [selectedVoice, setSelectedVoice] = useState('')
+export function VoiceoverDialog({ open, onClose, onActiveJobsChange }: { open: boolean; onClose: () => void; onActiveJobsChange?: (count: number) => void }) {
+  const state = useVoiceover(open)
+  const [tab, setTab] = useState('compose')
+  const [mode, setMode] = useState('preset')
+  const [engine, setEngine] = useState<'voxcpm2' | 'qwen3-tts'>('voxcpm2')
+  const [profileId, setProfileId] = useState('')
   const [text, setText] = useState('')
+  const [voices, setVoices] = useState<EdgeVoice[]>([])
+  const [voiceError, setVoiceError] = useState<string | null>(null)
+  const [voiceLoading, setVoiceLoading] = useState(false)
+  const [locale, setLocale] = useState('zh')
+  const [voiceId, setVoiceId] = useState('')
   const [rate, setRate] = useState(0)
-  const [pitch, setPitch] = useState(0)
+  const [pitchHz, setPitchHz] = useState(0)
   const [volume, setVolume] = useState(0)
-  const [selectedLang, setSelectedLang] = useState('zh')
-  const [isGenerating, setIsGenerating] = useState(false)
-  const [isPlaying, setIsPlaying] = useState(false)
-  const [playingFile, setPlayingFile] = useState<string | null>(null)
-  const [generatedFile, setGeneratedFile] = useState<string | null>(null)
-  const [generatedFiles, setGeneratedFiles] = useState<Array<{ name: string; path: string }>>([])
+  const [steps, setSteps] = useState<10 | 20>(20)
+  const [cfg, setCfg] = useState(2)
+  const [temperature, setTemperature] = useState(0.7)
+  const [language, setLanguage] = useState<'zh' | 'en'>('zh')
+  const [seed, setSeed] = useState('')
+  const [gainDb, setGainDb] = useState(0)
+  const [denoise, setDenoise] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  const [audioSource, setAudioSource] = useState<{ channel: string; id: unknown } | null>(null)
+  const player = useRef<HTMLAudioElement>(null)
+  const playSequence = useRef(0)
+  const draftAudioActive = useRef(false)
+  const active = state.jobs.filter(job => !VOICE_TERMINAL.includes(job.state)).length
+  const profile = state.profiles.find(item => item.id === profileId)
+  const selectedVoices = voices.filter(voice => voice.locale.startsWith(locale))
 
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-
-  // Fetch voices on mount
+  useEffect(() => { onActiveJobsChange?.(active) }, [active, onActiveJobsChange])
+  const fetchVoices = useCallback(async () => {
+    setVoiceLoading(true); setVoiceError(null)
+    try { setVoices(await voiceCall<EdgeVoice[]>('tts:getVoices')) }
+    catch (error) { setVoiceError((error as Error).message) }
+    finally { setVoiceLoading(false) }
+  }, [])
+  useEffect(() => { if (open && mode === 'preset' && !voices.length) void fetchVoices() }, [open, mode, voices.length, fetchVoices])
   useEffect(() => {
-    if (open) {
-      fetchVoices()
-      loadGeneratedFiles()
+    if (voices.length && !voices.some(voice => voice.locale.startsWith(locale) && voice.shortName === voiceId)) {
+      setVoiceId(voices.find(voice => voice.locale.startsWith(locale))?.shortName ?? '')
     }
+  }, [voices, locale, voiceId])
+  useEffect(() => {
+    if (!open) { playSequence.current++; player.current?.pause(); setAudioUrl(null); setAudioSource(null) }
   }, [open])
-
-  // Filter voices by language
   useEffect(() => {
-    const filtered = voices.filter(v => v.locale.startsWith(selectedLang))
-    setFilteredVoices(filtered)
-    if (filtered.length > 0 && !filtered.find(v => v.shortName === selectedVoice)) {
-      setSelectedVoice(filtered[0].shortName)
-    }
-  }, [selectedLang, voices])
-
-  const fetchVoices = async () => {
+    const pause = (event: Event) => { if ((event as CustomEvent).detail !== 'voiceover') player.current?.pause() }
+    window.addEventListener('video:audioPlaying', pause)
+    return () => window.removeEventListener('video:audioPlaying', pause)
+  }, [])
+  const play = async (channel: string, ...args: unknown[]) => {
+    const sequence = ++playSequence.current
+    draftAudioActive.current = channel === 'tts:getDraftAudio'
+    player.current?.pause()
     try {
-      const res = await window.electronAPI.invoke('tts:getVoices')
-      if (res?.success) {
-        setVoices(res.data || [])
+      const audio = await voiceCall<{ dataUrl: string }>(channel, ...args)
+      if (sequence === playSequence.current) {
+        setAudioSource({ channel, id: args[0] })
+        if (audio.dataUrl === audioUrl && player.current) { player.current.currentTime = 0; await player.current.play() }
+        else setAudioUrl(audio.dataUrl)
       }
-    } catch (err) {
-      console.error('Failed to fetch voices:', err)
-    }
+    } catch (error) { state.setError((error as Error).message) }
   }
-
-  const loadGeneratedFiles = async () => {
+  const stopDraftAudio = useCallback(() => {
+    if (!draftAudioActive.current) return
+    draftAudioActive.current = false
+    playSequence.current++
+    player.current?.pause()
+    setAudioUrl(null); setAudioSource(null)
+  }, [])
+  const request = (target: VoiceRequest['engine']): VoiceRequest => ({
+    clientRequestId: crypto.randomUUID(), engine: target, text,
+    ...(target === 'edge' ? { voiceId, options: { rate, pitchHz, volume } } : {
+      profileId, profileRevision: profile?.currentRevision,
+      options: { ...(seed.trim() ? { seed: Number(seed) } : {}), gainDb, denoise, ...(target === 'voxcpm2' ? { steps, cfg } : { temperature, language }) },
+    }),
+  })
+  const submit = async (compare = false) => {
+    setSubmitting(true); state.setError(null)
     try {
-      const res = await window.electronAPI.invoke('tts:listFiles')
-      if (res?.success) {
-        setGeneratedFiles(res.data || [])
-      }
-    } catch { /* ignore */ }
+      if (compare) await voiceCall('tts:compare', [request('voxcpm2'), request('qwen3-tts')])
+      else await voiceCall('tts:createJob', request(mode === 'preset' ? 'edge' : engine))
+      await state.refresh()
+    } catch (error) { state.setError((error as Error).message) }
+    finally { setSubmitting(false) }
   }
-
-  const handleGenerate = async () => {
-    if (!text.trim()) {
-      toast({ title: 'Please enter text', variant: 'error' })
-      return
-    }
-
-    setIsGenerating(true)
-    try {
-      const rateStr = rate >= 0 ? `+${rate}%` : `${rate}%`
-      const pitchStr = pitch >= 0 ? `+${pitch}Hz` : `${pitch}Hz`
-      const volumeStr = volume >= 0 ? `+${volume}%` : `${volume}%`
-
-      const res = await window.electronAPI.invoke('tts:synthesize', text, selectedVoice, {
-        rate: rateStr,
-        pitch: pitchStr,
-        volume: volumeStr,
-      })
-
-      if (res?.success && res.data) {
-        setGeneratedFile(res.data.filePath)
-        toast({ title: 'Voiceover generated', variant: 'success' })
-        loadGeneratedFiles()
-      } else {
-        toast({ title: res?.error || 'Generation failed', variant: 'error' })
-      }
-    } catch (err) {
-      toast({ title: 'Generation failed', variant: 'error' })
-    } finally {
-      setIsGenerating(false)
-    }
+  const retry = async (job: VoiceJob) => {
+    try { await voiceCall('tts:createJob', { ...job.request, clientRequestId: crypto.randomUUID(), retryOfJobId: job.id }); await state.refresh() }
+    catch (error) { state.setError((error as Error).message) }
   }
+  const localReady = Boolean(state.runtime?.engines[engine].ready)
+  const denoisingReady = !denoise || Boolean(state.runtime?.denoising?.ready)
+  const canGenerate = !submitting && text.trim().length > 0 && Array.from(text.trim()).length <= 300 && (mode === 'preset' ? Boolean(voiceId) : Boolean(profile && localReady && denoisingReady))
+  const selectProfile = (id: string) => { setProfileId(id); setMode('clone'); setTab('compose') }
 
-  const handlePlay = async (filePath?: string) => {
-    const path = filePath || generatedFile
-    if (!path) return
+  const sliders = [
+    { label: '语速', value: rate, change: setRate, min: -50, max: 100, unit: '%' },
+    { label: '音调', value: pitchHz, change: setPitchHz, min: -50, max: 50, unit: 'Hz' },
+    { label: '音量', value: volume, change: setVolume, min: -50, max: 50, unit: '%' },
+  ]
+  const playingAsset = state.assets.find(asset => audioSource?.channel === 'video:getAudioDataById' && asset.id === audioSource.id)
+  const playingProfile = state.profiles.find(item => audioSource?.channel === 'tts:getProfileAudio' && item.id === audioSource.id)
+  const audioTitle = playingAsset?.title ?? playingProfile?.name ?? (audioSource?.channel === 'tts:getDraftAudio' ? '参考录音试听' : '选择一段音频开始试听')
 
-    // If clicking the same file that's playing, toggle pause/resume
-    if (playingFile === path && isPlaying) {
-      handleStop()
-      return
-    }
-
-    try {
-      const res = await window.electronAPI.invoke('tts:getAudioData', path)
-      if (res?.success && res.data?.dataUrl) {
-        if (audioRef.current) {
-          audioRef.current.pause()
-        }
-        const audio = new Audio(res.data.dataUrl)
-        audioRef.current = audio
-        audio.onended = () => {
-          setIsPlaying(false)
-          setPlayingFile(null)
-        }
-        audio.play()
-        setIsPlaying(true)
-        setPlayingFile(path)
-      }
-    } catch (err) {
-      toast({ title: 'Playback failed', variant: 'error' })
-    }
-  }
-
-  const handleStop = () => {
-    if (audioRef.current) {
-      audioRef.current.pause()
-      audioRef.current.currentTime = 0
-      setIsPlaying(false)
-      setPlayingFile(null)
-    }
-  }
-
-  const handleExport = async () => {
-    if (!generatedFile) return
-    try {
-      await window.electronAPI.showItemInFolder(generatedFile)
-    } catch (err) {
-      toast({ title: 'Failed to open file location', variant: 'error' })
-    }
-  }
-
-  const handleDeleteFile = async (filePath: string) => {
-    try {
-      await window.electronAPI.invoke('tts:deleteFile', filePath)
-      loadGeneratedFiles()
-      if (generatedFile === filePath) {
-        setGeneratedFile(null)
-      }
-    } catch { /* ignore */ }
-  }
-
-  if (!open) return null
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="bg-surface-container-lowest w-full max-w-2xl rounded-2xl shadow-2xl border border-outline-variant/30 max-h-[85vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-md py-3 border-b border-outline-variant/30 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-sm">
-            <span className="material-symbols-outlined text-primary">mic</span>
-            <h3 className="font-headline-sm text-headline-sm text-on-surface">AI Voiceover</h3>
-          </div>
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-on-surface-variant hover:text-on-surface hover:bg-surface-container transition-colors"
-          >
-            <span className="material-symbols-outlined text-[20px]">close</span>
-          </button>
+  return <Dialog.Root open={open} onOpenChange={value => { if (!value) onClose() }}><Dialog.Portal>
+    <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm" />
+    <Dialog.Content className="voiceover-dialog fixed z-50 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(1040px,96vw)] h-[min(720px,92vh)] flex flex-col bg-surface-container-lowest text-on-surface rounded-[24px] shadow-xl border border-outline-variant/40 overflow-hidden">
+      <header className="px-6 py-4 flex shrink-0 items-center justify-between border-b border-outline-variant/40">
+        <div className="flex items-center gap-3">
+          <span className="material-symbols-outlined text-primary rounded-[12px] bg-primary/10 p-2.5 text-[22px]" aria-hidden="true">graphic_eq</span>
+          <div><Dialog.Title className="text-[18px] font-medium leading-6">AI Voiceover</Dialog.Title><Dialog.Description className="text-[12px] text-on-surface-variant mt-0.5">用熟悉的声音，讲出新的灵感</Dialog.Description></div>
         </div>
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-md space-y-md">
-          {/* Language & Voice Selection */}
-          <div className="grid grid-cols-2 gap-md">
-            <div>
-              <label className="font-label-sm text-on-surface-variant">Language</label>
-              <div className="flex flex-wrap gap-xs mt-xs">
-                {LANGUAGE_GROUPS.map(lang => (
-                  <button
-                    key={lang.locale}
-                    onClick={() => setSelectedLang(lang.locale)}
-                    className={cn(
-                      'px-2 py-0.5 rounded-full text-[11px] font-bold transition-all',
-                      selectedLang === lang.locale
-                        ? 'bg-primary text-on-primary'
-                        : 'border border-outline-variant text-on-surface-variant hover:bg-surface-container',
-                    )}
-                  >
-                    {lang.label}
-                  </button>
-                ))}
+        <div className="flex items-center gap-3"><span className="text-[12px] text-on-surface-variant">{active ? `${active} 个任务生成中` : '自动保存到素材库'}</span><Dialog.Close asChild><VoiceButton variant="ghost" className="voiceover-action-icon" aria-label="关闭配音面板"><span className="material-symbols-outlined text-[20px]" aria-hidden="true">close</span></VoiceButton></Dialog.Close></div>
+      </header>
+      {state.error && <div role="alert" className="mx-6 mt-3 px-3 py-2 rounded-[8px] bg-error/10 text-error text-[12px] flex items-start justify-between gap-2 shrink-0 max-h-24 overflow-y-auto"><span className="break-words min-w-0">{state.error}</span><VoiceButton variant="ghost" className="voiceover-action-compact shrink-0" onClick={() => state.setError(null)}>关闭</VoiceButton></div>}
+      <div className="grid grid-cols-[minmax(0,1fr)_304px] min-h-0 flex-1">
+        <Tabs value={tab} onValueChange={setTab} className="flex flex-col min-w-0 min-h-0">
+          <div className="shrink-0 border-b border-outline-variant/40 px-6">
+            <TabsList className="voiceover-tabs w-full" aria-label="配音工作区">
+              {[['compose', '配音', 'mic'], ['profiles', '我的音色', 'record_voice_over'], ['runtime', '本地模型', 'tune']].map(([value, label, icon]) => <TabsTrigger key={value} value={value} className="voiceover-tab"><span className="material-symbols-outlined text-[18px]" aria-hidden="true">{icon}</span>{label}</TabsTrigger>)}
+            </TabsList>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5" data-testid="voiceover-editor">
+            <TabsContent value="compose" className="space-y-4">
+              <div className="flex items-center gap-4 border-b border-outline-variant/30 pb-3">
+                <span className="text-[12px] text-on-surface-variant shrink-0">配音方式</span>
+                <VoiceRadioGroup label="配音方式" value={mode} onChange={setMode} options={[{ value: 'preset', label: '预设音色' }, { value: 'clone', label: '声音克隆' }]} />
               </div>
-            </div>
-            <div>
-              <label className="font-label-sm text-on-surface-variant mb-xs block">Voice</label>
-              <Select value={selectedVoice} onValueChange={setSelectedVoice}>
-                <SelectTrigger size="sm">
-                  <SelectValue>
-                    {selectedVoice && filteredVoices.find(v => v.shortName === selectedVoice)
-                      ? formatVoiceName(filteredVoices.find(v => v.shortName === selectedVoice)!)
-                      : 'Select voice...'}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent className="max-h-60">
-                  <SelectGroup>
-                    <SelectLabel>Voices</SelectLabel>
-                    {filteredVoices.map(voice => (
-                      <SelectItem
-                        key={voice.shortName}
-                        value={voice.shortName}
-                        icon={voice.gender === 'Female' ? 'female' : 'male'}
-                      >
-                        {formatVoiceName(voice)}
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-
-          {/* Text Input */}
-          <div>
-            <label className="font-label-sm text-on-surface-variant">Text</label>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Enter text to convert to speech..."
-              rows={4}
-              className="w-full mt-xs bg-surface-container-low border-2 border-transparent focus:border-primary rounded-lg px-md py-sm text-body-sm outline-none resize-none"
-            />
-          </div>
-
-          {/* Controls */}
-          <div className="grid grid-cols-3 gap-md">
-            <div>
-              <label className="font-label-sm text-on-surface-variant">Speed: {rate}%</label>
-              <input
-                type="range"
-                min={-50}
-                max={100}
-                value={rate}
-                onChange={(e) => setRate(Number(e.target.value))}
-                className="w-full mt-xs accent-primary"
-              />
-            </div>
-            <div>
-              <label className="font-label-sm text-on-surface-variant">Pitch: {pitch}Hz</label>
-              <input
-                type="range"
-                min={-50}
-                max={50}
-                value={pitch}
-                onChange={(e) => setPitch(Number(e.target.value))}
-                className="w-full mt-xs accent-primary"
-              />
-            </div>
-            <div>
-              <label className="font-label-sm text-on-surface-variant">Volume: {volume}%</label>
-              <input
-                type="range"
-                min={-50}
-                max={50}
-                value={volume}
-                onChange={(e) => setVolume(Number(e.target.value))}
-                className="w-full mt-xs accent-primary"
-              />
-            </div>
-          </div>
-
-          {/* Generate Button */}
-          <div className="flex gap-sm">
-            <button
-              onClick={handleGenerate}
-              disabled={isGenerating || !text.trim()}
-              className="flex-1 flex items-center justify-center gap-xs px-md py-2 bg-primary text-on-primary rounded-full font-label-md hover:brightness-110 active:scale-95 transition-all disabled:opacity-50"
-            >
-              {isGenerating ? (
-                <>
-                  <span className="material-symbols-outlined text-[18px] animate-spin">sync</span>
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <span className="material-symbols-outlined text-[18px]">mic</span>
-                  Generate Voiceover
-                </>
-              )}
-            </button>
-          </div>
-
-          {/* Playback Controls */}
-          {generatedFile && (
-            <div className="p-md rounded-lg bg-surface-container-low border border-outline-variant/30">
-              <div className="flex items-center gap-md">
-                <button
-                  onClick={() => isPlaying ? handleStop() : handlePlay()}
-                  className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center hover:brightness-110 transition-all"
-                >
-                  <span className="material-symbols-outlined fill text-[24px]">
-                    {isPlaying ? 'stop' : 'play_arrow'}
-                  </span>
-                </button>
-                <div className="flex-1">
-                  <p className="text-body-sm text-on-surface font-bold">Generated Audio</p>
-                  <p className="text-[11px] text-on-surface-variant">{generatedFile.split('/').pop()}</p>
+              {mode === 'preset' ? <div className="space-y-4">
+                <div className="grid grid-cols-[136px_minmax(0,1fr)] gap-4">
+                  <VoiceSelect label="语言" value={locale} onChange={setLocale} options={[['zh', '中文'], ['en', 'English'], ['ja', '日本語'], ['ko', '한국어'], ['fr', 'Français'], ['de', 'Deutsch'], ['es', 'Español'], ['pt', 'Português']].map(([value, label]) => ({ value, label }))} />
+                  {voiceLoading ? <div className="voiceover-field-group"><span className="voiceover-field-label">预设音色</span><div role="status" className="voiceover-field text-on-surface-variant">正在获取在线音色…</div></div> : voiceError ? <div className="min-w-0 text-[12px] text-error flex items-center gap-2"><span className="flex-1">{voiceError}</span><VoiceButton variant="ghost" onClick={fetchVoices}>重试</VoiceButton></div> : <VoiceSelect label="预设音色" value={voiceId} onChange={setVoiceId} options={selectedVoices.map(voice => ({ value: voice.shortName, label: `${voice.shortName} · ${voice.gender === 'Female' ? '女声' : '男声'}` }))} />}
                 </div>
-                <button
-                  onClick={handleExport}
-                  className="flex items-center gap-xs px-3 py-1.5 border border-outline-variant text-on-surface-variant rounded-lg font-label-md hover:bg-surface-container transition-colors text-body-sm"
-                >
-                  <span className="material-symbols-outlined text-[16px]">folder_open</span>
-                  Open
-                </button>
+                <div className="grid grid-cols-3 gap-6">{sliders.map(slider => <VoiceSlider key={slider.label} label={slider.label} value={slider.value} onChange={slider.change} min={slider.min} max={slider.max} unit={slider.unit} />)}</div>
+              </div> : <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-4">
+                  <VoiceSelect label="克隆引擎" value={engine} onChange={value => setEngine(value as typeof engine)} options={[{ value: 'voxcpm2', label: 'VoxCPM2' }, { value: 'qwen3-tts', label: 'Qwen3-TTS' }]} />
+                  <VoiceSelect label="我的音色" value={profile ? profileId : ''} onChange={setProfileId} options={state.profiles.map(item => ({ value: item.id, label: item.name }))} placeholder="选择参考音色" action={<button type="button" onClick={() => setTab('profiles')} className="text-[12px] font-normal text-primary rounded-[4px] hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary">管理音色</button>} />
+                </div>
+                {!localReady && <div className="rounded-[8px] px-3 py-2 bg-surface-container-low text-[12px] text-on-surface-variant flex items-center justify-between gap-2"><span>{state.runtime?.engines[engine].reason ?? '请先检测本地环境'}</span><VoiceButton variant="ghost" className="voiceover-action-compact shrink-0" onClick={() => setTab('runtime')}>配置模型</VoiceButton></div>}
+                <div className="flex items-center justify-between gap-3 min-h-10">
+                  {engine === 'voxcpm2' ? <div className="flex items-center gap-3"><span className="text-[12px] text-on-surface-variant">生成质量</span><VoiceRadioGroup compact label="生成质量" value={String(steps)} onChange={value => setSteps(Number(value) as 10 | 20)} options={[{ value: '20', label: '精细 · 20 步' }, { value: '10', label: '快速 · 10 步' }]} /></div> : <div className="w-[160px]"><VoiceSelect label="生成语言" value={language} onChange={value => setLanguage(value as 'zh' | 'en')} options={[{ value: 'zh', label: '中文' }, { value: 'en', label: 'English' }]} /></div>}
+                  {profile && <VoiceButton variant="ghost" className="voiceover-action-compact shrink-0" onClick={() => play('tts:getProfileAudio', profile.id)}><span className="material-symbols-outlined text-[18px]" aria-hidden="true">play_circle</span>试听音色</VoiceButton>}
+                </div>
+                <details className="voiceover-disclosure border-b border-outline-variant/30 pb-2"><summary>高级参数</summary><div className="grid grid-cols-3 gap-3 mt-2 pb-2">
+                  {engine === 'voxcpm2' ? <VoiceNumber label="引导强度 CFG" value={cfg} min={1} max={3} step={0.1} onChange={setCfg} /> : <VoiceNumber label="Temperature" value={temperature} min={0.1} max={1} step={0.05} onChange={setTemperature} />}
+                  <VoiceInput label="随机种子" type="number" placeholder="随机" min={0} max={4294967295} value={seed} onChange={event => setSeed(event.target.value)} />
+                  <VoiceNumber label="增益（dB）" value={gainDb} min={-12} max={6} onChange={setGainDb} />
+                </div><div className="py-2 space-y-1.5">
+                  <Toggle label="自动降噪" pressed={denoise} onPressedChange={setDenoise} role="switch" aria-checked={denoise} aria-label="自动降噪" aria-describedby="voiceover-denoise-description" />
+                  <p id="voiceover-denoise-description" className="text-[12px] leading-5 text-on-surface-variant">生成前清理参考录音的背景噪声，保留原录音。VoxCPM2 与 Qwen3-TTS 均可使用。</p>
+                </div></details>
+                {!denoisingReady && <div role="status" className="rounded-[8px] px-3 py-2 bg-surface-container-low text-[12px] text-on-surface-variant flex items-center justify-between gap-2"><span>{state.runtime?.denoising?.reason ?? '请先检测降噪环境，也可在高级参数中关闭自动降噪。'}</span><VoiceButton variant="ghost" className="voiceover-action-compact shrink-0" onClick={() => setTab('runtime')}>配置降噪</VoiceButton></div>}
+              </div>}
+              <VoiceTextArea label="配音文案" trailing={<span className={`voiceover-value ${Array.from(text.trim()).length > 300 ? 'text-error' : ''}`}>{Array.from(text.trim()).length} / 300</span>} rows={4} maxLength={600} value={text} onChange={event => setText(event.target.value)} aria-invalid={Array.from(text.trim()).length > 300} placeholder="输入要生成的配音文案，建议按句分段。" />
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2"><VoiceButton disabled={!canGenerate} onClick={() => submit()}><span className="material-symbols-outlined text-[18px]" aria-hidden="true">auto_awesome</span>{submitting ? '提交中…' : '生成配音'}</VoiceButton>{mode === 'clone' && <VoiceButton variant="secondary" disabled={!canGenerate || !state.runtime?.engines['qwen3-tts'].ready || !state.runtime?.engines.voxcpm2.ready} onClick={() => submit(true)}>两引擎对比生成</VoiceButton>}</div>
+                <p className="text-[12px] leading-5 text-on-surface-variant">{mode === 'clone' ? '本地生成，关闭面板后继续运行。对比使用同一音色与文案。' : '在线生成，完成后自动保存。关闭面板后继续运行。'}</p>
               </div>
-            </div>
-          )}
-
-          {/* Generated Files List */}
-          {generatedFiles.length > 0 && (
-            <div>
-              <label className="font-label-sm text-on-surface-variant mb-xs block">Generated Files</label>
-              <div className="space-y-xs max-h-40 overflow-y-auto">
-                {generatedFiles.map(file => {
-                  const isCurrentPlaying = playingFile === file.path
-                  return (
-                    <div
-                      key={file.path}
-                      className={cn(
-                        'flex items-center gap-sm p-xs rounded border group transition-colors',
-                        isCurrentPlaying ? 'bg-primary/10 border-primary/30' : 'bg-surface-container-low border-transparent',
-                      )}
-                    >
-                      <button
-                        onClick={() => handlePlay(file.path)}
-                        className={cn(
-                          'w-6 h-6 rounded flex items-center justify-center transition-colors',
-                          isCurrentPlaying
-                            ? 'text-primary bg-primary/20'
-                            : 'text-primary hover:bg-primary/10',
-                        )}
-                      >
-                        <span className="material-symbols-outlined text-[14px]">
-                          {isCurrentPlaying && isPlaying ? 'pause' : 'play_arrow'}
-                        </span>
-                      </button>
-                      <span className={cn(
-                        'text-[11px] truncate flex-1',
-                        isCurrentPlaying ? 'text-primary font-bold' : 'text-on-surface',
-                      )}>
-                        {file.name}
-                      </span>
-                      <button
-                        onClick={() => handleDeleteFile(file.path)}
-                        className="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:text-error opacity-0 group-hover:opacity-100 transition-all"
-                      >
-                        <span className="material-symbols-outlined text-[14px]">delete</span>
-                      </button>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          )}
-        </div>
+            </TabsContent>
+            <TabsContent value="profiles" forceMount className="data-[state=inactive]:hidden"><VoiceProfilePanel profiles={state.profiles} refresh={state.refreshProfiles} onPlay={play} onStopDraftAudio={stopDraftAudio} onError={state.setError} onSelect={selectProfile} /></TabsContent>
+            <TabsContent value="runtime"><VoiceRuntimePanel runtime={state.runtime} onChange={state.setRuntime} onError={state.setError} busy={active > 0} /></TabsContent>
+          </div>
+        </Tabs>
+        <aside className="border-l border-outline-variant/40 bg-surface-container-low/40 min-h-0 flex flex-col" aria-label="试听与生成历史">
+          <div className="p-5 border-b border-outline-variant/40 shrink-0" data-testid="voiceover-player">
+            <div className="flex items-center justify-between mb-3"><h3 className="text-[13px] font-medium flex items-center gap-2"><span className="material-symbols-outlined text-[20px] text-primary" aria-hidden="true">headphones</span>音频试听</h3>{audioUrl && <span className="text-[11px] text-primary">已载入</span>}</div>
+            <p className="text-[12px] text-on-surface-variant truncate mb-3" title={audioTitle}>{audioTitle}</p>
+            <VoiceAudioPlayer player={player} url={audioUrl} onError={state.setError} />
+          </div>
+          <div className="min-h-0 overflow-y-auto flex-1 px-4 py-3"><VoiceJobList jobs={state.jobs} assets={state.assets} trash={state.trash} onPlay={play} onRefresh={state.refreshAssets} onError={state.setError} onRetry={retry} /></div>
+        </aside>
       </div>
-    </div>
-  )
+    </Dialog.Content>
+  </Dialog.Portal></Dialog.Root>
 }

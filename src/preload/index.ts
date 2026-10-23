@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '@shared/constants'
 import type { ToolboxAPI, ToolboxState } from '@shared/toolbox'
+import type { VoiceJob } from '@shared/voiceover'
 
 // Expose protected methods that allow the renderer process to use
 // ipcRenderer without exposing the entire object
@@ -13,6 +14,21 @@ const electronAPI = {
 
   // Generic IPC invoke
   invoke: (channel: string, ...args: unknown[]) => ipcRenderer.invoke(channel, ...args),
+  onVoiceoverJobUpdated: (callback: (job: VoiceJob) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, job: VoiceJob) => callback(job)
+    ipcRenderer.on('tts:jobUpdated', listener)
+    return () => { ipcRenderer.removeListener('tts:jobUpdated', listener) }
+  },
+  onVideoWorkflowUpdated: (callback: (projectId: string) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, projectId: string) => callback(projectId)
+    ipcRenderer.on('workflow:updated', listener)
+    return () => { ipcRenderer.removeListener('workflow:updated', listener) }
+  },
+  onVideoAssetsChanged: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('video:assetsChanged', listener)
+    return () => { ipcRenderer.removeListener('video:assetsChanged', listener) }
+  },
   onNotificationNavigate: (callback: (payload: { route: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { route: string }) => callback(payload)
     ipcRenderer.on('notification:navigate', listener)

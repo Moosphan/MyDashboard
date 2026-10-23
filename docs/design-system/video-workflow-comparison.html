@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>视频工作流 · 原稿与生产页面对照</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: system-ui, sans-serif;
+        color: #171c27;
+        background: #f9f9ff;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+      }
+      header {
+        max-width: 1600px;
+        margin: 0 auto 24px;
+      }
+      h1 {
+        font-size: 24px;
+        margin: 0 0 12px;
+      }
+      p {
+        line-height: 1.7;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      select {
+        font: inherit;
+        padding: 8px 12px;
+        margin-left: 8px;
+      }
+      a {
+        color: #6b38d4;
+      }
+      main {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 24px;
+        max-width: 1600px;
+        margin: auto;
+        align-items: start;
+      }
+      figure {
+        margin: 0;
+        min-width: 0;
+      }
+      figcaption {
+        font-weight: 600;
+        margin-bottom: 12px;
+      }
+      img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid #c9c3dc;
+      }
+      small {
+        font-weight: normal;
+        display: block;
+        margin-top: 6px;
+      }
+      :focus-visible {
+        outline: 2px solid #6b38d4;
+        outline-offset: 3px;
+      }
+      @media (max-width: 900px) {
+        main {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>视频工作流 · 原稿与生产页面对照</h1>
+      <p>
+        左侧为用户指定的高保真稿；右侧为功能分支真实 Electron
+        页面。生产沿用现有组件和全局外壳，比较信息顺序、分栏比例与动作位置。两侧示例内容、审核状态及视口高度不同，不作为像素差分。
+      </p>
+      <div class="controls">
+        <label
+          >页面<select id="page">
+            <option value="projects">项目列表</option>
+            <option value="brief">创作简报</option>
+            <option value="copy">内容文案</option>
+            <option value="storyboard" selected>HTML 分镜</option>
+            <option value="narration">口播定稿</option>
+            <option value="audio">分段配音</option>
+            <option value="roughcut">动态粗剪</option>
+            <option value="final">正式成片</option>
+            <option value="publish">平台发布</option>
+          </select></label
+        >
+        <label
+          >主题<select id="theme">
+            <option value="light">浅色</option>
+            <option value="dark">深色</option>
+          </select></label
+        >
+        <a href="video-workflow-production-alignment.md">查看验证与剩余差异</a>
+        <a href="video-workflow-production/execution-log/execution-log-light-1440.png"
+          >最新执行日志 · 浅色</a
+        >
+        <a href="video-workflow-production/execution-log/execution-log-dark-1440.png"
+          >最新执行日志 · 深色</a
+        >
+        <a href="video-workflow-execution-log-verification.md">执行日志验收记录</a>
+      </div>
+      <p role="status" id="status"></p>
+    </header>
+    <main>
+      <figure>
+        <figcaption>指定高保真稿<small>设计站：1440 × 1100 CSS px</small></figcaption>
+        <a id="reference-link"><img id="reference" alt="指定高保真稿" /></a>
+      </figure>
+      <figure>
+        <figcaption>
+          当前生产实现<small>Electron：1440 × 944 CSS px，2 倍像素截图；点击查看原图</small>
+        </figcaption>
+        <a id="production-link"><img id="production" alt="真实 Electron 页面" /></a>
+      </figure>
+    </main>
+    <script>
+      const page = document.getElementById('page')
+      const theme = document.getElementById('theme')
+      function update() {
+        const reference =
+          'video-workflow-reference/video-workflow-' + page.value + '-' + theme.value + '.png'
+        const production =
+          'video-workflow-production/aligned-' + page.value + '-' + theme.value + '-1440.png'
+        document.getElementById('reference').src = reference
+        document.getElementById('reference-link').href = reference
+        document.getElementById('production').src = production
+        document.getElementById('production-link').href = production
+        document.getElementById('status').textContent =
+          page.selectedOptions[0].textContent + ' · ' + theme.selectedOptions[0].textContent
+      }
+      page.addEventListener('change', update)
+      theme.addEventListener('change', update)
+      update()
+    </script>
+  </body>
+</html>

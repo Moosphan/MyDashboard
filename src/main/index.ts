@@ -1,5 +1,5 @@
 import { app, BrowserWindow, shell, ipcMain } from 'electron'
-import { join } from 'path'
+import { join, resolve } from 'path'
 import { appendFileSync, mkdirSync } from 'fs'
 import { registerAllIpcHandlers } from './ipc'
 import { initFileStorage, registerFileIpcHandlers } from './services/file-service'
@@ -28,7 +28,8 @@ import { registerMilestoneIpcHandlers } from './ipc/milestones'
 import { registerActivityIpcHandlers } from './ipc/activity'
 import { registerDashboardIpcHandlers } from './ipc/dashboard'
 import { registerTrendingIpcHandlers, startTrendingRefreshScheduler, stopTrendingRefreshScheduler } from './ipc/trending'
-import { registerTtsHandlers } from './services/tts-service'
+import { registerTtsHandlers, stopVoiceover } from './services/tts-service'
+import { registerVideoWorkflowHandlers, registerVideoWorkflowProtocol, stopVideoWorkflow } from './ipc/video-workflow'
 import { registerResetRadarIpcHandlers } from './ipc/reset-radar'
 import { registerToolboxIpcHandlers, stopToolbox } from './ipc/toolbox'
 import { registerBackupIpcHandlers } from './ipc/backup'
@@ -45,6 +46,12 @@ import { AISubscriptionRepository } from './database/repositories/ai-repository'
 import { seedSocialData } from './database/seeds/social-seeds'
 
 const isDev = !app.isPackaged
+if (process.env.MYDASHBOARD_USER_DATA) {
+  const isolatedData = resolve(process.env.MYDASHBOARD_USER_DATA)
+  mkdirSync(isolatedData, { recursive: true })
+  app.setPath('userData', isolatedData)
+}
+registerVideoWorkflowProtocol()
 let mainWindow: BrowserWindow | null = null
 
 function logLifecycle(event: string, details: Record<string, unknown> = {}): void {
@@ -233,7 +240,8 @@ app.whenReady().then(() => {
   registerActivityIpcHandlers()
   registerDashboardIpcHandlers()
   registerTrendingIpcHandlers()
-  registerTtsHandlers()
+  registerTtsHandlers(() => mainWindow)
+  registerVideoWorkflowHandlers(() => mainWindow)
   registerResetRadarIpcHandlers()
   registerToolboxIpcHandlers(() => mainWindow)
   registerResearchMaterialIpcHandlers()
@@ -277,7 +285,17 @@ app.on('window-all-closed', () => {
   }
 })
 
-app.on('before-quit', () => {
+let voiceoverStopped = false
+let voiceoverStopping = false
+app.on('before-quit', (event) => {
+  if (!voiceoverStopped) {
+    event.preventDefault()
+    if (!voiceoverStopping) {
+      voiceoverStopping = true
+      void stopVideoWorkflow().then(() => stopVoiceover()).catch(error => console.error('Video shutdown failed:', error)).finally(() => { voiceoverStopped = true; app.quit() })
+    }
+    return
+  }
   logLifecycle('app:before-quit')
   stopTrendingRefreshScheduler()
   stopTaskReminderScheduler()

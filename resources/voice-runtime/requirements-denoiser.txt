@@ -1,0 +1,15 @@
+torch==2.11.0
+torchaudio==2.11.0
+torchcodec==0.11.0
+modelscope==1.34.0
+datasets==2.21.0
+numpy==2.2.6
+soundfile==0.13.1
+librosa==0.11.0
+scipy==1.15.3
+pandas==2.3.3
+pyarrow==25.0.1
+addict==2.4.0
+simplejson==4.2.0
+sortedcontainers==2.4.0
+oss2==2.19.1

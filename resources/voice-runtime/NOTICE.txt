@@ -1,0 +1,30 @@
+MyDashboard voice runtime resource inventory
+
+Distributed resources: worker.py, adapters/voxcpm2.py, adapters/qwen3.py,
+transcribe.py, denoise.py, requirements-mlx.txt, requirements-denoiser.txt
+and this inventory.
+
+The adapters invoke separately installed MLX Audio (MIT), MLX (MIT), and
+user-provided VoxCPM2 / Qwen3-TTS model weights (model cards: Apache-2.0).
+Python, FFmpeg, third-party Python packages and model weights are not bundled.
+Automatic reference transcription invokes separately installed MLX Whisper
+(MIT), using user-provided multilingual Whisper Small weights (MIT).
+Optional reference denoising invokes separately installed ModelScope
+(Apache-2.0), PyTorch / torchaudio (BSD-style licenses), and user-provided
+ZipEnhancer weights (model card: Apache-2.0), in an isolated environment.
+It uses VoxCPM's ZipEnhancer pipeline and -20 LUFS normalization for both
+cloning engines. Qwen3-TTS has no native denoising flag.
+
+Upstream references:
+https://github.com/Blaizzy/mlx-audio
+https://github.com/ml-explore/mlx
+https://github.com/OpenBMB/VoxCPM
+https://github.com/QwenLM/Qwen3-TTS
+https://github.com/ml-explore/mlx-examples/tree/main/whisper
+https://github.com/openai/whisper
+https://huggingface.co/mlx-community/VoxCPM2-8bit
+https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit
+https://modelscope.cn/models/iic/speech_zipenhancer_ans_multiloss_16k_base
+https://github.com/modelscope/modelscope
+
+See docs/video-studio-voiceover.zh-CN.md for setup, versions and limitations.

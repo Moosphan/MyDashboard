@@ -24,7 +24,7 @@ export class VideoAssetRepository extends BaseRepository<VideoAssetRow> {
 
   findByType(type: VideoAssetRow['type'], limit = 50): VideoAssetRow[] {
     return this.all<VideoAssetRow>(
-      'SELECT * FROM video_assets WHERE type = ? ORDER BY created_at DESC LIMIT ?',
+      "SELECT * FROM video_assets WHERE type = ? AND json_extract(metadata, '$.trashedAt') IS NULL ORDER BY created_at DESC, id DESC LIMIT ?",
       type,
       limit,
     )
@@ -38,10 +38,11 @@ export class VideoAssetRepository extends BaseRepository<VideoAssetRow> {
     file_format?: string
     duration_seconds?: number
     tags?: string[]
+    metadata?: Record<string, unknown>
   }): number {
     const result = this.run(
-      `INSERT INTO video_assets (title, type, file_path, file_size, file_format, duration_seconds, tags)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO video_assets (title, type, file_path, file_size, file_format, duration_seconds, tags, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       data.title,
       data.type,
       data.file_path,
@@ -49,6 +50,7 @@ export class VideoAssetRepository extends BaseRepository<VideoAssetRow> {
       data.file_format ?? null,
       data.duration_seconds ?? null,
       JSON.stringify(data.tags ?? []),
+      JSON.stringify(data.metadata ?? {}),
     )
     return Number(result.lastInsertRowid)
   }
@@ -58,6 +60,7 @@ export class VideoAssetRepository extends BaseRepository<VideoAssetRow> {
     const values: unknown[] = []
 
     for (const [key, value] of Object.entries(data)) {
+      if (!['title', 'type', 'file_path', 'file_size', 'file_format', 'duration_seconds', 'metadata', 'tags', 'status', 'thumbnail_path'].includes(key)) continue
       if (value !== undefined) {
         fields.push(`${key} = ?`)
         values.push(key === 'tags' && Array.isArray(value) ? JSON.stringify(value) : value)

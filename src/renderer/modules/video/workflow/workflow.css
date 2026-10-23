@@ -89,9 +89,18 @@
 }
 .workflow-project-filters {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 160px auto auto;
+  grid-template-columns: minmax(180px, 1fr) 160px 40px 40px;
   gap: 12px;
-  align-items: end;
+  align-items: center;
+}
+.workflow-project-filters #workflow-project-search {
+  height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.workflow-project-status {
+  height: 40px;
 }
 .workflow-project-list {
   display: grid;
@@ -785,7 +794,10 @@
     flex-wrap: wrap;
   }
   .workflow-project-filters {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 40px 40px;
+  }
+  .workflow-project-filters > :first-child {
+    grid-column: 1 / -1;
   }
   .workflow-project-row {
     grid-template-columns: 120px minmax(0, 1fr);

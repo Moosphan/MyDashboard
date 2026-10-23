@@ -134,7 +134,101 @@ app.whenReady().then(async () => {
       `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
     )
     await waitFor('document.getElementById("workflow-project-search")', 'project list')
+    const filterMetrics = await evaluate(`(()=>{
+      const search=document.getElementById('workflow-project-search');
+      const bounds=search.getBoundingClientRect();
+      const controls=[...document.querySelectorAll('.workflow-project-filters button')];
+      return {height:bounds.height,radius:parseFloat(getComputedStyle(search).borderRadius),
+        aligned:controls.every(control=>Math.abs(control.getBoundingClientRect().top+control.getBoundingClientRect().height/2-bounds.top-bounds.height/2)<1),
+        visibleLabels:[...document.querySelectorAll('.workflow-project-filters label')].filter(label=>getComputedStyle(label).position!=='absolute').map(label=>label.textContent)};
+    })()`)
+    assert.equal(filterMetrics.height, 40)
+    assert.ok(filterMetrics.radius <= 8)
+    assert.equal(filterMetrics.aligned, true)
+    assert.ok(!filterMetrics.visibleLabels.includes('项目状态'))
+    assert.equal(
+      await evaluate('document.querySelector("[aria-label=查看已归档]")?.textContent.trim()'),
+      'archive',
+    )
     await screenshot('01-projects-light-1440.png')
+    if (process.env.WORKFLOW_SEED_DIR) {
+      assert.equal(
+        await evaluate(
+          'Boolean(document.querySelector(".workflow-project-actions > button:last-child[aria-haspopup=menu]"))',
+        ),
+        true,
+      )
+      window.focus()
+      await delay(150)
+      await evaluate(
+        'document.querySelector(".workflow-project-actions button[aria-haspopup=menu]").focus()',
+      )
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+      await waitFor('document.querySelector("[role=menuitem]")', 'project actions popup')
+      assert.ok(
+        await evaluate(
+          'document.querySelector("[role=menuitem]").textContent.includes("归档项目")',
+        ),
+      )
+      await screenshot('project-list-menu-light-1440.png')
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+      await waitFor(
+        '!document.querySelector("[role=menu]") && document.activeElement.title==="更多操作"',
+        'popup Escape focus return',
+      )
+      await evaluate(
+        'document.querySelector(".workflow-project-actions button[aria-haspopup=menu]").focus()',
+      )
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+      await waitFor('document.querySelector("[role=menuitem]")', 'archive popup')
+      await evaluate('document.querySelector("[role=menuitem]").click()')
+      await waitFor(
+        '!document.querySelector(".workflow-project-card")',
+        'archived removed from active list',
+      )
+      await click('查看已归档')
+      await waitFor('document.querySelector(".workflow-project-card")', 'archive view')
+      assert.equal(
+        await evaluate(
+          'document.querySelector("[aria-label=查看进行中项目]").getAttribute("aria-pressed")',
+        ),
+        'true',
+      )
+      await evaluate(
+        'document.querySelector(".workflow-project-actions button[aria-haspopup=menu]").focus()',
+      )
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+      await waitFor('document.querySelector("[role=menuitem]")', 'restore popup')
+      assert.ok(
+        await evaluate(
+          'document.querySelector("[role=menuitem]").textContent.includes("恢复项目")',
+        ),
+      )
+      await evaluate('document.querySelector("[role=menuitem]").click()')
+      await waitFor(
+        '!document.querySelector(".workflow-project-card")',
+        'restored removed from archive view',
+      )
+      await click('查看进行中项目')
+      await waitFor('document.querySelector(".workflow-project-card")', 'restored active list')
+      window.setSize(1024, 900)
+      await screenshot('project-list-controls-light-1024.png')
+      assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+      window.webContents.setZoomFactor(2)
+      await evaluate('document.getElementById("workflow-project-search").focus()')
+      await screenshot('project-list-controls-light-zoom200.png')
+      assert.ok(
+        await evaluate(
+          'document.documentElement.scrollWidth<=innerWidth+1 && document.activeElement.id==="workflow-project-search"',
+        ),
+      )
+      window.webContents.setZoomFactor(1)
+      window.setSize(1440, 1100)
+    }
     await click('新建视频项目')
     await fill('项目名称', 'UI 验证：从想法到分镜')
     await screenshot('01-new-project-light-1440.png')
@@ -967,6 +1061,157 @@ app.whenReady().then(async () => {
             )
           }
           if (stageKeys[index] === 'publish') {
+            assert.equal(
+              await evaluate('Boolean(document.querySelector("[data-publish-generate]"))'),
+              true,
+            )
+            assert.ok(
+              await evaluate(
+                'document.querySelector("[data-publish-sources]").textContent.includes("内容文案 v1")',
+              ),
+            )
+            if (theme === 'dark') {
+              const currentProject = await evaluate(
+                'window.electronAPI.invoke("workflow:list").then(result=>result.data.find(item=>item.title.includes("工作流真实合成验证")))',
+              )
+              const savedBilibili = currentProject.stages.publish.payload.platforms.bilibili
+              const originalTitle = await evaluate(
+                'document.querySelector("input[maxlength]").value',
+              )
+              await fill('发布标题（最多 80 字）', originalTitle + '编辑')
+              assert.equal(
+                await evaluate('document.querySelector("[data-publish-generate]").disabled'),
+                true,
+              )
+              await click('放弃未保存修改')
+              await evaluate(
+                '[...document.querySelectorAll("input[type=radio]")].find(item=>item.value==="douyin").click()',
+              )
+              await waitFor(
+                'document.querySelector("input[maxlength]")?.maxLength===30',
+                'Douyin AI target',
+              )
+              await evaluate('document.querySelector(".workflow-artifact-card details").open=true')
+              await fill('给 AI 的要求', '标题用问题切入，简介更精炼')
+              const publishCLI = join(root, 'publish-test-codex')
+              const responsePath = join(root, 'publish-response.json')
+              const response = {
+                title: '视频为什么需要逐步审核？',
+                description: '先文案，再分镜，最后确认成片。',
+                tags: ['视频创作', 'AI工作流'],
+              }
+              writeFileSync(responsePath, JSON.stringify(response))
+              writeFileSync(
+                publishCLI,
+                `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>setTimeout(()=>fs.copyFileSync(${JSON.stringify(responsePath)},process.argv[process.argv.indexOf('--output-last-message')+1]),1500));\n`,
+              )
+              chmodSync(publishCLI, 0o755)
+              await evaluate(
+                `window.electronAPI.invoke('workflow:configure',{codexPath:${JSON.stringify(publishCLI)}})`,
+              )
+              window.focus()
+              await delay(150)
+              await evaluate('document.querySelector("[data-publish-generate]").focus()')
+              assert.ok(
+                await evaluate(
+                  'document.activeElement.matches("[data-publish-generate]") && !document.activeElement.disabled',
+                ),
+              )
+              window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+              window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+              await delay(100)
+              assert.ok(await evaluate('document.querySelector(".workflow-job-progress")'))
+              await waitFor(
+                'document.querySelector("[data-publish-status]").textContent.includes("正在生成")',
+                'publish AI loading',
+              )
+              assert.equal(
+                await evaluate(
+                  'document.querySelector("[data-publish-generate]").disabled && document.querySelector("input[maxlength]").disabled',
+                ),
+                true,
+              )
+              await screenshot('publish-ai-running-dark-1440.png')
+              await waitFor(
+                'document.querySelector("input[maxlength]").value==="视频为什么需要逐步审核？"',
+                'publish AI result',
+              )
+              const firstResult = await evaluate(
+                `window.electronAPI.invoke('workflow:get',${JSON.stringify(currentProject.id)}).then(result=>result.data)`,
+              )
+              assert.equal(firstResult.stages.publish.status, 'review')
+              assert.deepEqual(firstResult.stages.publish.payload.platforms.bilibili, savedBilibili)
+              assert.deepEqual(firstResult.stages.publish.payload.platforms.douyin, response)
+              assert.ok(
+                await evaluate(
+                  '[...document.querySelectorAll("button")].some(item=>item.textContent.includes("导出抖音发布包")&&item.disabled)',
+                ),
+              )
+              await evaluate(
+                'document.querySelector(".workflow-artifact-card details").open=false;document.querySelector("[data-publish-sources]").closest(".workflow-stage-heading").scrollIntoView({block:"start"})',
+              )
+              await screenshot('publish-ai-review-dark-1440.png')
+              const second = { ...response, title: 'AI 视频如何把好审核关？' }
+              writeFileSync(responsePath, JSON.stringify(second))
+              await click('AI 重新生成发布资料')
+              await waitFor(
+                'document.querySelector("input[maxlength]").value==="AI 视频如何把好审核关？"',
+                'publish AI regeneration',
+              )
+              writeFileSync(responsePath, JSON.stringify({ ...response, title: '长'.repeat(31) }))
+              await click('AI 重新生成发布资料')
+              await waitFor(
+                'document.querySelector("[data-publish-status]").textContent.includes("正在生成")',
+                'invalid AI run',
+              )
+              await waitFor(
+                'document.querySelector(".workflow-job-error") || [...document.querySelectorAll("summary")].some(item=>item.textContent.includes("错误")) || document.querySelector(".workflow-task-section").textContent.includes("发布标题不能为空")',
+                'invalid AI failure',
+              )
+              assert.equal(
+                await evaluate('document.querySelector("input[maxlength]").value'),
+                second.title,
+              )
+              assert.equal(
+                await evaluate('document.querySelector("[data-publish-generate]").disabled'),
+                false,
+              )
+              writeFileSync(responsePath, JSON.stringify(second))
+              await click('AI 重新生成发布资料')
+              await waitFor(
+                '!document.querySelector("[data-publish-generate]").disabled',
+                'retry success',
+              )
+              await click('AI 重新生成发布资料')
+              await waitFor(
+                'document.querySelector(".workflow-job-progress")',
+                'cancel publish running',
+              )
+              await click('取消任务')
+              await waitFor(
+                '!document.querySelector("[data-publish-generate]").disabled',
+                'publish cancelled',
+              )
+              assert.equal(
+                await evaluate('document.querySelector("input[maxlength]").value'),
+                second.title,
+              )
+              window.setSize(1024, 900)
+              await screenshot('publish-ai-review-dark-1024.png')
+              assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+              window.webContents.setZoomFactor(2)
+              await evaluate(
+                'document.querySelector("[data-publish-generate]").focus();document.querySelector("[data-publish-generate]").scrollIntoView({block:"center"})',
+              )
+              await screenshot('publish-ai-review-dark-zoom200.png')
+              assert.ok(
+                await evaluate(
+                  'document.activeElement.matches("[data-publish-generate]") && document.documentElement.scrollWidth<=innerWidth+1',
+                ),
+              )
+              window.webContents.setZoomFactor(1)
+              window.setSize(1440, 1100)
+            }
             await evaluate(
               '[...document.querySelectorAll("input[type=radio]")].find(item=>item.value==="douyin").click()',
             )

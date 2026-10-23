@@ -773,6 +773,206 @@ test('AI narration uses approved copy and storyboard and stays awaiting human re
   }
 })
 
+test('AI publishing regenerates one platform from approved content and preserves other metadata and history', async () => {
+  const { db, repository, project } = fixture()
+  const root = mkdtempSync(join(tmpdir(), 'video-publish-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('Publishing must not synthesize audio or render video')
+  })
+  try {
+    let state = project
+    const file = await service.files.write(project.id, 'publish test media', '.png')
+    const render = {
+      file,
+      cover: file,
+      duration: 4,
+      width: 1920,
+      height: 1080,
+      compositionFiles: [file],
+      compositionNames: ['index.html'],
+      manifestHash: 'a'.repeat(64),
+      checks: 'verified',
+    }
+    const payloads = {
+      brief: { text: '向开发者介绍审核流程', duration: 4 },
+      copy: { text: '先检查内容，再确认画面。' },
+      storyboard: {
+        mode: 'template',
+        template: 'technical',
+        scenes: [{ id: 'opening', title: '人工审核', body: '逐步确认', layout: 'title' }],
+      },
+      narration: { scenes: [{ id: 'opening', text: '每一步都需要你确认。' }] },
+      audio: {
+        file,
+        subtitles: file,
+        duration: 4,
+        tracks: [{ sceneId: 'opening', file, duration: 4, text: '每一步都需要你确认。' }],
+      },
+      roughcut: render,
+      render,
+    }
+    const generate = () =>
+      service.generate({
+        projectId: state.id,
+        stage: 'publish',
+        executor: 'codex',
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+        publication: { platform: 'douyin', feedback: '标题用问题切入，结合 AI 视频创作话题' },
+      })
+    await assert.rejects(generate(), /审核/)
+    for (const stage of [
+      'brief',
+      'copy',
+      'storyboard',
+      'narration',
+      'audio',
+      'roughcut',
+      'render',
+    ] as const) {
+      state = repository.save(state.id, stage, payloads[stage], state.revision, randomUUID())
+      state = repository.approve(
+        state.id,
+        stage,
+        state.stages[stage]!.id,
+        state.revision,
+        randomUUID(),
+      )
+    }
+    const original = {
+      platforms: {
+        bilibili: { title: '保留的 B 站标题', description: '人工写好的简介', tags: ['工作流'] },
+        douyin: { title: '旧标题', description: '旧简介', tags: ['审核'] },
+      },
+    }
+    state = repository.save(state.id, 'publish', original, state.revision, randomUUID())
+    state = repository.approve(
+      state.id,
+      'publish',
+      state.stages.publish!.id,
+      state.revision,
+      randomUUID(),
+    )
+    const previous = state.stages.publish!.id
+    const script = join(root, 'fake-codex')
+    const capture = join(root, 'prompt.txt')
+    const response = join(root, 'response.json')
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.copyFileSync(${JSON.stringify(response)},process.argv[process.argv.indexOf('--output-last-message')+1]);});\n`,
+    )
+    chmodSync(script, 0o755)
+    service.runtime.set({ codexPath: script })
+    const wait = async (id: string) => {
+      for (let attempt = 0; attempt < 100 && repository.job(id)?.state === 'running'; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      return repository.job(id)!
+    }
+    const metadata = {
+      title: 'AI 做视频，为什么要逐步审核？',
+      description: '结合实际流程理解人工审核。',
+      tags: ['AI视频', '内容创作'],
+    }
+    writeFileSync(response, JSON.stringify(metadata))
+    const first = await generate()
+    assert.equal((await wait(first.id)).state, 'succeeded', repository.job(first.id)?.error ?? '')
+    const prompt = readFileSync(capture, 'utf8')
+    for (const phrase of [
+      '先检查内容，再确认画面',
+      '人工审核',
+      '每一步都需要你确认',
+      '标题用问题切入',
+      '30',
+      '实时热点',
+    ])
+      assert.ok(prompt.includes(phrase), phrase)
+    state = repository.get(state.id)
+    assert.equal(state.stages.publish!.status, 'review')
+    assert.equal(state.stages.render!.status, 'approved')
+    assert.deepEqual(stageValue(state, 'publish')!.platforms.bilibili, original.platforms.bilibili)
+    assert.deepEqual(stageValue(state, 'publish')!.platforms.douyin, metadata)
+    assert.ok(state.history.some((item) => item.id === previous))
+    const exported = await service.exportTask(
+      {
+        projectId: state.id,
+        stage: 'publish',
+        executor: 'codex',
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+        publication: { platform: 'douyin', feedback: '再简洁一点' },
+      },
+      root,
+    )
+    assert.ok(readFileSync(join(exported, 'task.md'), 'utf8').includes('再简洁一点'))
+    assert.doesNotThrow(() =>
+      validatePayload(
+        'publish',
+        JSON.parse(readFileSync(join(exported, 'result.example.json'), 'utf8')),
+      ),
+    )
+    writeFileSync(response, JSON.stringify({ ...metadata, title: 'AI 视频如何把好审核关？' }))
+    const second = await generate()
+    assert.equal((await wait(second.id)).state, 'succeeded')
+    state = repository.get(state.id)
+    assert.equal(state.stages.publish!.version, 3)
+    assert.equal(stageValue(state, 'publish')!.platforms.douyin.title, 'AI 视频如何把好审核关？')
+    const beforeFailure = state.stages.publish!.id
+    writeFileSync(response, JSON.stringify({ ...metadata, title: '长'.repeat(31) }))
+    const invalid = await generate()
+    assert.equal((await wait(invalid.id)).state, 'failed')
+    assert.match(repository.job(invalid.id)!.error!, /30/)
+    assert.equal(repository.get(state.id).stages.publish!.id, beforeFailure)
+    await assert.rejects(
+      service.generate({
+        projectId: state.id,
+        stage: 'publish',
+        executor: 'codex',
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+        publication: { platform: 'unknown' as 'douyin' },
+      }),
+      /平台/,
+    )
+    await assert.rejects(
+      service.generate({
+        projectId: state.id,
+        stage: 'publish',
+        executor: 'codex',
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+        publication: { platform: 'bilibili', feedback: '长'.repeat(5001) },
+      }),
+      /5000/,
+    )
+    const retainedDouyin = stageValue(repository.get(state.id), 'publish')!.platforms.douyin
+    const bilibili = {
+      title: 'Bilibili 标题'.repeat(4),
+      description: '面向开发者的完整介绍',
+      tags: ['开发者'],
+    }
+    writeFileSync(response, JSON.stringify(bilibili))
+    const biliJob = await service.generate({
+      projectId: state.id,
+      stage: 'publish',
+      executor: 'codex',
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+      publication: { platform: 'bilibili' },
+    })
+    assert.equal((await wait(biliJob.id)).state, 'succeeded')
+    assert.ok(readFileSync(capture, 'utf8').includes('80 字符'))
+    assert.deepEqual(stageValue(repository.get(state.id), 'publish')!.platforms.bilibili, bilibili)
+    assert.deepEqual(
+      stageValue(repository.get(state.id), 'publish')!.platforms.douyin,
+      retainedDouyin,
+    )
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('generation and saves require the preceding exact revision to be approved', () => {
   const { db, repository, project } = fixture()
   assert.throws(

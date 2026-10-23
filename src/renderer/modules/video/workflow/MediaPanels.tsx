@@ -526,6 +526,14 @@ export function RenderPanel({
 export function PublishingPanel({
   disabled,
   project,
+  platform,
+  onPlatform,
+  feedback,
+  onFeedback,
+  canGenerate,
+  generating,
+  dirty,
+  onGenerate,
   value,
   onChange,
   approved,
@@ -533,25 +541,34 @@ export function PublishingPanel({
 }: {
   disabled: boolean
   project: VideoProject
+  platform: VideoPlatform
+  onPlatform: (platform: VideoPlatform) => void
+  feedback: string
+  onFeedback: (value: string) => void
+  canGenerate: boolean
+  generating: boolean
+  dirty: boolean
+  onGenerate: () => void
   value: PublishPayload
   onChange: (payload: PublishPayload) => void
   approved: boolean
   run: (action: () => Promise<unknown>, message?: string) => void
 }) {
   const [urls, setUrls] = useState<Record<string, string>>({})
-  const [platform, setPlatform] = useState<VideoPlatform>('bilibili')
   return (
     <div className="workflow-section">
-      <VoiceRadioGroup
-        label="发布平台"
-        value={platform}
-        onChange={(value) => setPlatform(value as VideoPlatform)}
-        options={[
-          { value: 'bilibili', label: 'Bilibili' },
-          { value: 'douyin', label: '抖音' },
-        ]}
-        compact
-      />
+      <fieldset disabled={disabled} className="min-w-0">
+        <VoiceRadioGroup
+          label="发布平台"
+          value={platform}
+          onChange={(value) => onPlatform(value as VideoPlatform)}
+          options={[
+            { value: 'bilibili', label: 'Bilibili' },
+            { value: 'douyin', label: '抖音' },
+          ]}
+          compact
+        />
+      </fieldset>
       {stageValue(project, 'render') && (
         <div className="workflow-publish-asset">
           <img
@@ -578,6 +595,55 @@ export function PublishingPanel({
           return (
             <div key={platform}>
               <div className="workflow-section">
+                <div className="workflow-stage-heading">
+                  <div>
+                    <h4 className="text-body-sm font-semibold">
+                      {platform === 'bilibili' ? 'Bilibili' : '抖音'}发布资料
+                    </h4>
+                    <p className="workflow-muted mt-2" data-publish-sources>
+                      基于内容文案 v{project.stages.copy?.version ?? '—'} · HTML 分镜 v
+                      {project.stages.storyboard?.version ?? '—'} · 口播 v
+                      {project.stages.narration?.version ?? '—'}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    data-publish-generate
+                    disabled={!canGenerate}
+                    onClick={onGenerate}
+                  >
+                    {generating
+                      ? 'AI 正在生成…'
+                      : project.jobs.some(
+                            (job) => job.stage === 'publish' && job.state === 'succeeded',
+                          )
+                        ? 'AI 重新生成发布资料'
+                        : 'AI 生成发布资料'}
+                  </Button>
+                </div>
+                <details>
+                  <summary className="workflow-muted cursor-pointer">
+                    生成偏好与修改要求（选填）
+                  </summary>
+                  <div className="mt-3">
+                    <VoiceTextArea
+                      disabled={disabled}
+                      label="给 AI 的要求"
+                      rows={3}
+                      maxLength={5000}
+                      value={feedback}
+                      onChange={(event) => onFeedback(event.target.value)}
+                      placeholder="例如：标题用问题切入，突出 Kotlin 的发展反差；简介更精炼，标签面向开发者。可补充有来源和日期的热点背景。"
+                    />
+                  </div>
+                </details>
+                <p className="workflow-muted" role="status" data-publish-status>
+                  {generating
+                    ? '正在生成当前平台的标题、简介与标签，进度见右侧执行记录；原资料在成功前保留。'
+                    : dirty
+                      ? '请先保存或放弃未保存修改，再让 AI 生成新版本。'
+                      : '每次仅更新当前平台，另一平台保持原值；可反复生成或手动编辑，生成后需重新审核。不自动获取实时热搜。'}
+                </p>
                 <VoiceInput
                   disabled={disabled}
                   label={`发布标题（最多 ${platform === 'bilibili' ? 80 : 30} 字）`}

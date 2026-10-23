@@ -10,7 +10,7 @@ const taskNames: Record<VideoStage, string> = {
   audio: '制作逐镜配音',
   roughcut: '合成动态粗剪',
   render: '渲染正式成片',
-  publish: '准备平台发布',
+  publish: '生成发布资料',
 }
 
 const resultLabels: Record<WorkflowJob['state'], string> = {

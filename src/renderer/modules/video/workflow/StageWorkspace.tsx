@@ -15,6 +15,7 @@ import {
   type VideoStage,
   type WorkflowJob,
   type WorkflowVoice,
+  type VideoPlatform,
 } from '@shared/video-workflow'
 import { workflowCall, useWorkflowDraft } from './useWorkflow'
 import { revisionStatus } from './StepView'
@@ -60,6 +61,8 @@ export function StageWorkspace({
     [impact, setImpact] = useState(false),
     [activeScene, setActiveScene] = useState(0)
   const [executor, setExecutor] = useState('codex')
+  const [publishPlatform, setPublishPlatform] = useState<VideoPlatform>('bilibili')
+  const [publishFeedback, setPublishFeedback] = useState({ bilibili: '', douyin: '' })
   const [voice, setVoice] = useState<WorkflowVoice>(
     () =>
       stageValue(project, 'audio')?.voice ?? {
@@ -140,8 +143,16 @@ export function StageWorkspace({
     settings: stage === 'storyboard' ? (settings ?? draft.payload) : undefined,
     sceneId,
     voice,
+    publication:
+      stage === 'publish'
+        ? { platform: publishPlatform, feedback: publishFeedback[publishPlatform] }
+        : undefined,
   })
   const generate = (sceneId?: string, settings?: StagePayloads['storyboard']) => {
+    if (stage === 'publish' && draft.dirty) {
+      setError('请先保存或放弃当前发布资料的修改，再生成新版本。')
+      return Promise.resolve(false)
+    }
     if (sceneId && draft.dirty) {
       setError('单镜重绘基于已保存分镜，请先保存当前修改。')
       return Promise.resolve(false)
@@ -217,7 +228,7 @@ export function StageWorkspace({
         <Button
           size="sm"
           variant="ghost"
-          disabled={!unlocked || busy}
+          disabled={!unlocked || busy || Boolean(running) || (stage === 'publish' && draft.dirty)}
           onClick={() =>
             void run(
               () => workflowCall('exportTask', generationInput()),
@@ -236,7 +247,7 @@ export function StageWorkspace({
           导入结果
         </Button>
       </div>
-      {stage !== 'narration' && (
+      {!['narration', 'publish'].includes(stage) && (
         <Button
           size="sm"
           variant="secondary"
@@ -528,11 +539,21 @@ export function StageWorkspace({
                 )}
                 {stage === 'publish' && (
                   <PublishingPanel
-                    disabled={!unlocked || busy}
+                    disabled={!unlocked || busy || Boolean(running)}
                     project={project}
+                    platform={publishPlatform}
+                    onPlatform={setPublishPlatform}
+                    feedback={publishFeedback[publishPlatform]}
+                    onFeedback={(value) =>
+                      setPublishFeedback((current) => ({ ...current, [publishPlatform]: value }))
+                    }
+                    canGenerate={unlocked && !busy && !running && !draft.dirty && !draft.conflict}
+                    generating={running?.stage === 'publish'}
+                    dirty={draft.dirty}
+                    onGenerate={() => void generate()}
                     value={draft.payload as StagePayloads['publish']}
                     onChange={draft.update}
-                    approved={revision?.status === 'approved' && !draft.dirty}
+                    approved={revision?.status === 'approved' && !draft.dirty && !busy && !running}
                     run={(action, success) => {
                       void run(action, success)
                     }}
@@ -569,7 +590,7 @@ export function StageWorkspace({
                     ? 'HyperFrames'
                     : stage === 'audio'
                       ? '配音引擎 / 音频导入'
-                      : stage === 'brief' || stage === 'publish'
+                      : stage === 'brief'
                         ? '人工编辑'
                         : stage === 'storyboard' &&
                             (draft.payload as StagePayloads['storyboard']).mode === 'template'
@@ -611,7 +632,7 @@ export function StageWorkspace({
                 busy={busy}
                 onCancel={(id) => void run(() => workflowCall('cancel', id))}
               />
-              {['copy', 'storyboard', 'narration'].includes(stage) && generationControls}
+              {['copy', 'storyboard', 'narration', 'publish'].includes(stage) && generationControls}
               {stage === 'audio' && (
                 <fieldset disabled={!unlocked || busy} className="workflow-section">
                   {' '}

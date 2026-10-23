@@ -87,6 +87,10 @@
 
 `VIDEO-WORKFLOW-001` 反馈修正（2026-10-23）：截图与生产记录证实仅生成动效计划，尚未确认合成，播放器仍是已审核粗剪 v1。在现有预览中复用 `workflow-notice` 和 Button 说明计划未应用，并定位已有确认区域；计划自动展开，显示修改镜数。复用现有主题和信息顺序，不引入新组件库。补充受限镜间转场与真实重叠画面交接，保持人工确认、版本保留和审核门禁。验证见同一验证文档的转场回归章节。
 
+`VIDEO-WORKFLOW-001` 发布资料增量（2026-10-23 用户授权）：`StageWorkspace.tsx`、`MediaPanels.tsx`、`ExecutionLog.tsx` 复用现有 Button、Voice 字段、原生 details 与任务日志，增加当前平台 AI 生成/重新生成、可选修改要求与来源说明。平台→成片→资料及审核、底部保存位置不变，不引入新依赖/主题/图标。各次生成仅更新选定平台并创建待审核版本，失败/取消保留原资料。负责人及退出里程碑沿用本例外；验证见 [发布资料 AI 验证](video-workflow-publish-ai-verification.md)。
+
+`VIDEO-WORKFLOW-001` 列表控件修订（2026-10-23 用户截图授权）：仅调整 `WorkflowStudio.tsx`、`workflow.css` 的视频列表搜索框高度/圆角、筛选行居中和可见标签；归档视图/环境入口使用现有图标 Button，项目归档/恢复使用现有 Radix DropdownMenu，不引入库或全局主题改动。菜单保留归档门禁、错误反馈与恢复行为，可访问名称及按下状态完整。责任及退出里程碑沿用本例外；验证见 [列表控件验证](video-workflow-list-controls-verification.md)。
+
 - 令牌单源：执行 `npm run design:generate` 与 `npm run design:check`，生成物与源定义一致。
 - 组件：全部变体、hover/focus/pressed/disabled/loading/error；可选择控件的选中态及组合态。
 - 语义：label/id、accessible name、aria-busy/invalid、role、读屏顺序、焦点陷阱和返回。

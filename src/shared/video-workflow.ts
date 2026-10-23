@@ -131,6 +131,10 @@ export interface VideoStyleTemplate {
   cover: WorkflowFile
 }
 export type VideoPlatform = 'bilibili' | 'douyin'
+export interface PublicationGeneration {
+  platform: VideoPlatform
+  feedback?: string
+}
 export interface PlatformMetadata {
   title: string
   description: string

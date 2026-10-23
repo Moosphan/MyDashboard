@@ -3,7 +3,19 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from '@/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu'
 import {
   VIDEO_STAGES,
   VIDEO_STAGE_LABELS,
@@ -87,8 +99,17 @@ export function WorkflowStudio({
           : project.stages.render?.status === 'approved')),
   )
   const environment = (
-    <Button size="sm" variant="ghost" data-workflow-settings onClick={onSettings}>
-      执行环境
+    <Button
+      size="icon"
+      variant="ghost"
+      data-workflow-settings
+      aria-label="执行环境"
+      title="执行环境"
+      onClick={onSettings}
+    >
+      <span aria-hidden="true" className="material-symbols-outlined text-[20px]">
+        tune
+      </span>
     </Button>
   )
   if (state.loading)
@@ -279,18 +300,31 @@ export function WorkflowStudio({
                 placeholder="搜索项目名称…"
               />
             </div>
-            <VoiceSelect
-              label="项目状态"
-              value={filter}
-              onChange={setFilter}
-              options={[
-                { value: 'all', label: '全部状态' },
-                { value: 'review', label: '待审核' },
-                { value: 'complete', label: '已完成成片' },
-              ]}
-            />
-            <Button size="sm" variant="ghost" onClick={() => state.setArchived(!state.archived)}>
-              {state.archived ? '查看进行中项目' : '查看已归档'}
+            <Select value={filter} onValueChange={setFilter}>
+              <SelectTrigger
+                size="sm"
+                aria-label="项目状态"
+                className="workflow-project-status [&>span:last-child]:rotate-90"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="review">待审核</SelectItem>
+                <SelectItem value="complete">已完成成片</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              size="icon"
+              variant="ghost"
+              aria-label={state.archived ? '查看进行中项目' : '查看已归档'}
+              title={state.archived ? '查看进行中项目' : '查看已归档'}
+              aria-pressed={state.archived}
+              onClick={() => state.setArchived(!state.archived)}
+            >
+              <span aria-hidden="true" className="material-symbols-outlined text-[20px]">
+                {state.archived ? 'unarchive' : 'archive'}
+              </span>
             </Button>
             {environment}
           </div>
@@ -364,14 +398,39 @@ export function WorkflowStudio({
                         <Button size="sm" variant="secondary" onClick={() => open(project)}>
                           {project.archived ? '查看项目' : '继续创作'}
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy || project.jobs.some((job) => job.state === 'running')}
-                          onClick={() => void archive(project)}
-                        >
-                          {project.archived ? '恢复项目' : '归档'}
-                        </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              disabled={busy}
+                              aria-label={`更多操作：${project.title}`}
+                              title="更多操作"
+                            >
+                              <span
+                                aria-hidden="true"
+                                className="material-symbols-outlined text-[20px]"
+                              >
+                                more_horiz
+                              </span>
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              icon={project.archived ? 'unarchive' : 'archive'}
+                              disabled={busy || project.jobs.some((job) => job.state === 'running')}
+                              title={
+                                project.jobs.some((job) => job.state === 'running')
+                                  ? '请等待或取消正在执行的任务后再归档'
+                                  : undefined
+                              }
+                              className="data-[highlighted]:bg-surface-container-low data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed"
+                              onSelect={() => void archive(project)}
+                            >
+                              {project.archived ? '恢复项目' : '归档项目'}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </div>
                   </Card>

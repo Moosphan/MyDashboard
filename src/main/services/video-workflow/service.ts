@@ -18,6 +18,7 @@ import {
   type VideoPlatform,
   type WorkflowFile,
   validateMotionPlan,
+  type PublicationGeneration,
 } from '../../../shared/video-workflow'
 import type { VoiceoverService } from '../voiceover/voiceover-service'
 import { WorkflowFiles } from './files'
@@ -33,6 +34,7 @@ import { snapshotReference } from './references'
 import { createWorkflowAudio } from './audio'
 import { renderWorkflow } from './render'
 import { motionPrompt, motionScenes, prepareMotionScene } from './motion'
+import { publicationBase, publicationOptions, publicationPrompt } from './publish'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -45,6 +47,7 @@ export interface WorkflowGeneration {
   voice?: WorkflowVoice
   modification?: { feedback: string; at: number; sceneId?: string }
   motionPlanJobId?: string
+  publication?: PublicationGeneration
 }
 export class VideoWorkflowService {
   readonly repository: VideoWorkflowRepository
@@ -113,7 +116,9 @@ export class VideoWorkflowService {
     if (this.stopped) throw new Error('工作流正在退出')
     if (
       !input ||
-      !['copy', 'storyboard', 'narration', 'audio', 'roughcut', 'render'].includes(input.stage) ||
+      !['copy', 'storyboard', 'narration', 'audio', 'roughcut', 'render', 'publish'].includes(
+        input.stage,
+      ) ||
       !['codex', 'claude', 'template'].includes(input.executor)
     )
       throw new Error('未知生成任务')
@@ -125,6 +130,8 @@ export class VideoWorkflowService {
     const project = this.repository.get(input.projectId)
     if (project.revision !== input.expectedRevision) throw new Error('项目已更新，请刷新后重试')
     if (!stageUnlocked(project, input.stage)) throw new Error('请先审核通过所有前置步骤')
+    const publication =
+      input.stage === 'publish' ? publicationOptions(input.publication) : undefined
     await this.verifyInputs(project.id, input.stage)
     if ((input.modification || input.motionPlanJobId) && input.stage !== 'roughcut')
       throw new Error('修改计划仅用于粗剪')
@@ -211,6 +218,21 @@ export class VideoWorkflowService {
           controller.signal.throwIfAborted()
           this.repository.finishMotionPlan(job.id, plan)
           return
+        } else if (publication) {
+          phase(
+            `等待 ${input.executor === 'codex' ? 'Codex' : 'Claude Code'} 生成${publication.platform === 'bilibili' ? ' Bilibili ' : '抖音'}标题、简介和标签`,
+          )
+          const metadata = await runAgent(
+            input.executor as 'codex' | 'claude',
+            runtime,
+            cwd,
+            publicationPrompt(project, publication),
+            controller.signal,
+          )
+          phase('校验平台字数与标签，保存待审核版本')
+          payload = validatePayload('publish', {
+            platforms: { ...publicationBase(project).platforms, [publication.platform]: metadata },
+          })
         } else if (input.stage === 'audio') {
           payload = await createWorkflowAudio({
             project,
@@ -456,24 +478,34 @@ export class VideoWorkflowService {
     }
   }
   async exportTask(input: WorkflowGeneration, destination: string) {
-    if (!['copy', 'storyboard', 'narration'].includes(input.stage))
+    if (!['copy', 'storyboard', 'narration', 'publish'].includes(input.stage))
       throw new Error('该步骤不支持导出 CLI 任务')
     const project = this.repository.get(input.projectId)
     if (!stageUnlocked(project, input.stage) || project.revision !== input.expectedRevision)
       throw new Error('请先审核前置步骤并刷新项目')
     await this.verifyInputs(project.id, input.stage)
+    const publication =
+      input.stage === 'publish' ? publicationOptions(input.publication) : undefined
     const directory = join(destination, `video-task-${input.stage}-${randomUUID().slice(0, 8)}`)
     mkdirSync(directory, { recursive: true })
     writeFileSync(
       join(directory, 'task.md'),
-      agentPrompt(
-        project,
-        input.stage as 'copy' | 'storyboard' | 'narration',
-        input.settings ?? {},
-        '',
-        input.sceneId,
-      ) + '\n保存为 result.json，然后回到 MyDashboard 导入结果。',
+      (publication
+        ? publicationPrompt(project, publication) +
+          '\n将输出放入 result.example.json 对应平台的资料中，保留另一平台，保存完整结构到 result.json。'
+        : agentPrompt(
+            project,
+            input.stage as 'copy' | 'storyboard' | 'narration',
+            input.settings ?? {},
+            '',
+            input.sceneId,
+          )) + '\n保存为 result.json，然后回到 MyDashboard 导入结果。',
     )
+    if (publication)
+      writeFileSync(
+        join(directory, 'result.example.json'),
+        JSON.stringify(publicationBase(project), null, 2),
+      )
     writeFileSync(
       join(directory, 'approved-inputs.json'),
       JSON.stringify(

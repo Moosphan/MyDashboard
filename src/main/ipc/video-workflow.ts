@@ -5,6 +5,8 @@ import { getVoiceoverService } from '../services/tts-service'
 import { VideoWorkflowService, type WorkflowGeneration } from '../services/video-workflow/service'
 import type { VideoStage, VideoPlatform, WorkflowFile } from '../../shared/video-workflow'
 import { workflowMediaResponse } from '../services/video-workflow/media'
+import type { BilibiliPublishRequest } from '../../shared/bilibili-publishing'
+import { bilibiliVideoId } from '../services/video-workflow/catbus'
 
 let service: VideoWorkflowService | undefined
 let getWindow: () => BrowserWindow | null = () => null
@@ -194,6 +196,34 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
   handle('workflow:receipt', (projectId: string, id: string, url: string) =>
     getVideoWorkflow().repository.receipt(projectId, id, url),
   )
+  handle('workflow:bilibiliConnection', (refresh: boolean) =>
+    getVideoWorkflow().publishing.connection(refresh === true),
+  )
+  handle('workflow:bilibiliConnect', () => getVideoWorkflow().publishing.connect())
+  handle('workflow:bilibiliDisconnect', () => getVideoWorkflow().publishing.disconnect())
+  handle('workflow:bilibiliCategories', () => getVideoWorkflow().publishing.categories())
+  handle('workflow:bilibiliSubmissions', (projectId: string) =>
+    getVideoWorkflow().publishing.list(projectId),
+  )
+  handle('workflow:bilibiliPublish', (input: BilibiliPublishRequest) =>
+    getVideoWorkflow().publishing.start(input),
+  )
+  handle('workflow:bilibiliCancel', (projectId: string, id: string) =>
+    getVideoWorkflow().publishing.cancel(projectId, id),
+  )
+  handle('workflow:bilibiliRefresh', (projectId: string, id: string, bv?: string) =>
+    getVideoWorkflow().publishing.refresh(projectId, id, bv),
+  )
+  handle('workflow:bilibiliConfirmNotSubmitted', (projectId: string, id: string) =>
+    getVideoWorkflow().publishing.confirmNotSubmitted(projectId, id),
+  )
+  handle('workflow:bilibiliOpen', async (projectId: string, id: string) => {
+    const record = getVideoWorkflow()
+      .publishing.list(projectId)
+      .find((item) => item.id === id)
+    if (!record?.externalId) throw new Error('投稿记录尚未返回作品链接')
+    await shell.openExternal(`https://www.bilibili.com/video/${bilibiliVideoId(record.externalId)}`)
+  })
   handle('workflow:revealExport', (projectId: string, publicationId: string) => {
     const record = getVideoWorkflow()
       .repository.get(projectId)

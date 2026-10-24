@@ -32,6 +32,8 @@
     "test:voiceover": "electron scripts/run-voiceover-test.cjs",
     "test:voice-runtime": "python3 -B scripts/test-voice-runtime.py",
     "test:video-workflow": "electron scripts/run-video-workflow-test.cjs",
+    "test:bilibili-publishing": "electron scripts/run-bilibili-publishing-test.cjs",
+    "test:bilibili-publishing:ui": "pnpm build && electron scripts/test-bilibili-publishing-ui.cjs",
     "test:video-workflow:ui": "pnpm build && electron scripts/test-video-workflow-ui.cjs",
     "test:video-workflow:render": "electron scripts/smoke-video-workflow.cjs",
     "test:projects": "electron scripts/run-project-focus-test.cjs",

@@ -26,6 +26,7 @@ import { ipcInvoke } from '@/lib/ipc'
 import { mediaUrl, workflowCall } from './useWorkflow'
 import { ScenePreview } from './StoryboardEditor'
 import { AudioTrackPlayer } from './AudioTrackPlayer'
+import { BilibiliPublishingPanel } from './BilibiliPublishingPanel'
 import { RenderActions } from './RenderActions'
 import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
 
@@ -682,7 +683,7 @@ export function PublishingPanel({
         </div>
       )}
       <p className="workflow-muted">
-        两平台发布同一份横版成片。先审核发布信息，再导出对应平台发布包；上传成功后回填链接。
+        两平台使用同一份横版成片。审核发布信息后，B 站可一键投稿，也可导出发布包后上传并回填链接。
       </p>
       <div className="workflow-section">
         {[platform].map((platform) => {
@@ -766,6 +767,15 @@ export function PublishingPanel({
                     })
                   }
                 />
+                {platform === 'bilibili' && (
+                  <BilibiliPublishingPanel
+                    key={project.id}
+                    project={project}
+                    approved={approved}
+                    disabled={disabled}
+                    dirty={dirty}
+                  />
+                )}
                 <Button
                   size="sm"
                   variant="secondary"

@@ -228,6 +228,7 @@ export interface VideoProject {
 }
 export interface WorkflowRuntime {
   nodePath: string
+  catbusPath?: string
   codexPath: string
   claudePath: string
   hyperframesPath: string

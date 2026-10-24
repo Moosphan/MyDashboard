@@ -985,6 +985,24 @@ const migrations: Migration[] = [
       db.exec('ALTER TABLE video_workflow_jobs ADD COLUMN operation TEXT')
     },
   },
+  {
+    version: 38,
+    name: '038_bilibili_submissions',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE video_bilibili_submissions (
+          id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES video_projects(id),
+          request_id TEXT NOT NULL UNIQUE, request_fingerprint TEXT NOT NULL,
+          intent_key TEXT NOT NULL, state TEXT NOT NULL, record TEXT NOT NULL
+        );
+        CREATE INDEX idx_bilibili_project ON video_bilibili_submissions(project_id);
+        CREATE UNIQUE INDEX idx_bilibili_intent ON video_bilibili_submissions(intent_key)
+          WHERE state IN ('queued','uploading','submitting','reviewing','published','private','rejected','unknown','risk_control');
+        CREATE UNIQUE INDEX idx_bilibili_active ON video_bilibili_submissions((1))
+          WHERE state IN ('queued','uploading','submitting');
+      `)
+    },
+  },
 ]
 
 export function runMigrations(db: Database.Database): void {

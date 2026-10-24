@@ -32,7 +32,8 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
     }
   }
   const labels: Record<keyof WorkflowRuntime, string> = {
-    nodePath: 'Node.js（22 或更新）',
+    nodePath: 'Node.js（Catbus 需 22.22.2+ / 24.15+ / 26+）',
+    catbusPath: 'Catbus CLI 0.2.1（可执行文件或 dist/cli/main.js）',
     codexPath: 'Codex CLI',
     claudePath: 'Claude Code CLI',
     hyperframesPath: 'HyperFrames 0.8.181（可执行文件或 bin/hyperframes.mjs）',
@@ -75,7 +76,7 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
                 <VoiceInput
                   key={key}
                   label={label}
-                  value={runtime[key as keyof WorkflowRuntime]}
+                  value={runtime[key as keyof WorkflowRuntime] ?? ''}
                   onChange={(event) => setRuntime({ ...runtime, [key]: event.target.value })}
                   placeholder="/absolute/path/to/executable"
                 />

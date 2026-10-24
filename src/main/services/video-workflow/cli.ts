@@ -10,6 +10,7 @@ import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
 import type { WorkflowRuntime } from '../../../shared/video-workflow'
 import { workflowCommand } from './process'
+import { BilibiliCatbus } from './catbus'
 
 function findExecutable(name: string) {
   const versions = join(homedir(), '.nvm', 'versions', 'node')
@@ -35,6 +36,7 @@ export class WorkflowRuntimeManager {
   get(): WorkflowRuntime {
     const defaults: WorkflowRuntime = {
       nodePath: findExecutable('node'),
+      catbusPath: findExecutable('catbus'),
       codexPath: findExecutable('codex'),
       claudePath: findExecutable('claude'),
       hyperframesPath: findExecutable('hyperframes'),
@@ -70,7 +72,7 @@ export class WorkflowRuntimeManager {
   }
   async check(cwd: string) {
     const config = this.get()
-    const checks = await Promise.all(
+    const checks: { key: keyof WorkflowRuntime; ok: boolean; detail: string }[] = await Promise.all(
       (
         [
           'nodePath',
@@ -96,6 +98,12 @@ export class WorkflowRuntimeManager {
         }
       }),
     )
+    try {
+      await new BilibiliCatbus(cwd, config).check()
+      checks.push({ key: 'catbusPath', ok: true, detail: 'Catbus 0.2.1 · Node 版本兼容' })
+    } catch (error) {
+      checks.push({ key: 'catbusPath', ok: false, detail: (error as Error).message })
+    }
     return checks
   }
 }

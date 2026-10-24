@@ -71,6 +71,8 @@
 
 ### VIDEO-WORKFLOW-001：视频创作工作流（2026-10-22）
 
+- B 站一键发布（2026-10-24 用户授权）：`BilibiliPublishingPanel.tsx`、`MediaPanels.tsx`、`WorkflowSettings.tsx` 复用当前 Button、VoiceInput/VoiceSelect、Radix WorkflowDialog、主题及既有信息顺序，加入账号扫码、显式投稿设置、投稿记录与核查。无新增 UI 依赖、样式、图标或主布局变更；保留原审核/手工导出/抖音。负责人为项目维护者，退出里程碑沿用工作流 HeroUI 生产迁移。验证见 [B 站发布验证](video-workflow-bilibili-publishing-verification.md)。
+
 - 粗剪动画修改与分镜定位（2026-10-24 用户授权）：`MediaPanels.tsx` 使用统一的实测分镜时间轴与视频帧定位，修复跳回上一镜；`RenderActions.tsx` 沿用原说明位置解释可修改的动画范围及预览来源。继续使用已批准的 React 18/Radix、原生播放器、主题与分栏，不新增控件、样式、图标或依赖。负责人和 HeroUI 迁移退出里程碑沿用本例外。验证见 [粗剪动画修改与分镜定位验证](video-workflow-motion-seek-verification.md)。
 
 - 取消计划并沿用原视频（2026-10-24 用户纠偏）：移除误加的“不加 MG”合成按钮，仅由 `RenderActions.tsx` 原修改区域的“取消修改计划”恢复原粗剪的审核入口。`StageWorkspace.tsx` 沿用原审核按钮和弹窗，说明保留原画面、声音、字幕与时长；`ExecutionLog.tsx` 记录沿用原视频、未重新合成。沿用本分支 React 18/Radix、原主题、分栏与审核位置，不新增依赖、样式或图标。负责人及 HeroUI 生产迁移退出里程碑沿用本例外。验证见 [取消计划与沿用原视频验证](video-workflow-cancel-plan-retain-verification.md)。

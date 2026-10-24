@@ -38,7 +38,8 @@ import {
 import { mediaRange, workflowMediaResponse } from '../src/main/services/video-workflow/media'
 import { VideoWorkflowService } from '../src/main/services/video-workflow/service'
 import { VoiceoverService } from '../src/main/services/voiceover/voiceover-service'
-import { createWorkflowAudio } from '../src/main/services/video-workflow/audio'
+import { resolveVoiceRequest } from '../src/shared/voiceover'
+import { createWorkflowAudio, workflowVoiceSeed } from '../src/main/services/video-workflow/audio'
 import {
   defaultMotion,
   mergeMotion,
@@ -118,6 +119,31 @@ test('motion plans accept only finite scene-local declarative animations', () =>
         [{ id: 'one', duration: 2 }],
       ),
     )
+  }
+})
+
+test('compiled compositions declare scene-local fonts without changing their typography', () => {
+  const { db, state } = visualFixture()
+  try {
+    const markup = ['<div style="font-family: \'Songti SC\', serif">宋体标题</div>', '<p>正文</p>']
+    const html = hyperframesDocument(state, markup, defaultMotion(state), [
+      'Songti SC',
+      'songti sc',
+      'Georgia',
+      'serif',
+      'system-ui',
+    ])
+    assert.match(html, /@font-face\{font-family:"Songti SC";src:local\("Songti SC"\)\}/)
+    assert.match(html, /@font-face\{font-family:"Georgia";src:local\("Georgia"\)\}/)
+    assert.equal((html.match(/@font-face\{font-family:"Songti SC"/g) ?? []).length, 1)
+    assert.doesNotMatch(html, /@font-face\{font-family:"(?:serif|system-ui)"/)
+    assert.ok(html.includes(markup[0]))
+    const escaped = hyperframesDocument(state, markup, defaultMotion(state), [
+      '</style><script>alert(1)</script>',
+    ])
+    assert.equal((escaped.match(/<script>/g) ?? []).length, 1)
+  } finally {
+    db.close()
   }
 })
 
@@ -588,6 +614,331 @@ test('audio publishes durable playable segments before later segments fail or ar
   }
 })
 
+test('workflow cloning derives stable per-segment seeds and keeps voice configuration frozen', async () => {
+  for (const engine of ['qwen3-tts', 'voxcpm2'] as const) {
+    for (const seed of [undefined, 0, 42]) {
+      const { db, repository, project } = fixture()
+      const root = mkdtempSync(join(tmpdir(), 'workflow-frozen-voice-'))
+      const service = new VoiceoverService(root, db, join(root, 'worker.py'))
+      const files = new WorkflowFiles(root, repository)
+      const runtime = new WorkflowRuntimeManager(root).get()
+      const voice = {
+        engine,
+        profileId: 'original-profile',
+        profileRevision: 1,
+        options: seed === undefined ? {} : { seed },
+      }
+      const captured: ReturnType<typeof resolveVoiceRequest>[] = []
+      service.runtime.check = async () => service.runtime.get()
+      try {
+        const source = join(root, 'source.wav')
+        await workflowCommand(
+          runtime.ffmpegPath,
+          ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.1', source],
+          { cwd: root, timeout: 10000 },
+        )
+        const assetId = Number(
+          db
+            .prepare(
+              "INSERT INTO video_assets (title,type,file_path) VALUES ('fixture','audio','source.wav')",
+            )
+            .run().lastInsertRowid,
+        )
+        service.create = async (input) => {
+          const request = resolveVoiceRequest(input)
+          captured.push(request)
+          return {
+            ...service.repository.createJob(request),
+            state: 'succeeded',
+            assetId,
+          }
+        }
+        const state = {
+          ...project,
+          stages: {
+            narration: {
+              id: 'narration',
+              stage: 'narration' as const,
+              version: 1,
+              payload: {
+                scenes: [
+                  { id: 'one', text: '这是需要分成多段生成的口播。'.repeat(30) },
+                  { id: 'two', text: '第二镜也要沿用相同音色参数。' },
+                ],
+              },
+              dependencies: '',
+              status: 'approved' as const,
+              createdAt: '',
+              approvedAt: '',
+              note: '',
+            },
+          },
+        }
+        const result = await createWorkflowAudio({
+          project: state,
+          job: {
+            id: randomUUID(),
+            projectId: project.id,
+            stage: 'audio',
+            expectedRevision: project.revision,
+            requestId: randomUUID(),
+            executor: 'template',
+            state: 'running',
+            phase: '',
+            error: null,
+            createdAt: '',
+            updatedAt: '',
+          },
+          voice,
+          service,
+          files,
+          runtime,
+          cwd: join(root, 'job'),
+          signal: new AbortController().signal,
+          phase: () => {},
+          progress: () => {
+            voice.profileId = 'edited-during-generation'
+            voice.profileRevision = 2
+            voice.options.seed = 99
+          },
+        })
+        assert.ok(captured.length >= 3, 'covers both chunk and scene boundaries')
+        assert.equal(
+          new Set(captured.map((request) => request.options.seed)).size,
+          captured.length,
+        )
+        assert.ok(captured.every((request) => Number.isInteger(request.options.seed)))
+        assert.ok(captured.every((request) => request.profileId === 'original-profile'))
+        assert.ok(captured.every((request) => request.profileRevision === 1))
+        assert.equal(captured[0].options.seed, workflowVoiceSeed(seed ?? 42, 0, captured[0].text))
+        assert.equal(
+          captured.at(-1)!.options.seed,
+          workflowVoiceSeed(seed ?? 42, captured.length - 1, captured.at(-1)!.text),
+        )
+        assert.equal(result.voice?.options.seed, seed ?? 42)
+        assert.equal(result.voice?.profileId, 'original-profile')
+        assert.notEqual(result.voice?.options, voice.options)
+      } finally {
+        await service.dispose()
+        db.close()
+        rmSync(root, { recursive: true, force: true })
+      }
+    }
+  }
+})
+
+test('single-track regeneration replaces only the selected chunk and preserves the previous version on failure', async () => {
+  for (const outcome of ['succeeded', 'failed', 'cancelled'] as const) {
+    const { db, repository, state: initial, render } = visualFixture()
+    const root = mkdtempSync(join(tmpdir(), 'workflow-single-track-'))
+    const voiceover = new VoiceoverService(root, db, join(root, 'worker.py'))
+    const service = new VideoWorkflowService(root, db, () => voiceover)
+    const runtime = service.runtime.get()
+    const captured: ReturnType<typeof resolveVoiceRequest>[] = []
+    voiceover.runtime.check = async () => voiceover.runtime.get()
+    try {
+      const source = join(root, 'source.wav')
+      const replacement = join(root, 'replacement.wav')
+      for (const [path, duration] of [
+        [source, 0.15],
+        [replacement, 0.35],
+      ] as const) {
+        await workflowCommand(
+          runtime.ffmpegPath,
+          [
+            '-v',
+            'error',
+            '-f',
+            'lavfi',
+            '-i',
+            `sine=frequency=440:duration=${duration}`,
+            '-ar',
+            '48000',
+            path,
+          ],
+          { cwd: root, timeout: 10000 },
+        )
+      }
+      const tracks = await Promise.all(
+        ['第一镜上半句。', '第一镜下半句。', '第二镜口播。'].map(async (text, index) => ({
+          sceneId: index < 2 ? 'one' : 'two',
+          text,
+          duration: 0.15,
+          file: await service.files.import(initial.id, source),
+        })),
+      )
+      let state = repository.save(
+        initial.id,
+        'audio',
+        {
+          tracks,
+          file: await service.files.import(initial.id, source),
+          subtitles: await service.files.write(initial.id, 'original subtitles', '.srt'),
+          duration: 0.45,
+        },
+        initial.revision,
+        randomUUID(),
+      )
+      state = repository.approve(
+        state.id,
+        'audio',
+        state.stages.audio!.id,
+        state.revision,
+        randomUUID(),
+      )
+      state = repository.save(state.id, 'roughcut', render, state.revision, randomUUID())
+      state = repository.approve(
+        state.id,
+        'roughcut',
+        state.stages.roughcut!.id,
+        state.revision,
+        randomUUID(),
+      )
+      const originalRevision = state.stages.audio!.id
+      const originalAudio = state.stages.audio!.payload
+      const assetId = Number(
+        db
+          .prepare(
+            "INSERT INTO video_assets (title,type,file_path) VALUES ('replacement','audio','replacement.wav')",
+          )
+          .run().lastInsertRowid,
+      )
+      voiceover.create = async (input) => {
+        const request = resolveVoiceRequest(input)
+        captured.push(request)
+        if (outcome === 'failed') throw new Error('fixture generation failure')
+        const job = voiceover.repository.createJob(request)
+        return outcome === 'cancelled' ? job : { ...job, state: 'succeeded', assetId }
+      }
+      const request = {
+        projectId: state.id,
+        stage: 'audio' as const,
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+        executor: 'template' as const,
+        audioTrackId: tracks[1].file.id,
+        voice: {
+          engine: 'voxcpm2' as const,
+          profileId: 'frozen-profile',
+          profileRevision: 1,
+          options: { seed: 7, promptPauseMs: 500 },
+        },
+      }
+      await assert.rejects(service.generate({ ...request, audioTrackId: 'missing' }), /有效片段/)
+      await assert.rejects(
+        service.generate({ ...request, stage: 'copy', executor: 'codex' }),
+        /配音阶段/,
+      )
+      await assert.rejects(service.generate(request, [source]), /有效片段/)
+      const job = await service.generate(request)
+      if (outcome !== 'failed')
+        await assert.rejects(service.generate({ ...request, requestId: randomUUID() }), /运行/)
+      if (outcome === 'cancelled') {
+        for (let attempt = 0; attempt < 100 && !captured.length; attempt++)
+          await new Promise((resolve) => setTimeout(resolve, 10))
+        await service.cancel(job.id)
+      }
+      for (let attempt = 0; attempt < 150 && repository.job(job.id)?.state === 'running'; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      assert.equal(repository.job(job.id)?.state, outcome)
+      state = repository.get(state.id)
+      assert.equal(captured.length, 1, 'only the selected chunk calls the voice engine')
+      assert.equal(captured[0].text, tracks[1].text)
+      assert.equal(captured[0].options.seed, workflowVoiceSeed(7, 1, tracks[1].text, job.id))
+      assert.equal(captured[0].options.promptPauseMs, 500)
+      if (outcome !== 'succeeded') {
+        assert.equal(state.stages.audio!.id, originalRevision)
+        assert.deepEqual(state.stages.audio!.payload, originalAudio)
+        assert.equal(state.stages.roughcut!.status, 'approved')
+      } else {
+        const audio = stageValue(state, 'audio')!
+        assert.notEqual(state.stages.audio!.id, originalRevision)
+        assert.equal(state.stages.audio!.status, 'review')
+        assert.equal(state.stages.roughcut!.status, 'stale')
+        assert.deepEqual(audio.tracks[0], tracks[0])
+        assert.deepEqual(audio.tracks[2], tracks[2])
+        assert.notEqual(audio.tracks[1].file.id, tracks[1].file.id)
+        assert.equal(audio.tracks[1].sceneId, 'one')
+        assert.equal(audio.tracks[1].text, tracks[1].text)
+        assert.ok(Math.abs(audio.duration - 0.65) < 0.01)
+        assert.ok(Math.abs(audio.tracks[1].duration - 0.35) < 0.01)
+        assert.ok(service.files.text(audio.subtitles).includes('00:00:00,500'))
+        assert.ok(state.history.some((revision) => revision.id === originalRevision))
+      }
+    } finally {
+      await service.dispose()
+      await voiceover.dispose()
+      db.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('audio history lists timestamped versions and safely restores a matching previous version', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-audio-history-'))
+  const voiceover = new VoiceoverService(root, db, join(root, 'worker.py'))
+  const service = new VideoWorkflowService(root, db, () => voiceover)
+  try {
+    const runtime = service.runtime.get()
+    const sourceA = join(root, 'audio-a.wav')
+    const sourceB = join(root, 'audio-b.wav')
+    for (const [path, frequency] of [
+      [sourceA, 440],
+      [sourceB, 660],
+    ] as const) {
+      await workflowCommand(
+        runtime.ffmpegPath,
+        ['-v', 'error', '-f', 'lavfi', '-i', `sine=frequency=${frequency}:duration=0.2`, path],
+        { cwd: root, timeout: 10000 },
+      )
+    }
+    const fileA = await service.files.import(initial.id, sourceA)
+    const fileB = await service.files.import(initial.id, sourceB)
+    const first = stageValue(initial, 'audio')!
+    let state = repository.save(
+      initial.id,
+      'audio',
+      { ...first, file: fileA, subtitles: fileA, tracks: first.tracks.map((track) => ({ ...track, file: fileA })) },
+      initial.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'audio',
+      state.stages.audio!.id,
+      state.revision,
+      randomUUID(),
+    )
+    const previousId = state.stages.audio!.id
+    const previousPayload = state.stages.audio!.payload
+    state = repository.save(
+      state.id,
+      'audio',
+      { ...previousPayload, file: fileB, subtitles: fileB, tracks: previousPayload.tracks.map((track) => ({ ...track, file: fileB })) },
+      state.revision,
+      randomUUID(),
+    )
+    assert.equal(state.stages.audio!.version, 3)
+    const restored = await service.restoreAudioVersion(
+      state.id,
+      previousId,
+      state.revision,
+      randomUUID(),
+    )
+    assert.equal(restored.stages.audio!.version, 4)
+    assert.equal(restored.stages.audio!.status, 'review')
+    assert.deepEqual(restored.stages.audio!.payload, previousPayload)
+    assert.ok(restored.history.find((revision) => revision.id === previousId)?.createdAt)
+    assert.equal(restored.stages.audio!.note, `从分段配音 v2 切换`)
+  } finally {
+    await service.dispose()
+    await voiceover.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('workflow clone audio checks the cold local runtime before creating voice jobs', async () => {
   const { db, repository, project } = fixture()
   const root = mkdtempSync(join(tmpdir(), 'workflow-cold-voice-'))
@@ -653,6 +1004,121 @@ test('workflow clone audio checks the cold local runtime before creating voice j
     )
   } finally {
     await workflow.dispose()
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('AI copy uses approved brief and revision feedback, preserves history and retains text on failure or cancel', async () => {
+  const { db, repository, project } = fixture()
+  const root = mkdtempSync(join(tmpdir(), 'video-copy-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('Copy generation must not invoke voice synthesis')
+  })
+  try {
+    let state = repository.save(
+      project.id,
+      'brief',
+      {
+        text: '讲清人工审核流程',
+        audience: '开发者',
+        duration: 120,
+        references: '已核实的项目文档',
+      },
+      project.revision,
+      randomUUID(),
+    )
+    const input = () => ({
+      projectId: state.id,
+      stage: 'copy' as const,
+      executor: 'codex' as const,
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+      copyFeedback: '保留核心观点，开头先讲一个具体案例',
+    })
+    await assert.rejects(service.generate(input()), /审核/)
+    state = repository.approve(
+      state.id,
+      'brief',
+      state.stages.brief!.id,
+      state.revision,
+      randomUUID(),
+    )
+    const script = join(root, 'fake-codex')
+    const capture = join(root, 'prompt.txt')
+    const response = join(root, 'response.json')
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);setTimeout(()=>fs.copyFileSync(${JSON.stringify(response)},process.argv[process.argv.indexOf('--output-last-message')+1]),200);});\n`,
+    )
+    chmodSync(script, 0o755)
+    service.runtime.set({ codexPath: script })
+    const wait = async (id: string) => {
+      for (let attempt = 0; attempt < 100 && repository.job(id)?.state === 'running'; attempt++)
+        await new Promise((resolve) => setTimeout(resolve, 30))
+      return repository.job(id)!
+    }
+    writeFileSync(response, JSON.stringify({ text: '# 初稿\n先审核，再推进。' }))
+    const first = await service.generate(input())
+    assert.equal((await wait(first.id)).state, 'succeeded')
+    for (const phrase of ['讲清人工审核流程', '开发者', '已核实的项目文档', '开头先讲一个具体案例'])
+      assert.ok(readFileSync(capture, 'utf8').includes(phrase), phrase)
+    state = repository.get(state.id)
+    assert.equal(state.stages.copy!.status, 'review')
+    assert.equal(state.stages.storyboard, undefined)
+    const original = state.stages.copy!.id
+    state = repository.approve(state.id, 'copy', original, state.revision, randomUUID())
+    state = repository.save(
+      state.id,
+      'storyboard',
+      {
+        mode: 'template',
+        template: 'technical',
+        scenes: [{ id: 'one', title: '审核', body: '逐步确认', layout: 'title' }],
+      },
+      state.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'storyboard',
+      state.stages.storyboard!.id,
+      state.revision,
+      randomUUID(),
+    )
+    writeFileSync(response, JSON.stringify({ text: '# 修改稿\n从一次审核案例说起。' }))
+    const second = await service.generate(input())
+    assert.equal((await wait(second.id)).state, 'succeeded')
+    assert.ok(readFileSync(capture, 'utf8').includes('# 初稿'))
+    state = repository.get(state.id)
+    assert.equal(state.stages.copy!.version, 2)
+    assert.equal(state.stages.copy!.status, 'review')
+    assert.equal(state.stages.storyboard!.status, 'stale')
+    assert.ok(state.history.some((item) => item.id === original))
+    const current = state.stages.copy!.id
+    const exported = await service.exportTask(input(), root)
+    for (const phrase of ['开头先讲一个具体案例', '# 修改稿'])
+      assert.ok(readFileSync(join(exported, 'task.md'), 'utf8').includes(phrase), phrase)
+    for (const invalid of ['长'.repeat(5001), 123]) {
+      await assert.rejects(
+        service.generate(Object.assign(input(), { copyFeedback: invalid })),
+        /5000|文本/,
+      )
+      await assert.rejects(
+        service.exportTask(Object.assign(input(), { copyFeedback: invalid }), root),
+        /5000|文本/,
+      )
+    }
+    writeFileSync(response, JSON.stringify({ text: '' }))
+    const failed = await service.generate(input())
+    assert.equal((await wait(failed.id)).state, 'failed')
+    assert.equal(repository.get(state.id).stages.copy!.id, current)
+    const cancelled = await service.generate(input())
+    await service.cancel(cancelled.id)
+    assert.equal(repository.job(cancelled.id)!.state, 'cancelled')
+    assert.equal(repository.get(state.id).stages.copy!.id, current)
+  } finally {
     await service.dispose()
     db.close()
     rmSync(root, { recursive: true, force: true })

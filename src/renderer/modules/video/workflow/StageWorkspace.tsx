@@ -26,7 +26,7 @@ import { ExecutionLog } from './ExecutionLog'
 
 const stageDescriptions: Record<VideoStage, string> = {
   brief: '定义主题、目标观众、核心观点与目标时长。',
-  copy: '围绕已确认简报组织内容，审核事实、结构与信息密度。',
+  copy: '在工作台内生成文案，填写修改建议反复打磨，确认后再进入分镜。',
   storyboard: '先看清每一镜，再确认统一视觉与叙事节奏。',
   narration: '结合已审核文案与分镜生成逐镜口播，编辑确认后再进入配音。',
   audio: '逐镜生成或导入配音，试听并确认字幕与真实时长。',
@@ -61,6 +61,7 @@ export function StageWorkspace({
     [impact, setImpact] = useState(false),
     [activeScene, setActiveScene] = useState(0)
   const [executor, setExecutor] = useState('codex')
+  const [copyFeedback, setCopyFeedback] = useState('')
   const [publishPlatform, setPublishPlatform] = useState<VideoPlatform>('bilibili')
   const [publishFeedback, setPublishFeedback] = useState({ bilibili: '', douyin: '' })
   const [voice, setVoice] = useState<WorkflowVoice>(
@@ -143,12 +144,17 @@ export function StageWorkspace({
     settings: stage === 'storyboard' ? (settings ?? draft.payload) : undefined,
     sceneId,
     voice,
+    copyFeedback: stage === 'copy' ? copyFeedback : undefined,
     publication:
       stage === 'publish'
         ? { platform: publishPlatform, feedback: publishFeedback[publishPlatform] }
         : undefined,
   })
   const generate = (sceneId?: string, settings?: StagePayloads['storyboard']) => {
+    if (stage === 'copy' && draft.dirty) {
+      setError('请先保存或放弃当前文案的修改，再生成新版本。')
+      return Promise.resolve(false)
+    }
     if (stage === 'publish' && draft.dirty) {
       setError('请先保存或放弃当前发布资料的修改，再生成新版本。')
       return Promise.resolve(false)
@@ -228,7 +234,12 @@ export function StageWorkspace({
         <Button
           size="sm"
           variant="ghost"
-          disabled={!unlocked || busy || Boolean(running) || (stage === 'publish' && draft.dirty)}
+          disabled={
+            !unlocked ||
+            busy ||
+            Boolean(running) ||
+            (['copy', 'publish'].includes(stage) && draft.dirty)
+          }
           onClick={() =>
             void run(
               () => workflowCall('exportTask', generationInput()),
@@ -247,7 +258,7 @@ export function StageWorkspace({
           导入结果
         </Button>
       </div>
-      {!['narration', 'publish'].includes(stage) && (
+      {!['copy', 'narration', 'publish'].includes(stage) && (
         <Button
           size="sm"
           variant="secondary"
@@ -306,7 +317,7 @@ export function StageWorkspace({
           <Card className="workflow-artifact-card">
             <div className="workflow-section">
               {stage !== 'storyboard' && (
-                <div className="workflow-stage-heading">
+                <div className={`workflow-stage-heading${stage === 'copy' ? ' flex-wrap' : ''}`}>
                   <div>
                     <h3 className="workflow-section-title">
                       {stage === 'brief'
@@ -325,6 +336,25 @@ export function StageWorkspace({
                     </h3>
                     <p className="workflow-muted mt-2">{stageDescriptions[stage]}</p>
                   </div>
+                  {stage === 'copy' && (
+                    <Button
+                      size="sm"
+                      data-copy-generate
+                      disabled={
+                        !unlocked || busy || Boolean(running) || draft.dirty || draft.conflict
+                      }
+                      onClick={() => generate()}
+                    >
+                      {running?.stage === 'copy' && (
+                        <span className="workflow-job-spinner" aria-hidden="true" />
+                      )}
+                      {running?.stage === 'copy'
+                        ? 'AI 正在生成文案…'
+                        : revision
+                          ? 'AI 重新生成文案'
+                          : 'AI 生成文案'}
+                    </Button>
+                  )}
                   {stage === 'narration' && (
                     <Button
                       size="sm"
@@ -416,12 +446,37 @@ export function StageWorkspace({
                 )}
                 {stage === 'copy' && (
                   <>
+                    <p className="workflow-muted" data-copy-sources>
+                      生成依据：创作简报 v{project.stages.brief?.version ?? '—'} · 目标{' '}
+                      {stageValue(project, 'brief')?.duration ?? '—'} 秒 ·{' '}
+                      {executor === 'codex' ? 'Codex CLI' : 'Claude Code CLI'}
+                    </p>
+                    <VoiceTextArea
+                      label="文案创作要求 / 修改建议（选填）"
+                      rows={3}
+                      maxLength={5000}
+                      disabled={!unlocked || busy || Boolean(running)}
+                      value={copyFeedback}
+                      onChange={(event) => setCopyFeedback(event.target.value)}
+                      placeholder="例如：以具体案例开场，减少术语；保留核心观点，把第二部分解释得更简洁。"
+                    />
+                    <p className="workflow-muted" role="status" data-copy-status>
+                      {running?.stage === 'copy'
+                        ? '正在生成文案，进度见右侧执行记录；成功前保留原文，可在执行记录中取消。'
+                        : !unlocked
+                          ? '请先审核通过创作简报，再生成文案。'
+                          : draft.dirty
+                            ? '请先保存或放弃未保存修改，再让 AI 生成新版本。'
+                            : '点击上方按钮直接生成，无需离开工作台；已有文案时结合已保存版本和修改建议生成，完成后需人工审核。'}
+                    </p>
                     <VoiceTextArea
                       label="视频内容文案"
+                      data-copy-text
+                      disabled={busy || Boolean(running)}
                       rows={15}
                       value={(draft.payload as StagePayloads['copy']).text}
                       onChange={(event) => draft.update({ text: event.target.value })}
-                      placeholder="可直接撰写、导入 Markdown，或交给 Agent 生成。"
+                      placeholder="点击上方「AI 生成文案」开始，也可以直接撰写或编辑生成结果。"
                     />
                     <p className="workflow-muted">
                       审核检查：核心观点明确 · 事实有出处 · 适合 5 分钟以内表达。
@@ -523,7 +578,29 @@ export function StageWorkspace({
                       voice={voice}
                       onVoice={setVoice}
                       onConfigure={onVoiceover}
-                      disabled={busy}
+                      disabled={busy || Boolean(running) || !unlocked}
+                      onRegenerate={(audioTrackId) =>
+                        void run(async () => {
+                          const job = await workflowCall<WorkflowJob>('generate', {
+                            ...generationInput(),
+                            audioTrackId,
+                          })
+                          setPending({ id: job.id, payload: draft.payload })
+                        })
+                      }
+                      onRestoreVersion={(revisionId) =>
+                        void run(async () => {
+                          const result = await workflowCall<VideoProject>(
+                            'restoreAudioVersion',
+                            project.id,
+                            revisionId,
+                            project.revision,
+                            crypto.randomUUID(),
+                          )
+                          draft.reset(result)
+                          onProject(result)
+                        }, '已切换分段配音版本，等待审核')
+                      }
                     />
                   </>
                 )}

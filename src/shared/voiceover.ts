@@ -17,6 +17,7 @@ export interface VoiceOptions {
   seed?: number
   gainDb?: number
   denoise?: boolean
+  promptPauseMs?: number
 }
 
 export interface VoiceRequest {
@@ -112,7 +113,7 @@ export function resolveVoiceRequest(value: unknown): VoiceRequest {
   const options = input.options ?? {}
   if (typeof options !== 'object' || Array.isArray(options)) throw new Error('INVALID_OPTIONS: 无效参数')
   const raw = options as Record<string, unknown>
-  const allowed = input.engine === 'edge' ? ['rate', 'pitchHz', 'volume'] : input.engine === 'voxcpm2' ? ['steps', 'cfg', 'seed', 'gainDb', 'denoise'] : ['temperature', 'language', 'seed', 'gainDb', 'denoise']
+  const allowed = input.engine === 'edge' ? ['rate', 'pitchHz', 'volume'] : input.engine === 'voxcpm2' ? ['steps', 'cfg', 'seed', 'gainDb', 'denoise', 'promptPauseMs'] : ['temperature', 'language', 'seed', 'gainDb', 'denoise']
   if (Object.keys(raw).some(key => !allowed.includes(key))) throw new Error('INVALID_OPTIONS: 引擎不支持这些参数')
   const number = (key: string, fallback: number, minimum: number, maximum: number) => {
     const result = raw[key] ?? fallback
@@ -135,7 +136,7 @@ export function resolveVoiceRequest(value: unknown): VoiceRequest {
     if (input.engine === 'voxcpm2') {
       const steps = number('steps', 20, 10, 20)
       if (steps !== 10 && steps !== 20) throw new Error('INVALID_OPTIONS: 扩散步数仅支持 10 / 20')
-      request.options = { ...request.options, steps, cfg: number('cfg', 2, 1, 3) }
+      request.options = { ...request.options, steps, cfg: number('cfg', 2, 1, 3), promptPauseMs: number('promptPauseMs', 320, 0, 1000) }
     } else {
       if (raw.language !== undefined && raw.language !== 'zh' && raw.language !== 'en') throw new Error('INVALID_OPTIONS: 不支持该语言')
       request.options = { ...request.options, language: raw.language === 'en' ? 'en' : 'zh', temperature: number('temperature', 0.7, 0.1, 1) }

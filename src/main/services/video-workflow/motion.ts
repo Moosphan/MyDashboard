@@ -108,6 +108,32 @@ export async function prepareMotionScene(
       {
         code: `(() => { try {
       const styleNodes = Array.from(document.querySelectorAll('style')).slice(1, -1);
+      const fontFamilies = new Map();
+      const declaredFonts = new Set();
+      const collectFonts = value => {
+        for (const part of value.match(/"[^"]*"|'[^']*'|[^,]+/g) ?? []) {
+          const family = part.trim().replace(/^['"]|['"]$/g, '');
+          if (family && !/[()]/.test(family)) fontFamilies.set(family.toLowerCase(), family);
+        }
+      };
+      const collectRuleFonts = rule => {
+        if (rule.type === 5) {
+          declaredFonts.add(rule.style.fontFamily.replace(/^['"]|['"]$/g, '').toLowerCase());
+          return;
+        }
+        if (rule.style) collectFonts(rule.style.fontFamily);
+        if (rule.cssRules) Array.from(rule.cssRules).forEach(collectRuleFonts);
+      };
+      styleNodes.forEach(node => Array.from(node.sheet?.cssRules ?? []).forEach(collectRuleFonts));
+      for (const node of [document.body, ...document.body.querySelectorAll('*')]) {
+        if (node.style) collectFonts(node.style.fontFamily);
+        collectFonts(getComputedStyle(node).fontFamily);
+        for (const pseudo of ['::before', '::after']) {
+          const style = getComputedStyle(node, pseudo);
+          if (style.content !== 'none' && style.content !== 'normal') collectFonts(style.fontFamily);
+        }
+      }
+      const localFontFamilies = Array.from(fontFamilies).filter(([key]) => !declaredFonts.has(key)).map(([,family]) => family);
       const ids = new Map();
       if (document.body.id) ids.set(document.body.id, ${JSON.stringify(id)});
       document.body.querySelectorAll('[id]').forEach((node,index) => {
@@ -157,7 +183,7 @@ export async function prepareMotionScene(
       Array.from(document.body.querySelectorAll('*')).forEach((node,index) => node.setAttribute('data-hf-id', ${JSON.stringify(id)} + '-element-' + index));
       const selectors = targets.map(nodes => nodes.map(node => '[data-hf-id="' + node.getAttribute('data-hf-id') + '"]').join(', '));
       const counts = targets.map(nodes => nodes.length);
-      return { html: document.body.innerHTML, styles, counts, selectors, bodyStyle: document.body.getAttribute('style') || '', bodyClass: document.body.className };
+      return { html: document.body.innerHTML, styles, counts, selectors, fontFamilies: localFontFamilies, bodyStyle: document.body.getAttribute('style') || '', bodyClass: document.body.className };
       } catch (error) { return { error: error.message }; }
     })()`,
       },
@@ -168,6 +194,7 @@ export async function prepareMotionScene(
           styles: string
           counts: number[]
           selectors: string[]
+          fontFamilies: string[]
           bodyStyle: string
           bodyClass: string
         }

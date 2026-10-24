@@ -30,6 +30,7 @@
     "dist:linux": "electron-vite build && electron-builder --linux",
     "test:trending": "electron scripts/run-trending-test.cjs",
     "test:voiceover": "electron scripts/run-voiceover-test.cjs",
+    "test:voice-runtime": "python3 -B scripts/test-voice-runtime.py",
     "test:video-workflow": "electron scripts/run-video-workflow-test.cjs",
     "test:video-workflow:ui": "pnpm build && electron scripts/test-video-workflow-ui.cjs",
     "test:video-workflow:render": "electron scripts/smoke-video-workflow.cjs",

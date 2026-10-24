@@ -1,5 +1,6 @@
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { BrowserWindow, session } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { fingerprint } from '../../database/repositories/video-workflow-repository'
@@ -19,56 +20,103 @@ import { defaultMotion, prepareMotionScene, mergeMotion } from './motion'
 
 type TransitionKeyframe = { opacity?: number; translate?: string; clipPath?: string }
 
-export async function captureStoryboard(html: string, signal: AbortSignal): Promise<Buffer> {
-  signal.throwIfAborted()
-  const isolated = session.fromPartition(`video-frame-${randomUUID()}`, { cache: false })
-  isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
-  isolated.setPermissionCheckHandler(() => false)
-  isolated.webRequest.onBeforeRequest((details, callback) =>
-    callback({ cancel: !details.url.startsWith('data:') }),
+const genericFonts = new Set([
+  'serif',
+  'sans-serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'system-ui',
+  'ui-serif',
+  'ui-sans-serif',
+  'ui-monospace',
+  'ui-rounded',
+  'math',
+  'emoji',
+  'fangsong',
+  '-apple-system',
+  'blinkmacsystemfont',
+  'inherit',
+  'initial',
+  'unset',
+  'revert',
+  'revert-layer',
+])
+
+function fontString(value: string) {
+  return (
+    '"' +
+    value
+      .replace(/["\\]/g, '\\$&')
+      .replace(/[<>]/g, (character) => '\\' + character.charCodeAt(0).toString(16) + ' ') +
+    '"'
   )
-  const window = new BrowserWindow({
-    show: false,
-    width: 1920,
-    height: 1080,
-    useContentSize: true,
-    webPreferences: {
-      session: isolated,
-      sandbox: true,
-      contextIsolation: true,
-      nodeIntegration: false,
-      javascript: false,
-      webSecurity: true,
-      offscreen: true,
-      backgroundThrottling: false,
-    },
-  })
-  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-  window.webContents.on('will-navigate', (event) => event.preventDefault())
-  const abort = () => {
-    if (!window.isDestroyed()) window.destroy()
-  }
-  signal.addEventListener('abort', abort, { once: true })
-  const timer = setTimeout(abort, 20000)
-  try {
-    await window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(safeStoryboardDocument(html))}`,
-    )
+}
+
+export async function captureStoryboard(
+  html: string,
+  signal: AbortSignal,
+  label = '',
+): Promise<Buffer> {
+  let lastError: Error | undefined
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     signal.throwIfAborted()
-    const image = await window.webContents.capturePage({ x: 0, y: 0, width: 1920, height: 1080 })
-    if (image.isEmpty()) throw new Error('分镜截图失败，请检查 HTML')
-    return image.resize({ width: 1920, height: 1080 }).toPNG()
-  } finally {
-    clearTimeout(timer)
-    signal.removeEventListener('abort', abort)
-    abort()
-    await isolated.clearStorageData()
+    const isolated = session.fromPartition(`video-frame-${randomUUID()}`, { cache: false })
+    isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+    isolated.setPermissionCheckHandler(() => false)
+    isolated.webRequest.onBeforeRequest((details, callback) =>
+      callback({ cancel: !details.url.startsWith('data:') }),
+    )
+    const window = new BrowserWindow({
+      show: false,
+      width: 1920,
+      height: 1080,
+      useContentSize: true,
+      webPreferences: {
+        session: isolated,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        javascript: false,
+        webSecurity: true,
+        offscreen: true,
+        backgroundThrottling: false,
+      },
+    })
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    window.webContents.on('will-navigate', (event) => event.preventDefault())
+    const abort = () => {
+      if (!window.isDestroyed()) window.destroy()
+    }
+    signal.addEventListener('abort', abort, { once: true })
+    const timer = setTimeout(abort, 20000)
+    try {
+      await window.loadURL(
+        `data:text/html;charset=utf-8,${encodeURIComponent(safeStoryboardDocument(html))}`,
+      )
+      signal.throwIfAborted()
+      await delay(attempt ? 120 : 50, undefined, { signal })
+      const image = await window.webContents.capturePage({ x: 0, y: 0, width: 1920, height: 1080 })
+      if (image.isEmpty()) throw new Error('截图画面为空')
+      return image.resize({ width: 1920, height: 1080 }).toPNG()
+    } catch (error) {
+      if (signal.aborted) throw error
+      lastError = error as Error
+    } finally {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', abort)
+      abort()
+      await isolated.clearStorageData()
+    }
   }
+  const target = label ? `「${label}」` : ''
+  throw new Error(`分镜${target}截图失败：${lastError?.message ?? '画面为空，请检查 HTML'}`)
 }
 export function hyperframesDocument(
   project: VideoProject,
   markup?: string[],
   motion?: MotionPlan,
+  fontFamilies: string[] = [],
 ): string {
   const storyboard = stageValue(project, 'storyboard')!,
     audio = stageValue(project, 'audio')!
@@ -144,7 +192,7 @@ export function hyperframesDocument(
   const animation = motion
     ? `<script>const effects=${JSON.stringify(effects).replace(/</g, '\\u003c')};const transitions=${JSON.stringify(transitions)};const animate=(element,effect)=>{const animation=element.animate(effect.keyframes,{duration:effect.duration*1000,delay:effect.delay*1000,iterations:effect.iterations??1,direction:effect.direction??'normal',easing:effect.easing??'ease-in-out',fill:'both'});animation.pause();};for(const effect of effects){const root=document.getElementById(effect.root);for(const element of root.querySelectorAll(effect.selector))animate(element,effect);}for(const transition of transitions)animate(document.getElementById(transition.root),transition);</script>`
     : ''
-  const localFonts = [
+  const fonts = [
     { family: 'PingFang SC', sources: ['PingFang SC', 'Microsoft YaHei'] },
     { family: 'Microsoft YaHei', sources: ['Microsoft YaHei', 'PingFang SC'] },
     {
@@ -152,9 +200,17 @@ export function hyperframesDocument(
       sources: ['SFMono-Regular', 'SF Mono', 'Menlo', 'Consolas', 'Courier New'],
     },
   ]
+  const declared = new Set(fonts.map((font) => font.family.toLowerCase()))
+  for (const family of fontFamilies) {
+    const key = family.trim().toLowerCase()
+    if (!key || genericFonts.has(key) || declared.has(key)) continue
+    declared.add(key)
+    fonts.push({ family, sources: [family] })
+  }
+  const localFonts = fonts
     .map(
       ({ family, sources }) =>
-        `@font-face{font-family:"${family}";src:${sources.map((source) => `local("${source}")`).join(',')}}`,
+        `@font-face{font-family:${fontString(family)};src:${sources.map((source) => `local(${fontString(source)})`).join(',')}}`,
     )
     .join('')
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-src 'none'"><title>${escapeHtml(project.title)}</title><style>${localFonts}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#111827;font-family:system-ui,sans-serif}#root{position:relative;width:100%;height:100%;overflow:hidden}.clip{position:absolute;inset:0}.scene-motion-layer{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.frame>img{display:block;width:100%;height:100%;object-fit:contain}.caption{display:flex;align-items:flex-end;justify-content:center;padding:0 100px 48px;pointer-events:none}.caption span{display:block;max-width:1720px;padding:12px 28px;border-radius:12px;background:#101521;color:#fff;font-size:38px;line-height:1.4;text-align:center}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-width="1920" data-height="1080" data-no-timeline>${scenes}${subtitles}<audio id="narration" src="narration.wav" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-track-index="10" data-audio-group="voiceover"></audio></div>${animation}</body></html>`
@@ -246,6 +302,7 @@ export async function renderWorkflow(input: {
       ? mergeMotion(project, input.motion)
       : (stageValue(project, 'roughcut')?.motion ?? defaultMotion(project))
     const markup: string[] = []
+    const fontFamilies: string[] = []
     const compiledMotion: MotionPlan = { ...motion, scenes: [] }
     for (const [index, scene] of storyboard.scenes.entries()) {
       phase(`编译元素动效与分镜 ${index + 1}/${storyboard.scenes.length}`)
@@ -260,6 +317,7 @@ export async function renderWorkflow(input: {
       if (input.motion && prepared.counts.some((count) => count === 0))
         throw new Error(`分镜「${scene.title}」的动效目标不存在，请重新生成修改计划`)
       markup.push(prepared.html)
+      fontFamilies.push(...prepared.fontFamilies)
       compiledMotion.scenes.push({
         sceneId: scene.id,
         ...(sceneMotion?.transition ? { transition: sceneMotion.transition } : {}),
@@ -269,14 +327,17 @@ export async function renderWorkflow(input: {
         })),
       })
       const name = `frame-${index}.png`,
-        image = await captureStoryboard(sceneHtml(scene, storyboard.template), signal)
+        image = await captureStoryboard(sceneHtml(scene, storyboard.template), signal, scene.title)
       writeFileSync(join(cwd, name), image)
       compositionNames.push(name)
       compositionFiles.push(await files.import(project.id, join(cwd, name)))
     }
     cover = compositionFiles[0]
     copyFileSync(await files.verify(project.id, audio.file), join(cwd, 'narration.wav'))
-    writeFileSync(join(cwd, 'index.html'), hyperframesDocument(project, markup, compiledMotion))
+    writeFileSync(
+      join(cwd, 'index.html'),
+      hyperframesDocument(project, markup, compiledMotion, fontFamilies),
+    )
     for (const name of ['narration.wav', 'index.html']) {
       compositionNames.push(name)
       compositionFiles.push(await files.import(project.id, join(cwd, name)))

@@ -428,6 +428,8 @@
 }
 .workflow-job-details pre {
   padding: 8px;
+  user-select: text;
+  cursor: text;
   max-height: 160px;
   overflow: auto;
   white-space: pre-wrap;

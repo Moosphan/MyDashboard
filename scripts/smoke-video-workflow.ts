@@ -45,6 +45,14 @@ app.whenReady().then(async () => {
     assert.ok(prepared.html.includes('url(#test-scene-node-1)'))
     assert.ok(!prepared.html.includes('<script') && !prepared.html.includes('onclick'))
     assert.ok(prepared.html.includes('motion-source-clip') && prepared.html.includes(':scope'))
+    const fontScene = await prepareMotionScene(
+      '<style>body{--heading-font:"Songti SC";font-family:Georgia,"Songti SC",serif}h1{font-family:var(--heading-font)}.unused{font-family:"Aptos",sans-serif}p{font:italic 32px "Times New Roman"}</style><h1>宋体标题</h1><p style="font-family:Menlo,monospace">代码</p>',
+      'font-scene',
+      ['h1'],
+      new AbortController().signal,
+    )
+    for (const family of ['Songti SC', 'Georgia', 'Aptos', 'Times New Roman', 'Menlo'])
+      assert.ok(fontScene.fontFamilies.includes(family), `Missing scene font: ${family}`)
     const selectorHtml =
       '<style>.hidden{display:none}</style><section id="scene-1"><h1><span>Title</span></h1><div class="eyes"><i>Left</i><i>Right</i></div><div class="foot left">Left</div><div class="foot right">Right</div><p class="hidden">Hidden</p></section>'
     const selectors = [

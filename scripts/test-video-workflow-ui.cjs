@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, clipboard } = require('electron')
 const assert = require('node:assert/strict')
 const {
   cpSync,
@@ -7,6 +7,7 @@ const {
   mkdtempSync,
   writeFileSync,
   chmodSync,
+  readFileSync,
 } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { join } = require('node:path')
@@ -251,6 +252,123 @@ app.whenReady().then(async () => {
     )
     await approve()
     await click('继续下一步')
+    await waitFor(
+      'document.querySelector("[data-copy-generate]")',
+      'copy AI entry in editor header',
+    )
+    assert.equal(await evaluate('document.querySelectorAll("[data-copy-generate]").length'), 1)
+    assert.ok(
+      await evaluate(
+        'Boolean(document.querySelector(".workflow-artifact-card .workflow-stage-heading [data-copy-generate]"))',
+      ),
+    )
+    assert.ok(
+      await evaluate(
+        '!document.querySelector(".workflow-task-section").textContent.includes("重新生成")',
+      ),
+    )
+    const copyRuntime = await evaluate(
+      '(async()=>{const result=await window.electronAPI.invoke("workflow:runtime");return result.data})()',
+    )
+    const copyCLI = join(root, 'copy-test-codex')
+    const copyResponse = join(root, 'copy-response.json')
+    const copyPrompt = join(root, 'copy-prompt.txt')
+    const copyText =
+      '# 为什么需要审核\n事实、表达与风格需要逐步确认。\n\n# 用不同布局讲清内容\n开场聚焦观点，分栏解释原理，步骤总结方法。'
+    writeFileSync(copyResponse, JSON.stringify({ text: copyText }))
+    writeFileSync(
+      copyCLI,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(copyPrompt)},input);setTimeout(()=>fs.copyFileSync(${JSON.stringify(copyResponse)},process.argv[process.argv.indexOf('--output-last-message')+1]),1200);});\n`,
+    )
+    chmodSync(copyCLI, 0o755)
+    await evaluate(
+      `window.electronAPI.invoke('workflow:configure',{codexPath:${JSON.stringify(copyCLI)}})`,
+    )
+    await fill('文案创作要求 / 修改建议（选填）', '以一个人工审核案例开场，保留两个章节')
+    await evaluate('document.querySelector("[data-copy-generate]").focus()')
+    window.focus()
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+    await waitFor(
+      'document.querySelector("[data-copy-status]").textContent.includes("正在生成")',
+      'copy AI loading',
+    )
+    assert.ok(
+      await evaluate(
+        '[...document.querySelectorAll(".workflow-artifact-card textarea")].every(item=>item.disabled) && document.querySelector("[data-copy-generate]").disabled && Boolean(document.querySelector(".workflow-job-progress"))',
+      ),
+    )
+    await screenshot('copy-ai-running-light-1440.png')
+    await waitFor(
+      'document.querySelector("[data-copy-text]").value.includes("为什么需要审核")',
+      'copy AI first draft',
+    )
+    const copyProject = await evaluate(
+      '(async()=>{const result=await window.electronAPI.invoke("workflow:list");return result.data.find(item=>item.title==="UI 验证：从想法到分镜")})()',
+    )
+    assert.equal(copyProject.stages.copy.status, 'review')
+    assert.ok(readFileSync(copyPrompt, 'utf8').includes('以一个人工审核案例开场'))
+    await fill('视频内容文案', '尚未保存的手工修改')
+    assert.equal(await evaluate('document.querySelector("[data-copy-generate]").disabled'), true)
+    await click('放弃未保存修改')
+    await fill('文案创作要求 / 修改建议（选填）', '保持两章结构，解释更简洁')
+    writeFileSync(copyResponse, JSON.stringify({ text: copyText + '\n每一步都由你确认。' }))
+    await click('AI 重新生成文案')
+    await waitFor(
+      'document.querySelector("[data-copy-text]").value.includes("每一步都由你确认")',
+      'copy AI revision',
+    )
+    const revisedCopy = await evaluate(
+      `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(copyProject.id)});return result.data})()`,
+    )
+    assert.equal(revisedCopy.stages.copy.version, 2)
+    assert.equal(revisedCopy.stages.copy.status, 'review')
+    const capturedCopyPrompt = readFileSync(copyPrompt, 'utf8')
+    assert.ok(
+      capturedCopyPrompt.includes('保持两章结构') &&
+        capturedCopyPrompt.includes(copyText.split('\n')[0]),
+    )
+    writeFileSync(copyResponse, JSON.stringify({ text: '' }))
+    await click('AI 重新生成文案')
+    await waitFor('document.querySelector("[data-job-state=failed]")', 'copy AI validation failure')
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[data-copy-text]").value.includes("每一步都由你确认")',
+      ),
+    )
+    await click('AI 重新生成文案')
+    await waitFor('document.querySelector(".workflow-job-progress")', 'copy AI retry')
+    await click('取消任务')
+    await waitFor('!document.querySelector("[data-copy-generate]").disabled', 'copy AI cancelled')
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[data-copy-text]").value.includes("每一步都由你确认")',
+      ),
+    )
+    await screenshot('copy-ai-review-light-1440.png')
+    for (const width of [1024, 1440]) {
+      window.setSize(width, 1000)
+      await evaluate(
+        'document.querySelector("[data-copy-generate]").scrollIntoView({block:"center"})',
+      )
+      assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+      await screenshot(`copy-ai-review-light-${width}.png`)
+    }
+    window.webContents.setZoomFactor(2)
+    await evaluate(
+      'document.querySelector("[data-copy-generate]").focus();document.querySelector("[data-copy-generate]").scrollIntoView({block:"center"})',
+    )
+    assert.ok(
+      await evaluate(
+        'document.activeElement.matches("[data-copy-generate]") && document.documentElement.scrollWidth<=innerWidth+1',
+      ),
+    )
+    await screenshot('copy-ai-review-light-zoom200.png')
+    window.webContents.setZoomFactor(1)
+    window.setSize(1440, 1100)
+    await evaluate(
+      `window.electronAPI.invoke('workflow:configure',{codexPath:${JSON.stringify(copyRuntime.codexPath)}})`,
+    )
     await fill(
       '视频内容文案',
       '# 为什么需要审核\n事实、表达与风格需要逐步确认。\n\n# 用不同布局讲清内容\n开场聚焦观点，分栏解释原理，步骤总结方法。',
@@ -368,6 +486,41 @@ app.whenReady().then(async () => {
       await evaluate('document.querySelector("[aria-label=完整错误信息]").textContent'),
       longError,
     )
+    window.focus()
+    await click('复制错误信息')
+    await waitFor(
+      'document.querySelector("[data-job-state=failed]").textContent.includes("已复制")',
+      'copy success feedback',
+    )
+    assert.equal(clipboard.readText(), longError)
+    assert.equal(
+      await evaluate(
+        'getComputedStyle(document.querySelector("[aria-label=完整错误信息]")).userSelect',
+      ),
+      'text',
+    )
+    await evaluate(
+      `void (() => { window.originalClipboardWrite = navigator.clipboard.writeText.bind(navigator.clipboard); navigator.clipboard.writeText = () => Promise.reject(new Error('clipboard unavailable')) })()`,
+    )
+    await click('复制错误信息')
+    await waitFor(
+      'document.querySelector("[data-job-state=failed]").textContent.includes("复制失败")',
+      'copy error feedback',
+    )
+    assert.equal(
+      await evaluate('document.querySelector("[aria-label=完整错误信息]").textContent'),
+      longError,
+    )
+    await evaluate('void (navigator.clipboard.writeText = window.originalClipboardWrite)')
+    await evaluate('document.querySelector("[data-job-state=failed] button").focus()')
+    window.focus()
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+    await waitFor(
+      'document.querySelector("[data-job-state=failed]").textContent.includes("已复制")',
+      'keyboard copy retry',
+    )
+    assert.equal(clipboard.readText(), longError)
     await screenshot('execution-log-error-details.png')
     for (const width of [1440, 1024]) {
       window.setSize(width, 900)
@@ -414,6 +567,13 @@ app.whenReady().then(async () => {
       )
       await evaluate(
         'document.querySelector(".workflow-execution-log").scrollIntoView({block:"center"})',
+      )
+      if (!(await evaluate('Boolean(document.querySelector("[data-job-state=failed] details"))')))
+        await click('查看全部 6 条记录')
+      await evaluate('document.querySelector("[data-job-state=failed] details").open = true')
+      assert.ok(await evaluate('Boolean(document.querySelector("[data-job-state=failed] button"))'))
+      await evaluate(
+        'document.querySelector("[data-job-state=failed] button").scrollIntoView({block:"center"})',
       )
       await screenshot(`execution-log-${theme}-1440.png`)
     }
@@ -566,6 +726,38 @@ app.whenReady().then(async () => {
       'reopen persisted project',
     )
     await screenshot('06-storyboard-dark-1440.png')
+    await evaluate('document.querySelectorAll(".workflow-step-button")[1].click()')
+    await waitFor('document.querySelector("[data-copy-generate]")', 'copy AI dark theme')
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[data-copy-sources]").textContent.includes("创作简报 v1")',
+      ),
+    )
+    for (const width of [1440, 1024]) {
+      window.setSize(width, 1000)
+      await evaluate(
+        'document.querySelector("[data-copy-generate]").scrollIntoView({block:"center"})',
+      )
+      assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+      await screenshot(`copy-ai-review-dark-${width}.png`)
+    }
+    window.webContents.setZoomFactor(2)
+    await evaluate(
+      'document.querySelector("[data-copy-generate]").focus();document.querySelector("[data-copy-generate]").scrollIntoView({block:"center"})',
+    )
+    assert.ok(
+      await evaluate(
+        'document.activeElement.matches("[data-copy-generate]") && document.documentElement.scrollWidth<=innerWidth+1',
+      ),
+    )
+    await screenshot('copy-ai-review-dark-zoom200.png')
+    window.webContents.setZoomFactor(1)
+    window.setSize(1440, 1100)
+    await evaluate('document.querySelectorAll(".workflow-step-button")[2].click()')
+    await waitFor(
+      'document.querySelector(".workflow-storyboard iframe")',
+      'return from copy to storyboard',
+    )
     await click('项目版本历史')
     await waitFor('document.querySelector("[role=dialog]")', 'history dialog')
     await click('作为新草稿')
@@ -846,6 +1038,14 @@ app.whenReady().then(async () => {
             assert.ok(
               await evaluate('document.querySelector(".workflow-audio-row audio").controls'),
               'restore original native player controls',
+            )
+            await evaluate('document.querySelector("[data-audio-track-menu]").click()')
+            await waitFor(
+              '[...document.querySelectorAll("[role=menuitem]")].some(item=>item.textContent.includes("打开所在文件夹"))',
+              'audio file location action',
+            )
+            await evaluate(
+              '[...document.querySelectorAll("[role=menuitem]")].find(item=>item.textContent.includes("打开所在文件夹")).click()',
             )
             await toggleAudio(0)
             await waitFor(

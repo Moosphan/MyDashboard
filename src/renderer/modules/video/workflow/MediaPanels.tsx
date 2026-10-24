@@ -11,6 +11,7 @@ import { Toggle } from '@/components/ui/toggle'
 import type { VoiceProfile } from '@shared/voiceover'
 import {
   stageValue,
+  stageUnlocked,
   type VideoProject,
   type WorkflowVoice,
   type PublishPayload,
@@ -32,32 +33,59 @@ export function AudioPanel({
   onVoice,
   onConfigure,
   disabled,
+  onRegenerate,
+  onRestoreVersion,
 }: {
   project: VideoProject
   voice: WorkflowVoice
   onVoice: (voice: WorkflowVoice) => void
   onConfigure: () => void
   disabled: boolean
+  onRegenerate: (fileId: string) => void
+  onRestoreVersion: (revisionId: string) => void
 }) {
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]),
     [error, setError] = useState('')
+  const [versionId, setVersionId] = useState('current')
   useEffect(() => {
     void ipcInvoke<VoiceProfile[]>('tts:listProfiles')
       .then(setProfiles)
       .catch((failure) => setError(failure.message))
   }, [])
-  const audio = stageValue(project, 'audio')
+  useEffect(() => setVersionId('current'), [project.revision])
+  const audioVersions = project.history.filter((revision) => revision.stage === 'audio')
+  const currentAudioVersion = project.stages.audio
+  const selectedVersion =
+    versionId === 'current'
+      ? currentAudioVersion
+      : audioVersions.find((revision) => revision.id === versionId)
+  const audio = selectedVersion?.payload as AudioPayload | undefined
+  const viewingHistory = versionId !== 'current'
   const latestJob = project.jobs.find((job) => job.stage === 'audio')
   const pendingJob =
     latestJob &&
     latestJob.state !== 'succeeded' &&
     latestJob.state !== 'stale' &&
-    latestJob.expectedRevision === project.revision
+    latestJob.expectedRevision === project.revision &&
+    (!latestJob.audioProgress?.regeneratingTrackId || latestJob.state === 'running')
       ? latestJob
       : undefined
-  const progress = pendingJob?.audioProgress
-  const tracks = pendingJob ? (progress?.tracks ?? []) : (audio?.tracks ?? [])
+  const visiblePendingJob = viewingHistory ? undefined : pendingJob
+  const progress = visiblePendingJob?.audioProgress
+  const tracks = visiblePendingJob ? (progress?.tracks ?? []) : (audio?.tracks ?? [])
   const total = progress?.total ?? stageValue(project, 'narration')?.scenes.length ?? 0
+  const regenerateDisabledReason =
+    viewingHistory
+      ? '当前正在查看历史版本，请先切换为当前版本。'
+      : disabled || project.jobs.some((job) => job.state === 'running')
+      ? '任务执行中，请等待或取消后再重新生成。'
+      : !stageUnlocked(project, 'audio') || project.stages.audio?.status === 'stale'
+        ? '请先审核前置步骤并生成当前完整配音。'
+        : pendingJob || !audio
+          ? '请先完成完整配音，再重新生成单段。'
+          : voice.engine !== 'edge' && !voice.profileId
+            ? '请先选择参考音色。'
+            : undefined
   return (
     <div className="workflow-section">
       <div className="workflow-fields">
@@ -106,24 +134,64 @@ export function AudioPanel({
       </div>
       <div className="workflow-toolbar">
         <p className="text-body-sm">
-          {pendingJob
-            ? `已生成 ${tracks.length} / ${total} 段 · ${pendingJob.state === 'running' ? '生成中，可先试听' : '任务未完成，已成功片段可试听'}`
+          {visiblePendingJob
+            ? progress?.regeneratingTrackId
+              ? '单段配音重新生成中 · 其他片段保持不变'
+              : `已生成 ${tracks.length} / ${total} 段 · ${visiblePendingJob.state === 'running' ? '生成中，可先试听' : '任务未完成，已成功片段可试听'}`
             : audio
-              ? audio.tracks.length + ' 个配音段落'
+              ? `${viewingHistory ? `历史 v${selectedVersion?.version} · ` : ''}${audio.tracks.length} 个配音段落`
               : '等待生成配音'}
         </p>
         <Button size="sm" variant="ghost" onClick={onConfigure}>
           打开配音工具
         </Button>
       </div>
+      {audioVersions.length > 0 && (
+        <div className="workflow-reference-file" data-audio-version-selector>
+          <VoiceSelect
+            label="分段配音版本"
+            value={versionId}
+            onChange={(value) => setVersionId(value)}
+            options={[
+              ...(currentAudioVersion
+                ? [{ value: 'current', label: `当前 v${currentAudioVersion.version}` }]
+                : []),
+              ...audioVersions
+                .filter((revision) => revision.id !== currentAudioVersion?.id)
+                .map((revision) => ({
+                  value: revision.id,
+                  label: `历史 v${revision.version} · ${new Date(revision.createdAt).toLocaleString('zh-CN')}`,
+                })),
+            ]}
+          />
+          <div className="workflow-actions">
+            {selectedVersion && (
+              <span className="workflow-muted">
+                生成于 {new Date(selectedVersion.createdAt).toLocaleString('zh-CN')}
+                {selectedVersion.status === 'stale' ? ' · 已过期' : ''}
+              </span>
+            )}
+            {viewingHistory && (
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={disabled || Boolean(pendingJob) || selectedVersion?.status === 'stale'}
+                onClick={() => selectedVersion && onRestoreVersion(selectedVersion.id)}
+              >
+                切换为当前版本
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
       {error && (
         <p className="workflow-error" role="alert">
           {error}
         </p>
       )}
-      {pendingJob && (
+      {visiblePendingJob && (
         <div className="workflow-notice" role="status" data-audio-progress>
-          {pendingJob.state === 'running' ? (
+          {visiblePendingJob.state === 'running' ? (
             <div className="workflow-actions">
               <span
                 className="material-symbols-outlined animate-spin motion-reduce:animate-none"
@@ -131,20 +199,20 @@ export function AudioPanel({
               >
                 progress_activity
               </span>
-              <span>{pendingJob.phase}</span>
+              <span>{visiblePendingJob.phase}</span>
             </div>
           ) : (
             <p>
               本次任务
-              {pendingJob.state === 'failed'
+              {visiblePendingJob.state === 'failed'
                 ? '失败'
-                : pendingJob.state === 'cancelled'
+                : visiblePendingJob.state === 'cancelled'
                   ? '已取消'
                   : '已中断'}
               。成功片段已保留，可试听；完整音频生成成功后才能审核。
             </p>
           )}
-          {progress && (
+          {progress && !progress.regeneratingTrackId && (
             <progress
               className="workflow-audio-progress"
               max={total}
@@ -169,6 +237,8 @@ export function AudioPanel({
                   projectId={project.id}
                   track={track}
                   index={index}
+                  onRegenerate={() => onRegenerate(track.file.id)}
+                  regenerateDisabledReason={regenerateDisabledReason}
                   title={
                     stageValue(project, 'storyboard')?.scenes.find(
                       (scene) => scene.id === track.sceneId,
@@ -181,7 +251,7 @@ export function AudioPanel({
         </>
       ) : (
         <div className="workflow-notice">
-          {pendingJob?.state === 'running'
+          {visiblePendingJob?.state === 'running'
             ? '首段配音完成后会立即显示，无需等待全部生成。'
             : '尚未生成音频。也可按分镜顺序导入外部配音文件。'}
         </div>
@@ -189,7 +259,7 @@ export function AudioPanel({
       {audio && (
         <details className="workflow-divider">
           <summary className="workflow-muted cursor-pointer">
-            {pendingJob ? '此前完整配音与总时长' : '完整配音与总时长'}
+            {visiblePendingJob ? '此前完整配音与总时长' : '完整配音与总时长'}
           </summary>
           <div className="workflow-section mt-4">
             {' '}
@@ -255,6 +325,19 @@ export function AudioPanel({
                     value={voice.options.cfg ?? 2}
                     onChange={(cfg) => onVoice({ ...voice, options: { ...voice.options, cfg } })}
                   />
+                  <VoiceNumber
+                    label="参考尾部停顿（毫秒）"
+                    min={0}
+                    max={1000}
+                    step={10}
+                    value={voice.options.promptPauseMs ?? 320}
+                    onChange={(promptPauseMs) =>
+                      onVoice({ ...voice, options: { ...voice.options, promptPauseMs } })
+                    }
+                  />
+                  <p className="workflow-muted">
+                    默认 320 毫秒，减少句首额外发声；0 为关闭。仅调整临时参考，不截掉生成的人声。
+                  </p>
                 </>
               ) : (
                 <>

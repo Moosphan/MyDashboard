@@ -56,6 +56,34 @@ function elapsed(job: WorkflowJob, now: number) {
   return `${Math.floor(seconds / 3600)} 时 ${Math.floor((seconds % 3600) / 60)} 分`
 }
 
+function JobError({ error }: { error: string }) {
+  const [state, setState] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle')
+  const copy = async () => {
+    setState('copying')
+    try {
+      await navigator.clipboard.writeText(error)
+      setState('copied')
+    } catch {
+      setState('failed')
+    }
+  }
+  return (
+    <>
+      <div className="workflow-toolbar">
+        <Button size="sm" variant="ghost" disabled={state === 'copying'} onClick={copy}>
+          复制错误信息
+        </Button>
+        <span role="status">
+          {state === 'copied' ? '已复制' : state === 'failed' ? '复制失败，请选中文字复制' : ''}
+        </span>
+      </div>
+      <pre tabIndex={0} aria-label="完整错误信息">
+        {error}
+      </pre>
+    </>
+  )
+}
+
 export function ExecutionLog({
   jobs,
   busy,
@@ -159,11 +187,7 @@ export function ExecutionLog({
                     </dd>
                   </div>
                 </dl>
-                {job.error && (
-                  <pre tabIndex={0} aria-label="完整错误信息">
-                    {job.error}
-                  </pre>
-                )}
+                {job.error && <JobError key={job.error} error={job.error} />}
               </details>
             </li>
           ))}

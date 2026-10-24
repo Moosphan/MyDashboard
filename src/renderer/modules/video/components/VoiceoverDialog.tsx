@@ -31,6 +31,7 @@ export function VoiceoverDialog({ open, onClose, onActiveJobsChange }: { open: b
   const [volume, setVolume] = useState(0)
   const [steps, setSteps] = useState<10 | 20>(20)
   const [cfg, setCfg] = useState(2)
+  const [promptPauseMs, setPromptPauseMs] = useState(320)
   const [temperature, setTemperature] = useState(0.7)
   const [language, setLanguage] = useState<'zh' | 'en'>('zh')
   const [seed, setSeed] = useState('')
@@ -91,7 +92,7 @@ export function VoiceoverDialog({ open, onClose, onActiveJobsChange }: { open: b
     clientRequestId: crypto.randomUUID(), engine: target, text,
     ...(target === 'edge' ? { voiceId, options: { rate, pitchHz, volume } } : {
       profileId, profileRevision: profile?.currentRevision,
-      options: { ...(seed.trim() ? { seed: Number(seed) } : {}), gainDb, denoise, ...(target === 'voxcpm2' ? { steps, cfg } : { temperature, language }) },
+      options: { ...(seed.trim() ? { seed: Number(seed) } : {}), gainDb, denoise, ...(target === 'voxcpm2' ? { steps, cfg, promptPauseMs } : { temperature, language }) },
     }),
   })
   const submit = async (compare = false) => {
@@ -165,6 +166,7 @@ export function VoiceoverDialog({ open, onClose, onActiveJobsChange }: { open: b
                   {engine === 'voxcpm2' ? <VoiceNumber label="引导强度 CFG" value={cfg} min={1} max={3} step={0.1} onChange={setCfg} /> : <VoiceNumber label="Temperature" value={temperature} min={0.1} max={1} step={0.05} onChange={setTemperature} />}
                   <VoiceInput label="随机种子" type="number" placeholder="随机" min={0} max={4294967295} value={seed} onChange={event => setSeed(event.target.value)} />
                   <VoiceNumber label="增益（dB）" value={gainDb} min={-12} max={6} onChange={setGainDb} />
+                  {engine === 'voxcpm2' && <div className="col-span-3"><VoiceNumber label="参考尾部停顿（毫秒）" value={promptPauseMs} min={0} max={1000} step={10} onChange={setPromptPauseMs} /><p className="text-[12px] text-on-surface-variant mt-1">默认 320 毫秒，减少句首额外发声；0 为关闭。仅调整临时参考，不截掉生成的人声。</p></div>}
                 </div><div className="py-2 space-y-1.5">
                   <Toggle label="自动降噪" pressed={denoise} onPressedChange={setDenoise} role="switch" aria-checked={denoise} aria-label="自动降噪" aria-describedby="voiceover-denoise-description" />
                   <p id="voiceover-denoise-description" className="text-[12px] leading-5 text-on-surface-variant">生成前清理参考录音的背景噪声，保留原录音。VoxCPM2 与 Qwen3-TTS 均可使用。</p>

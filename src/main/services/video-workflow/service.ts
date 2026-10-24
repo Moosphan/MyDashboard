@@ -35,6 +35,7 @@ import { createWorkflowAudio } from './audio'
 import { renderWorkflow } from './render'
 import { motionPrompt, motionScenes, prepareMotionScene } from './motion'
 import { publicationBase, publicationOptions, publicationPrompt } from './publish'
+import { copyFeedback, copyPrompt } from './copy'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -48,6 +49,8 @@ export interface WorkflowGeneration {
   modification?: { feedback: string; at: number; sceneId?: string }
   motionPlanJobId?: string
   publication?: PublicationGeneration
+  copyFeedback?: string
+  audioTrackId?: string
 }
 export class VideoWorkflowService {
   readonly repository: VideoWorkflowRepository
@@ -128,11 +131,22 @@ export class VideoWorkflowService {
     )
       throw new Error('该步骤需要 CLI 或人工导入')
     const project = this.repository.get(input.projectId)
+    const previousAudio = stageValue(project, 'audio')
+    if (
+      input.audioTrackId !== undefined &&
+      (input.stage !== 'audio' ||
+        imports ||
+        typeof input.audioTrackId !== 'string' ||
+        project.stages.audio?.status === 'stale' ||
+        !previousAudio?.tracks.some((track) => track.file.id === input.audioTrackId))
+    )
+      throw new Error('请选择当前完整配音中的有效片段，单段重生成仅用于配音阶段')
     if (project.revision !== input.expectedRevision) throw new Error('项目已更新，请刷新后重试')
     if (!stageUnlocked(project, input.stage)) throw new Error('请先审核通过所有前置步骤')
     const publication =
       input.stage === 'publish' ? publicationOptions(input.publication) : undefined
-    await this.verifyInputs(project.id, input.stage)
+    const feedback = input.stage === 'copy' ? copyFeedback(input.copyFeedback) : undefined
+    await this.verifyInputs(project.id, input.stage, Boolean(input.audioTrackId))
     if ((input.modification || input.motionPlanJobId) && input.stage !== 'roughcut')
       throw new Error('修改计划仅用于粗剪')
     if (input.modification && input.motionPlanJobId) throw new Error('请先生成计划，再确认应用')
@@ -234,6 +248,14 @@ export class VideoWorkflowService {
             platforms: { ...publicationBase(project).platforms, [publication.platform]: metadata },
           })
         } else if (input.stage === 'audio') {
+          if (input.audioTrackId && previousAudio) {
+            this.repository.updateAudioProgress(job.id, {
+              tracks: previousAudio.tracks,
+              total: previousAudio.tracks.length,
+              regeneratingTrackId: input.audioTrackId,
+            })
+            this.changed(project.id)
+          }
           payload = await createWorkflowAudio({
             project,
             job,
@@ -245,10 +267,23 @@ export class VideoWorkflowService {
             signal: controller.signal,
             phase,
             imports,
+            audioTrackId: input.audioTrackId,
             progress: (progress) => {
               controller.signal.throwIfAborted()
               if (this.stopped) throw new Error('任务已停止')
-              this.repository.updateAudioProgress(job.id, progress)
+              this.repository.updateAudioProgress(
+                job.id,
+                input.audioTrackId && previousAudio
+                  ? {
+                      tracks: [
+                        ...progress.tracks,
+                        ...previousAudio.tracks.slice(progress.tracks.length),
+                      ],
+                      total: previousAudio.tracks.length,
+                      regeneratingTrackId: input.audioTrackId,
+                    }
+                  : progress,
+              )
               this.changed(project.id)
             },
           })
@@ -334,13 +369,15 @@ export class VideoWorkflowService {
               input.executor as 'codex' | 'claude',
               runtime,
               cwd,
-              agentPrompt(
-                project,
-                input.stage as 'copy' | 'storyboard' | 'narration',
-                settings,
-                references,
-                input.sceneId,
-              ),
+              input.stage === 'copy'
+                ? copyPrompt(project, feedback)
+                : agentPrompt(
+                    project,
+                    input.stage as 'storyboard' | 'narration',
+                    settings,
+                    references,
+                    input.sceneId,
+                  ),
               controller.signal,
             )
             if (input.stage === 'storyboard') {
@@ -441,6 +478,38 @@ export class VideoWorkflowService {
     if (!scene) throw new Error('分镜不存在')
     return safeStoryboardDocument(sceneHtml(scene, payload.template))
   }
+  async restoreAudioVersion(
+    projectId: string,
+    revisionId: string,
+    expected: number,
+    requestId: string,
+  ) {
+    const project = this.repository.get(projectId)
+    const revision = project.history.find((item) => item.id === revisionId)
+    if (!revision || revision.stage !== 'audio') throw new Error('分段配音版本不存在')
+    if (project.stages.audio?.id === revisionId) return project
+    if (project.jobs.some((job) => job.state === 'running'))
+      throw new Error('请先等待或取消当前配音任务')
+    const dependencies = fingerprint(
+      VIDEO_STAGES.slice(0, VIDEO_STAGES.indexOf('audio')).map(
+        (stage) => project.stages[stage]!.id,
+      ),
+    )
+    if (revision.dependencies !== dependencies)
+      throw new Error('该分段配音版本对应的口播稿已过期，无法切换')
+    const payload = validatePayload('audio', revision.payload)
+    await this.verifyInputs(projectId, 'audio')
+    await this.files.verifyPayload(projectId, payload)
+    this.repository.save(
+      projectId,
+      'audio',
+      payload,
+      expected,
+      requestId,
+      `从分段配音 v${revision.version} 切换`,
+    )
+    return this.notify(projectId)
+  }
   async saveTemplate(projectId: string, expected: number, name: string, description: string) {
     await this.verifyInputs(projectId, 'render', true)
     return this.repository.saveTemplate(projectId, expected, name, description)
@@ -486,6 +555,7 @@ export class VideoWorkflowService {
     await this.verifyInputs(project.id, input.stage)
     const publication =
       input.stage === 'publish' ? publicationOptions(input.publication) : undefined
+    const feedback = input.stage === 'copy' ? copyFeedback(input.copyFeedback) : undefined
     const directory = join(destination, `video-task-${input.stage}-${randomUUID().slice(0, 8)}`)
     mkdirSync(directory, { recursive: true })
     writeFileSync(
@@ -493,13 +563,15 @@ export class VideoWorkflowService {
       (publication
         ? publicationPrompt(project, publication) +
           '\n将输出放入 result.example.json 对应平台的资料中，保留另一平台，保存完整结构到 result.json。'
-        : agentPrompt(
-            project,
-            input.stage as 'copy' | 'storyboard' | 'narration',
-            input.settings ?? {},
-            '',
-            input.sceneId,
-          )) + '\n保存为 result.json，然后回到 MyDashboard 导入结果。',
+        : input.stage === 'copy'
+          ? copyPrompt(project, feedback)
+          : agentPrompt(
+              project,
+              input.stage as 'storyboard' | 'narration',
+              input.settings ?? {},
+              '',
+              input.sceneId,
+            )) + '\n保存为 result.json，然后回到 MyDashboard 导入结果。',
     )
     if (publication)
       writeFileSync(

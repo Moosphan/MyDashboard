@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { getDatabase } from '../database/connection'
 import { getVoiceoverService } from '../services/tts-service'
 import { VideoWorkflowService, type WorkflowGeneration } from '../services/video-workflow/service'
-import type { VideoStage, VideoPlatform } from '../../shared/video-workflow'
+import type { VideoStage, VideoPlatform, WorkflowFile } from '../../shared/video-workflow'
 import { workflowMediaResponse } from '../services/video-workflow/media'
 
 let service: VideoWorkflowService | undefined
@@ -101,6 +101,11 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     getVideoWorkflow().repository.archive(id, archived === true, expected),
   )
   handle('workflow:generate', (input: WorkflowGeneration) => getVideoWorkflow().generate(input))
+  handle(
+    'workflow:restoreAudioVersion',
+    (id: string, revision: string, expected: number, request: string) =>
+      getVideoWorkflow().restoreAudioVersion(id, revision, expected, request),
+  )
   handle('workflow:templates', () =>
     getVideoWorkflow()
       .repository.templates()
@@ -123,6 +128,10 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
   })
   handle('workflow:cancel', (id: string) => getVideoWorkflow().cancel(id))
   handle('workflow:runtime', () => getVideoWorkflow().runtime.get())
+  handle('workflow:showFile', async (projectId: string, file: WorkflowFile) => {
+    const path = await getVideoWorkflow().files.verify(projectId, file)
+    shell.showItemInFolder(path)
+  })
   handle('workflow:configure', (input: unknown) => getVideoWorkflow().runtime.set(input))
   handle('workflow:checkRuntime', () => getVideoWorkflow().runtime.check(app.getPath('userData')))
   handle('workflow:preview', (id: string, storyboard: unknown, sceneId: string) =>

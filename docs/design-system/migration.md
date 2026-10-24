@@ -81,7 +81,12 @@
 - 用户要求口播基于前序文案与分镜支持 AI 生成：将现有生成能力明确放到口播编辑区标题右侧，沿用 Button 与执行器；新增来源版本摘要，保留人工审核门禁和分镜/正文/读音顺序。未保存修改阻止覆盖，运行锁定编辑。无 HeroUI 或全局样式迁移。
 - 配音追加授权及用户纠偏：逐段成功立即展示与试听；任务级真实完成段数、加载/失败提示；播放中的段落标题和按钮高亮，媒体事件同步暂停/结束/互斥状态。`AudioTrackPlayer.tsx` 按用户最新要求恢复原生 `audio controls`，仅覆盖当前播放按钮的主题色圆形背景与标题 700 加粗/主色；所有进度条及非播放按钮保持原生中性色，保留时间、音量和菜单。保持段落标题→时长→正文→播放控制的顺序，不扩大依赖和全局布局迁移。持久片段不替代待审核完整产物。验证见 [配音增量与播放验证](video-workflow-audio-progress-verification.md)。
 
+- 配音停顿与单段重生成（2026-10-24 用户授权）：`VoiceoverDialog.tsx`、`AudioTrackPlayer.tsx`、`MediaPanels.tsx`、`StageWorkspace.tsx` 复用现有 VoiceNumber、Button、Radix DropdownMenu 和原生播放器，加入 VoxCPM2 参考尾部停顿参数及逐段重新生成入口。保持主栏、段落信息顺序、播放器和审核门禁；不引入新库或主题。`audioTrackId` 只允许指向当前完整配音的受管文件，成功重建合并音频/字幕并创建待审核版本，失败/取消保留旧版本。责任、退出里程碑和局部例外沿用 VIDEO-WORKFLOW-001。验证见 [配音参数与单段重生成验证](../video-workflow-audio-regeneration-verification.md)。
+- 分段配音版本与 Qwen3 一致性（2026-10-24 用户追加）：`MediaPanels.tsx` 复用现有 VoiceSelect、Button 和原生播放器，显示音频版本号、生成时间、历史试听及安全恢复入口；服务端复用阶段 revision，校验口播依赖和受管文件后创建待审核新版本。Qwen3/VoxCPM2 工作流保留基础种子并按片段派生，单段重生成加入任务盐值，避免第九段异常音色因固定 `42` 重复。沿用 React 18/Radix 局部例外与现有布局，不引入新库。验证见 [分段配音版本历史与 Qwen3 音色一致性验证](../video-workflow-audio-history-qwen3-verification.md)。
+
 ## 4. 评审与回归清单
+
+`VIDEO-WORKFLOW-001` 错误复制修订（2026-10-24 用户授权）：`ExecutionLog.tsx` 在原生 details 中复用既有 Button 添加“复制错误信息”，显示成功或失败反馈；`workflow.css` 仅允许错误原文选择。沿用工作流已批准的 React 18 / Radix 局部例外，无新增库、图标或主题，记录信息顺序与审核动作不变。负责人为项目维护者，退出里程碑为工作流 HeroUI 生产迁移。验证见 [粗剪字体与错误复制验证](video-workflow-font-copy-verification.md)。
 
 `VIDEO-WORKFLOW-001` 追加（2026-10-23）：用户确认自然语言＋分镜/时间定位＋计划确认＋新版预览审核。新增 `RenderActions`，复用现有 Button、Radix WorkflowDialog 与 Voice 表单；预览后展开修改区，不新增工作台栏目。正片审核后保存风格模板，分镜设置选择“我的模板”。保留所有既有布局、主题、八阶段和门禁。HyperFrames 原生 WAAPI 编译仅处理受限动效数据，不放开用户 HTML 脚本；导出工程是副本，Studio 回导另行确认。验证见 [动效与模板验证](video-workflow-motion-template-verification.md)。
 
@@ -90,6 +95,10 @@
 `VIDEO-WORKFLOW-001` 发布资料增量（2026-10-23 用户授权）：`StageWorkspace.tsx`、`MediaPanels.tsx`、`ExecutionLog.tsx` 复用现有 Button、Voice 字段、原生 details 与任务日志，增加当前平台 AI 生成/重新生成、可选修改要求与来源说明。平台→成片→资料及审核、底部保存位置不变，不引入新依赖/主题/图标。各次生成仅更新选定平台并创建待审核版本，失败/取消保留原资料。负责人及退出里程碑沿用本例外；验证见 [发布资料 AI 验证](video-workflow-publish-ai-verification.md)。
 
 `VIDEO-WORKFLOW-001` 列表控件修订（2026-10-23 用户截图授权）：仅调整 `WorkflowStudio.tsx`、`workflow.css` 的视频列表搜索框高度/圆角、筛选行居中和可见标签；归档视图/环境入口使用现有图标 Button，项目归档/恢复使用现有 Radix DropdownMenu，不引入库或全局主题改动。菜单保留归档门禁、错误反馈与恢复行为，可访问名称及按下状态完整。责任及退出里程碑沿用本例外；验证见 [列表控件验证](video-workflow-list-controls-verification.md)。
+
+`VIDEO-WORKFLOW-001` 文案 AI 入口修订（2026-10-24 用户授权）：用户截图表明右侧底部“重新生成”难发现，要求工作台直接生成并按建议修改。`StageWorkspace.tsx` 将主操作放至文案标题右侧，常驻修改建议、来源与状态说明；沿用现有 Button、VoiceTextArea 和执行日志，右侧仅保留执行器与导入/导出，不改变主分栏和审核操作。`copy.ts` 为初稿/修改稿共用提示词，复用本地 CLI 和版本门禁；未保存保护、执行锁定、失败/取消保留与下游失效沿用既有业务。无新库、主题或图标。负责人和退出里程碑沿用本例外；验证见 [文案 AI 验证](video-workflow-copy-ai-verification.md)。
+
+`VIDEO-WORKFLOW-001` 配音文件定位与动态截图稳定性（2026-10-24 用户授权）：`AudioTrackPlayer.tsx` 的“更多操作”增加“打开所在文件夹”，通过工作流文件校验后调用 Electron 系统定位；动态粗剪的隔离分镜截图增加场景定位、短暂等待和最多三次独立窗口重试，避免瞬时空画面直接失败。保留原布局、播放器和审核门禁；无新依赖或主题改动。
 
 - 令牌单源：执行 `npm run design:generate` 与 `npm run design:check`，生成物与源定义一致。
 - 组件：全部变体、hover/focus/pressed/disabled/loading/error；可选择控件的选中态及组合态。

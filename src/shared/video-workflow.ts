@@ -62,6 +62,7 @@ export interface AudioTrack {
 export interface AudioProgress {
   tracks: AudioTrack[]
   total: number
+  regeneratingTrackId?: string
 }
 export interface AudioPayload {
   tracks: AudioTrack[]

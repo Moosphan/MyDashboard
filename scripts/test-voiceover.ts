@@ -56,6 +56,19 @@ test('reference denoising is an explicit boolean for both clone engines and unav
   assert.throws(() => resolveVoiceRequest({ ...request('edge-denoise'), options: { denoise: true } }), /参数/)
 })
 
+test('VoxCPM2 prompt pause defaults to 320ms, supports zero, and stays engine-specific', () => {
+  const input = { clientRequestId: 'prompt-pause', engine: 'voxcpm2', text: '你好', profileId: 'profile', profileRevision: 1, options: {} }
+  assert.equal(resolveVoiceRequest(input).options.promptPauseMs, 320)
+  for (const promptPauseMs of [0, 160, 320, 1000]) {
+    assert.equal(resolveVoiceRequest({ ...input, options: { promptPauseMs } }).options.promptPauseMs, promptPauseMs)
+  }
+  for (const promptPauseMs of [-1, 1001, NaN, Infinity, '320']) {
+    assert.throws(() => resolveVoiceRequest({ ...input, options: { promptPauseMs } }), /参数/)
+  }
+  assert.throws(() => resolveVoiceRequest({ ...input, engine: 'qwen3-tts', options: { promptPauseMs: 320 } }), /参数/)
+  assert.throws(() => resolveVoiceRequest({ ...request('edge-pause'), options: { promptPauseMs: 320 } }), /参数/)
+})
+
 test('reference denoising forwards the cleaned hash, preserves source audio, and skips work when disabled', async () => {
   const { prepareVoiceReference } = await import('../src/main/services/voiceover/reference-denoiser')
   const root = mkdtempSync(join(tmpdir(), 'voice-denoise-'))

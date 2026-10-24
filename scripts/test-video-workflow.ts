@@ -27,6 +27,7 @@ import {
   assertHyperframesCheck,
   assertRenderRuntime,
   hyperframesDocument,
+  reusableFrameFiles,
 } from '../src/main/services/video-workflow/render'
 import {
   agentPrompt,
@@ -290,6 +291,50 @@ function visualFixture() {
   }
   return { ...fixtureData, state, render }
 }
+
+test('reuses frozen storyboard frames when only the audio revision changes', () => {
+  const { db, repository, state: initial, render } = visualFixture()
+  try {
+    const motion = defaultMotion(initial)
+    let state = repository.save(
+      initial.id,
+      'roughcut',
+      {
+        ...render,
+        compositionFiles: [render.compositionFiles[0], render.compositionFiles[0]],
+        compositionNames: ['frame-0.png', 'frame-1.png'],
+        motion,
+        sourceStoryboard: initial.stages.storyboard!.id,
+        sourceAudio: initial.stages.audio!.id,
+        sourceNarration: initial.stages.narration!.id,
+      },
+      initial.revision,
+      randomUUID(),
+    )
+    const frames = reusableFrameFiles(state, 2, motion)
+    assert.deepEqual(frames, [render.compositionFiles[0], render.compositionFiles[0]])
+
+    const audio = stageValue(state, 'audio')!
+    state = repository.save(
+      state.id,
+      'audio',
+      {
+        ...audio,
+        duration: audio.duration + 0.2,
+        tracks: audio.tracks.map((track, index) =>
+          index === 1 ? { ...track, duration: track.duration + 0.2 } : track,
+        ),
+      },
+      state.revision,
+      randomUUID(),
+    )
+    assert.equal(state.stages.roughcut!.status, 'stale')
+    assert.deepEqual(reusableFrameFiles(state, 2, motion), frames)
+    assert.equal(reusableFrameFiles(state, 2, undefined), undefined)
+  } finally {
+    db.close()
+  }
+})
 
 test('motion proposals persist without changing approvals, then a new roughcut only invalidates downstream stages', () => {
   const { db, repository, state: initial, render } = visualFixture()

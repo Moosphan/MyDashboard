@@ -53,6 +53,26 @@ function fontString(value: string) {
   )
 }
 
+export function reusableFrameFiles(
+  project: VideoProject,
+  sceneCount: number,
+  motion: MotionPlan | undefined,
+): WorkflowFile[] | undefined {
+  const previous = stageValue(project, 'roughcut')
+  if (
+    !previous ||
+    !project.stages.storyboard ||
+    previous.sourceStoryboard !== project.stages.storyboard.id ||
+    fingerprint(previous.motion ?? null) !== fingerprint(motion ?? null) ||
+    previous.compositionFiles.length < sceneCount ||
+    previous.compositionNames.length < sceneCount
+  )
+    return undefined
+  const frameNames = previous.compositionNames.slice(0, sceneCount)
+  if (!frameNames.every((name, index) => name === `frame-${index}.png`)) return undefined
+  return previous.compositionFiles.slice(0, sceneCount)
+}
+
 export async function captureStoryboard(
   html: string,
   signal: AbortSignal,
@@ -301,6 +321,18 @@ export async function renderWorkflow(input: {
     motion = input.motion
       ? mergeMotion(project, input.motion)
       : (stageValue(project, 'roughcut')?.motion ?? defaultMotion(project))
+    let reusableFrames = reusableFrameFiles(project, storyboard.scenes.length, motion)
+    let reusableFramePaths: string[] | undefined
+    if (reusableFrames) {
+      try {
+        reusableFramePaths = await Promise.all(
+          reusableFrames.map((file) => files.verify(project.id, file)),
+        )
+      } catch {
+        reusableFrames = undefined
+      }
+    }
+    if (reusableFrames) phase(`复用已冻结分镜帧 ${reusableFrames.length}/${storyboard.scenes.length}`)
     const markup: string[] = []
     const fontFamilies: string[] = []
     const compiledMotion: MotionPlan = { ...motion, scenes: [] }
@@ -327,10 +359,17 @@ export async function renderWorkflow(input: {
         })),
       })
       const name = `frame-${index}.png`,
-        image = await captureStoryboard(sceneHtml(scene, storyboard.template), signal, scene.title)
-      writeFileSync(join(cwd, name), image)
-      compositionNames.push(name)
-      compositionFiles.push(await files.import(project.id, join(cwd, name)))
+        cachedFrame = reusableFrames?.[index]
+      if (cachedFrame) {
+        copyFileSync(reusableFramePaths![index], join(cwd, name))
+        compositionNames.push(name)
+        compositionFiles.push(cachedFrame)
+      } else {
+        const image = await captureStoryboard(sceneHtml(scene, storyboard.template), signal, scene.title)
+        writeFileSync(join(cwd, name), image)
+        compositionNames.push(name)
+        compositionFiles.push(await files.import(project.id, join(cwd, name)))
+      }
     }
     cover = compositionFiles[0]
     copyFileSync(await files.verify(project.id, audio.file), join(cwd, 'narration.wav'))

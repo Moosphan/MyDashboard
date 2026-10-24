@@ -435,10 +435,38 @@ export function RenderPanel({
     latestPlan?.state === 'succeeded' &&
     latestPlan.motionPlan &&
     latestPlan.expectedRevision === project.revision
+  const failedPlan =
+    !final &&
+    latestPlan?.state === 'failed' &&
+    latestPlan.expectedRevision === project.revision
+      ? latestPlan
+      : undefined
+  const focusMotionPlan = () => {
+    const details = document.getElementById('workflow-motion-plan') as HTMLDetailsElement | null
+    if (details) {
+      details.open = true
+      details.scrollIntoView({ block: 'start' })
+      details.querySelector('summary')?.focus({ preventScroll: true })
+    }
+  }
   return (
     <div className="workflow-section">
       {render ? (
         <>
+          {failedPlan && (
+            <div className="workflow-error workflow-section" role="alert" aria-label="动效计划生成失败">
+              <strong className="text-body-sm">修改计划未生成，当前没有可确认或预览的计划</strong>
+              <p>{failedPlan.error ?? '任务失败，请展开执行记录查看详情。'}</p>
+              <p className="workflow-muted">
+                动效计划只处理已有分镜元素的动画和转场。若要改文字、HTML、图形或素材，请先回到分镜阶段修改并审核。
+              </p>
+              <div className="workflow-actions">
+                <Button size="sm" variant="secondary" onClick={focusMotionPlan}>
+                  查看修改入口
+                </Button>
+              </div>
+            </div>
+          )}
           {pendingPlan && (
             <div
               className="workflow-notice workflow-section"
@@ -454,16 +482,7 @@ export function RenderPanel({
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={() => {
-                    const details = document.getElementById(
-                      'workflow-motion-plan',
-                    ) as HTMLDetailsElement | null
-                    if (details) {
-                      details.open = true
-                      details.scrollIntoView({ block: 'start' })
-                      details.querySelector('summary')?.focus({ preventScroll: true })
-                    }
-                  }}
+                  onClick={focusMotionPlan}
                 >
                   查看计划并确认合成
                 </Button>

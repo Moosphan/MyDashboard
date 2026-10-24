@@ -48,10 +48,14 @@ export function RenderActions({
     latestPlan?.state === 'succeeded' && latestPlan.expectedRevision === project.revision
       ? latestPlan.motionPlan
       : undefined
+  const planError =
+    !final && latestPlan?.state === 'failed' && latestPlan.expectedRevision === project.revision
+      ? latestPlan.error
+      : undefined
   const pendingPlanId = !final && plan ? latestPlan?.id : undefined
   useEffect(() => {
-    if (pendingPlanId && motionDetails.current) motionDetails.current.open = true
-  }, [pendingPlanId])
+    if ((pendingPlanId || planError) && motionDetails.current) motionDetails.current.open = true
+  }, [pendingPlanId, planError])
   const locked = disabled || running
   const generatePlan = () =>
     run(
@@ -111,6 +115,11 @@ export function RenderActions({
             提出修改 · 元素动效与转场{plan ? ' · 计划待确认' : ''}
           </summary>
           <div className="workflow-section mt-3">
+            {planError && (
+              <p className="workflow-error" role="alert">
+                上一次修改计划未生成，因此没有可预览或确认的内容。{planError}
+              </p>
+            )}
             <div className="workflow-fields">
               <VoiceRadioGroup
                 label="修改范围"

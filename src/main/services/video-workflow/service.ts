@@ -143,6 +143,19 @@ export class VideoWorkflowService {
       throw new Error('请选择当前完整配音中的有效片段，单段重生成仅用于配音阶段')
     if (project.revision !== input.expectedRevision) throw new Error('项目已更新，请刷新后重试')
     if (!stageUnlocked(project, input.stage)) throw new Error('请先审核通过所有前置步骤')
+    if (
+      input.stage === 'roughcut' &&
+      !input.motionPlanJobId &&
+      project.jobs.some(
+        (job) =>
+          job.stage === 'roughcut' &&
+          job.kind === 'motion-plan' &&
+          job.state === 'succeeded' &&
+          job.expectedRevision === input.expectedRevision &&
+          Boolean(job.motionPlan),
+      )
+    )
+      throw new Error('存在待确认的动效计划，请点击确认计划，生成粗剪')
     const publication =
       input.stage === 'publish' ? publicationOptions(input.publication) : undefined
     const feedback = input.stage === 'copy' ? copyFeedback(input.copyFeedback) : undefined

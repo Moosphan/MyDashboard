@@ -336,6 +336,41 @@ test('reuses frozen storyboard frames when only the audio revision changes', () 
   }
 })
 
+test('rejects plain roughcut regeneration while a motion plan awaits confirmation', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-motion-guard-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('No voice synthesis during roughcut generation')
+  })
+  try {
+    const planJob = repository.startJob(
+      initial.id,
+      'roughcut',
+      initial.revision,
+      randomUUID(),
+      'codex',
+    )
+    repository.markMotionJob(planJob.id)
+    repository.finishMotionPlan(planJob.id, defaultMotion(initial))
+    const current = repository.get(initial.id)
+    await assert.rejects(
+      () =>
+        service.generate({
+          projectId: current.id,
+          stage: 'roughcut',
+          expectedRevision: current.revision,
+          requestId: randomUUID(),
+          executor: 'template',
+        }),
+      /存在待确认的动效计划，请点击确认计划，生成粗剪/,
+    )
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('motion proposals persist without changing approvals, then a new roughcut only invalidates downstream stages', () => {
   const { db, repository, state: initial, render } = visualFixture()
   try {

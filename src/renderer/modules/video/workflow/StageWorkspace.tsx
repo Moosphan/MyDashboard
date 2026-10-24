@@ -80,6 +80,16 @@ export function StageWorkspace({
   const revision = project.stages[stage],
     unlocked = stageUnlocked(project, stage),
     running = project.jobs.find((job) => job.state === 'running')
+  const pendingMotionPlan =
+    stage === 'roughcut' &&
+    project.jobs.some(
+      (job) =>
+        job.stage === 'roughcut' &&
+        job.kind === 'motion-plan' &&
+        job.state === 'succeeded' &&
+        job.expectedRevision === project.revision &&
+        Boolean(job.motionPlan),
+    )
   const editable = ['brief', 'copy', 'storyboard', 'narration', 'publish'].includes(stage)
   useEffect(() => {
     const job = pending && project.jobs.find((item) => item.id === pending.id)
@@ -734,11 +744,16 @@ export function StageWorkspace({
                   <Button
                     size="sm"
                     className="justify-self-start"
-                    disabled={Boolean(running)}
+                    disabled={Boolean(running) || pendingMotionPlan}
                     onClick={() => generate()}
                   >
                     {stage === 'render' ? '渲染最终成片' : '合成 HyperFrames 粗剪'}
                   </Button>
+                  {stage === 'roughcut' && pendingMotionPlan && (
+                    <p className="workflow-muted" role="status">
+                      已有待确认的动效计划，请先在上方确认计划，再合成新版粗剪。
+                    </p>
+                  )}
                 </fieldset>
               )}
             </div>

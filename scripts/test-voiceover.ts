@@ -251,6 +251,107 @@ test('worker protocol validates identity, rejects stray output and observes canc
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
 
+test('runtime checks automatically, restores a verified cache after restart and invalidates changed files', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'voice-runtime-cache-'))
+  let checks = 0
+  const execute: typeof runCommand = async (_executable, args) => {
+    checks++
+    if (args.join(' ').includes('import json,platform'))
+      return JSON.stringify({
+        python: '3.12.10',
+        'mlx-audio': '0.6.1',
+        mlx: '0.32.4',
+        soundfile: '0.14.0',
+        transformers: '5.20.2',
+        numpy: '2.5.4',
+      })
+    return ''
+  }
+  try {
+    const manager = new VoiceRuntimeManager(root, 'darwin', 'arm64', execute)
+    const config = manager.get().config
+    for (const key of ['pythonPath', 'ffmpegPath', 'ffprobePath', 'denoiserPythonPath'] as const) {
+      config[key] = join(root, 'bin', key)
+      mkdirSync(join(root, 'bin'), { recursive: true })
+      writeFileSync(config[key], 'fake executable')
+    }
+    for (const key of [
+      'voxcpmModelPath',
+      'qwenModelPath',
+      'asrModelPath',
+      'denoiserModelPath',
+    ] as const) {
+      config[key] = join(root, key)
+      mkdirSync(config[key], { recursive: true })
+    }
+    writeFileSync(
+      join(config.voxcpmModelPath, 'config.json'),
+      JSON.stringify({ model_type: 'voxcpm2', quantization: { bits: 8 } }),
+    )
+    writeFileSync(
+      join(config.qwenModelPath, 'config.json'),
+      JSON.stringify({
+        model_type: 'qwen3_tts',
+        tts_model_type: 'base',
+        tts_model_size: '1b7',
+        quantization: { bits: 8 },
+      }),
+    )
+    for (const path of [config.voxcpmModelPath, config.qwenModelPath]) {
+      writeFileSync(join(path, 'model.safetensors'), 'fake weights')
+      writeFileSync(join(path, 'tokenizer_config.json'), '{}')
+    }
+    mkdirSync(join(config.qwenModelPath, 'speech_tokenizer'))
+    writeFileSync(join(config.qwenModelPath, 'speech_tokenizer', 'config.json'), '{}')
+    manager.configure(config)
+    const states = await Promise.all([manager.ensureChecked(), manager.ensureChecked()])
+    assert.ok(
+      states.every((state) => state.engines['qwen3-tts'].ready && state.engines.voxcpm2.ready),
+    )
+    const firstChecks = checks
+    manager.configure(config)
+    assert.equal(
+      manager.get().engines.voxcpm2.ready,
+      true,
+      'saving unchanged configuration preserves readiness',
+    )
+    await manager.ensureChecked()
+    assert.equal(checks, firstChecks)
+    const restarted = new VoiceRuntimeManager(root, 'darwin', 'arm64', execute)
+    assert.equal(restarted.get().engines['qwen3-tts'].ready, true)
+    await restarted.ensureChecked()
+    assert.equal(
+      checks,
+      firstChecks,
+      'unchanged environment must not run Python again after restart',
+    )
+    const metadata = join(root, 'lib', 'python3.12', 'site-packages', 'mlx_audio-0.6.1.dist-info')
+    mkdirSync(metadata, { recursive: true })
+    writeFileSync(join(metadata, 'METADATA'), 'Version: 0.6.1')
+    await restarted.ensureChecked()
+    const beforePackageChange = checks
+    writeFileSync(join(metadata, 'METADATA'), 'Version: 0.6.2')
+    await restarted.ensureChecked()
+    assert.ok(checks > beforePackageChange, 'package metadata changes invalidate readiness')
+    rmSync(join(config.qwenModelPath, 'model.safetensors'))
+    const changed = await restarted.ensureChecked()
+    assert.equal(changed.engines['qwen3-tts'].ready, false)
+    assert.ok(checks > firstChecks)
+    const beforeForce = checks
+    await restarted.check()
+    assert.ok(checks > beforeForce, 'manual check must remain a forced recheck')
+    const changedConfig = { ...config, pythonPath: join(root, 'missing-python') }
+    restarted.configure(changedConfig)
+    assert.equal(restarted.get().engines.voxcpm2.ready, false)
+    assert.equal(
+      new VoiceRuntimeManager(root, 'darwin', 'arm64', execute).get().engines.voxcpm2.ready,
+      false,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('runtime reports unsupported platforms without executing MLX or downloading models', async () => {
   const root = mkdtempSync(join(tmpdir(), 'voice-runtime-'))
   try {

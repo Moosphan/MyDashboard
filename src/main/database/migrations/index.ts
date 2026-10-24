@@ -978,6 +978,13 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 37,
+    name: '037_workflow_scene_operations',
+    up: (db) => {
+      db.exec('ALTER TABLE video_workflow_jobs ADD COLUMN operation TEXT')
+    },
+  },
 ]
 
 export function runMigrations(db: Database.Database): void {

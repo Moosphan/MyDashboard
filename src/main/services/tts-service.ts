@@ -58,12 +58,13 @@ export function registerTtsHandlers(getMainWindow: () => BrowserWindow | null): 
   }
   handle('tts:getVoices', voices)
   handle('tts:getVoicesByLocale', async (locale: string) => (await voices()).filter(voice => voice.locale.startsWith(locale)))
-  handle('tts:getCapabilities', () => ({ runtime: getVoiceoverService().runtime.get(), maxTextLength: 300, modes: ['preset', 'clone'] }))
-  handle('tts:getRuntime', () => getVoiceoverService().runtime.get())
+  handle('tts:getCapabilities', async () => ({ runtime: await getVoiceoverService().runtime.ensureChecked(), maxTextLength: 300, modes: ['preset', 'clone'] }))
+  handle('tts:getRuntime', () => getVoiceoverService().runtime.ensureChecked())
   handle('tts:configureRuntime', (config: unknown) => {
     const instance = getVoiceoverService()
     if (instance.profiles.busy || instance.jobs.list().some(job => !VOICE_TERMINAL.includes(job.state))) throw new Error('生成或识别任务进行中，暂不能修改环境')
-    return instance.runtime.configure(config)
+    instance.runtime.configure(config)
+    return instance.runtime.ensureChecked()
   })
   handle('tts:checkRuntime', () => getVoiceoverService().runtime.check())
   handle('tts:selectRuntimePath', async (kind: string) => {

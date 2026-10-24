@@ -40,7 +40,7 @@ export class VoiceoverService {
     const previous = this.repository.byRequest(request.clientRequestId)
     if (previous) return previous
     if (request.engine !== 'edge') {
-      const runtime = this.runtime.get()
+      const runtime = await this.runtime.ensureChecked()
       if (!runtime.engines[request.engine].ready) throw new Error(runtime.engines[request.engine].reason)
       if (request.options.denoise && !runtime.denoising?.ready) throw new Error(runtime.denoising?.reason ?? '请先检测降噪环境')
     } else {
@@ -50,8 +50,8 @@ export class VoiceoverService {
     return this.jobs.create(request)
   }
 
-  compare(inputs: unknown[]) {
-    const runtime = this.runtime.get()
+  async compare(inputs: unknown[]) {
+    const runtime = await this.runtime.ensureChecked()
     for (const engine of ['voxcpm2', 'qwen3-tts'] as const) if (!runtime.engines[engine].ready) throw new Error(`${engine}: ${runtime.engines[engine].reason}`)
     if (inputs.map(resolveVoiceRequest).some(request => request.options.denoise) && !runtime.denoising?.ready) throw new Error(runtime.denoising?.reason ?? '请先检测降噪环境')
     return this.jobs.compare(inputs)

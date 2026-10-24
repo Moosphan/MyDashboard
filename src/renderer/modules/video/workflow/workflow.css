@@ -440,6 +440,10 @@
   font-size: 11px;
   line-height: 1.7;
 }
+.workflow-job-change pre {
+  color: rgb(var(--color-on-surface));
+  background: rgb(var(--color-surface-container));
+}
 .workflow-job-spinner {
   width: 10px;
   height: 10px;

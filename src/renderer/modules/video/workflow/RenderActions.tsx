@@ -15,6 +15,7 @@ export function RenderActions({
   project,
   final,
   sceneId,
+  sceneTitle,
   time,
   disabled,
   run,
@@ -22,6 +23,7 @@ export function RenderActions({
   project: VideoProject
   final: boolean
   sceneId?: string
+  sceneTitle?: string
   time: number
   disabled: boolean
   run: (action: () => Promise<unknown>, message?: string) => Promise<boolean>
@@ -32,6 +34,7 @@ export function RenderActions({
   const [templateOpen, setTemplateOpen] = useState(false)
   const [name, setName] = useState(project.title.slice(0, 75) + ' · 风格')
   const [description, setDescription] = useState('')
+  const [focusSummary, setFocusSummary] = useState(false)
   const templateButton = useRef<HTMLButtonElement>(null)
   const motionDetails = useRef<HTMLDetailsElement>(null)
   const storageKey = `video-motion-feedback:${project.id}`
@@ -57,6 +60,31 @@ export function RenderActions({
     if ((pendingPlanId || planError) && motionDetails.current) motionDetails.current.open = true
   }, [pendingPlanId, planError])
   const locked = disabled || running
+  useEffect(() => {
+    if (focusSummary && !locked) {
+      motionDetails.current?.querySelector('summary')?.focus()
+      setFocusSummary(false)
+    }
+  }, [focusSummary, locked])
+  const clearFeedback = () => {
+    setFeedback('')
+    try {
+      localStorage.removeItem(storageKey)
+    } catch {
+      return
+    }
+  }
+  const discardPlan = async () => {
+    if (
+      await run(
+        () => workflowCall('discardMotionPlans', project.id, project.revision),
+        '修改计划已取消，保留原粗剪；可审核通过后进入正式成片，无需重新合成',
+      )
+    ) {
+      clearFeedback()
+      setFocusSummary(true)
+    }
+  }
   const generatePlan = () =>
     run(
       () =>
@@ -110,146 +138,180 @@ export function RenderActions({
       {final ? (
         <p className="workflow-muted">审核通过正片后可保存风格模板，后续视频使用新内容重新编排。</p>
       ) : (
-        <details ref={motionDetails} id="workflow-motion-plan">
-          <summary className="text-body-sm font-semibold cursor-pointer">
-            提出修改 · 元素动效与转场{plan ? ' · 计划待确认' : ''}
-          </summary>
-          <div className="workflow-section mt-3">
-            {planError && (
-              <p className="workflow-error" role="alert">
-                上一次修改计划未生成，因此没有可预览或确认的内容。{planError}
-              </p>
-            )}
-            <div className="workflow-fields">
-              <VoiceRadioGroup
-                label="修改范围"
-                value={scope}
-                onChange={setScope}
-                compact
-                options={[
-                  { value: 'scene', label: '当前分镜' },
-                  { value: 'all', label: '整片' },
-                ]}
-              />
-              <VoiceSelect
-                label="本地执行器"
-                value={executor}
-                onChange={setExecutor}
-                options={[
-                  { value: 'codex', label: 'Codex CLI' },
-                  { value: 'claude', label: 'Claude Code' },
-                ]}
-              />
-            </div>
-            <p className="workflow-muted">
-              定位 {time.toFixed(1)} 秒 ·{' '}
-              {scope === 'scene'
-                ? (stageValue(project, 'storyboard')?.scenes.find((scene) => scene.id === sceneId)
-                    ?.title ?? '当前分镜')
-                : '所有分镜'}
-              。保持文案、配音与总时长；涉及内容变化需回前置阶段复审。
-              {scope === 'scene'
-                ? ' 仅修改当前镜；希望调整每一镜及镜间转场时请选择整片。'
-                : ' 可同时规划各镜元素动画与镜间转场。'}
+        <>
+          {project.stages.roughcut?.status === 'stale' && (
+            <p className="workflow-notice" role="status">
+              若要放弃这次修改并沿用预览中的视频，请点击“取消修改计划”，再审核通过此版本。
+              原画面、配音、字幕和时长保持不变，后续分镜或配音修改不会加入此视频。
             </p>
-            <VoiceTextArea
-              label="修改意见"
-              rows={3}
-              maxLength={5000}
-              disabled={locked}
-              value={feedback}
-              onChange={(event) => {
-                setFeedback(event.target.value)
-                try {
-                  localStorage.setItem(storageKey, event.target.value)
-                } catch {
-                  return
-                }
-              }}
-              placeholder="例如：标题依次入场，角色轻弹出现后缓慢浮动，时间线节点依次展开；保持口播不变。"
-            />
-            <div className="workflow-actions">
-              <Button
-                size="sm"
-                variant="secondary"
-                disabled={locked || !feedback.trim() || !stageUnlocked(project, 'roughcut')}
-                onClick={() => void generatePlan()}
-              >
-                {running && latestPlan?.state === 'running' ? '正在分析修改…' : '生成修改计划'}
-              </Button>
-            </div>
-            {plan && (
-              <div className="workflow-section workflow-divider" aria-label="待确认动效计划">
-                <strong className="text-body-sm">修改计划 · 尚未应用到视频</strong>
-                <p className="workflow-muted">
-                  计划覆盖 {plan.scenes.length} /{' '}
-                  {stageValue(project, 'storyboard')?.scenes.length ?? 0} 镜。 当前视频仍为粗剪 v
-                  {project.stages.roughcut?.version}；确认后才合成新版，不会自动审核。
+          )}
+          <details ref={motionDetails} id="workflow-motion-plan">
+            <summary
+              id="workflow-motion-plan-summary"
+              className="text-body-sm font-semibold cursor-pointer"
+            >
+              提出修改 · 元素动效与转场{plan ? ' · 计划待确认' : ''}
+            </summary>
+            <div className="workflow-section mt-3">
+              {planError && (
+                <p className="workflow-error" role="alert">
+                  上一次修改计划未生成，因此没有可预览或确认的内容。{planError}
                 </p>
-                <p className="text-body-sm whitespace-pre-wrap">{plan.summary}</p>
-                <p className="workflow-muted">原始意见：{plan.feedback}</p>
-                <ul className="text-body-sm space-y-2">
-                  {plan.scenes.map((scene) => (
-                    <li key={scene.sceneId}>
-                      <strong>
-                        {
-                          stageValue(project, 'storyboard')?.scenes.find(
-                            (item) => item.id === scene.sceneId,
-                          )?.title
-                        }
-                      </strong>
-                      <span className="workflow-muted"> · {scene.effects.length} 项动效</span>
-                      {scene.transition && (
-                        <p className="workflow-muted">
-                          与上一镜交接：{MOTION_TRANSITIONS[scene.transition.type]} ·{' '}
-                          {scene.transition.duration.toFixed(1)} 秒
-                        </p>
-                      )}
-                      <p className="workflow-muted">
-                        {scene.effects
-                          .map(
-                            (effect) =>
-                              `${effect.selector}：${effect.start.toFixed(1)}–${(effect.start + effect.duration * (effect.iterations ?? 1)).toFixed(1)} 秒`,
-                          )
-                          .join('；')}
-                      </p>
-                    </li>
-                  ))}
-                </ul>
-                <div className="workflow-actions">
+              )}
+              <div className="workflow-fields">
+                <VoiceRadioGroup
+                  label="修改范围"
+                  value={scope}
+                  onChange={setScope}
+                  compact
+                  options={[
+                    { value: 'scene', label: '当前分镜' },
+                    { value: 'all', label: '整片' },
+                  ]}
+                />
+                <VoiceSelect
+                  label="本地执行器"
+                  value={executor}
+                  onChange={setExecutor}
+                  options={[
+                    { value: 'codex', label: 'Codex CLI' },
+                    { value: 'claude', label: 'Claude Code' },
+                  ]}
+                />
+              </div>
+              <p className="workflow-muted">
+                定位 {time.toFixed(1)} 秒 ·{' '}
+                {scope === 'scene' ? (sceneTitle ?? '当前分镜') : '所有分镜'}
+                。基于预览视频的分镜与配音，保持文案与总时长。
+                可修改已有元素的入场、位移、缩放、旋转、透明度和节奏；新增元素、换文字或素材需回分镜阶段。
+                {scope === 'scene'
+                  ? ' 仅修改当前镜；希望调整每一镜及镜间转场时请选择整片。'
+                  : ' 可同时规划各镜元素动画与镜间转场。'}
+              </p>
+              <VoiceTextArea
+                label="修改意见"
+                rows={3}
+                maxLength={5000}
+                disabled={locked}
+                value={feedback}
+                onChange={(event) => {
+                  setFeedback(event.target.value)
+                  try {
+                    localStorage.setItem(storageKey, event.target.value)
+                  } catch {
+                    return
+                  }
+                }}
+                placeholder="例如：标题依次入场，角色轻弹出现后缓慢浮动，时间线节点依次展开；保持口播不变。"
+              />
+              <div className="workflow-actions">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={locked || !feedback.trim() || !stageUnlocked(project, 'roughcut')}
+                  onClick={() => void generatePlan()}
+                >
+                  {running && latestPlan?.state === 'running' ? '正在分析修改…' : '生成修改计划'}
+                </Button>
+                {(feedback.trim() ||
+                  (latestPlan &&
+                    (latestPlan.state !== 'cancelled' ||
+                      project.stages.roughcut?.status === 'stale'))) && (
                   <Button
                     size="sm"
-                    disabled={locked}
-                    onClick={() =>
-                      void run(
-                        () =>
-                          workflowCall('generate', {
-                            projectId: project.id,
-                            stage: 'roughcut',
-                            expectedRevision: project.revision,
-                            requestId: crypto.randomUUID(),
-                            executor: 'template',
-                            motionPlanJobId: latestPlan!.id,
-                          }),
-                        '正在生成新版粗剪；旧版本保留，新版需要重新审核',
+                    variant="secondary"
+                    disabled={
+                      disabled ||
+                      project.jobs.some(
+                        (job) => job.state === 'running' && job.kind !== 'motion-plan',
                       )
                     }
+                    onClick={() => void discardPlan()}
                   >
-                    确认计划，生成粗剪 v{(project.stages.roughcut?.version ?? 0) + 1}
+                    取消修改计划
                   </Button>
-                </div>
+                )}
               </div>
-            )}
-            {latestPlan && latestPlan.expectedRevision !== project.revision && (
-              <p className="workflow-muted">旧修改计划对应的输入版本已变化，需重新生成计划。</p>
-            )}
-            {running && (
-              <p className="workflow-muted" role="status">
-                任务执行中，处理阶段与耗时见右侧执行记录。
-              </p>
-            )}
-          </div>
-        </details>
+              {plan && (
+                <div className="workflow-section workflow-divider" aria-label="待确认动效计划">
+                  <strong className="text-body-sm">修改计划 · 尚未应用到视频</strong>
+                  <p className="workflow-muted">
+                    计划覆盖 {plan.scenes.length} /{' '}
+                    {stageValue(project, 'storyboard')?.scenes.length ?? 0} 镜。 当前视频仍为粗剪 v
+                    {project.stages.roughcut?.version}；确认后才合成新版，不会自动审核。
+                  </p>
+                  <p className="text-body-sm whitespace-pre-wrap">{plan.summary}</p>
+                  <p className="workflow-muted">原始意见：{plan.feedback}</p>
+                  <ul className="text-body-sm space-y-2">
+                    {plan.scenes.map((scene) => (
+                      <li key={scene.sceneId}>
+                        <strong>
+                          {
+                            stageValue(project, 'storyboard')?.scenes.find(
+                              (item) => item.id === scene.sceneId,
+                            )?.title
+                          }
+                        </strong>
+                        <span className="workflow-muted"> · {scene.effects.length} 项动效</span>
+                        {scene.transition && (
+                          <p className="workflow-muted">
+                            与上一镜交接：{MOTION_TRANSITIONS[scene.transition.type]} ·{' '}
+                            {scene.transition.duration.toFixed(1)} 秒
+                          </p>
+                        )}
+                        <p className="workflow-muted">
+                          {scene.effects
+                            .map(
+                              (effect) =>
+                                `${effect.selector}：${effect.start.toFixed(1)}–${(effect.start + effect.duration * (effect.iterations ?? 1)).toFixed(1)} 秒`,
+                            )
+                            .join('；')}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="workflow-actions">
+                    <Button
+                      size="sm"
+                      disabled={locked}
+                      onClick={() =>
+                        void run(
+                          () =>
+                            workflowCall('generate', {
+                              projectId: project.id,
+                              stage: 'roughcut',
+                              expectedRevision: project.revision,
+                              requestId: crypto.randomUUID(),
+                              executor: 'template',
+                              motionPlanJobId: latestPlan!.id,
+                            }),
+                          '正在生成新版粗剪；旧版本保留，新版需要重新审核',
+                        )
+                      }
+                    >
+                      确认计划，生成粗剪 v{(project.stages.roughcut?.version ?? 0) + 1}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {latestPlan?.state === 'cancelled' && project.stages.roughcut?.status !== 'stale' && (
+                <p className="workflow-muted">
+                  修改计划已取消，原视频与历史保留。可审核通过当前版本后进入正式成片，无需重新合成。
+                </p>
+              )}
+              {latestPlan &&
+                latestPlan.state !== 'cancelled' &&
+                latestPlan.expectedRevision !== project.revision && (
+                  <p className="workflow-muted">旧修改计划对应的输入版本已变化，需重新生成计划。</p>
+                )}
+              {running && (
+                <p className="workflow-muted" role="status">
+                  任务执行中，处理阶段与耗时见右侧执行记录。
+                </p>
+              )}
+            </div>
+          </details>
+        </>
       )}
       <WorkflowDialog
         open={templateOpen}

@@ -12,6 +12,7 @@ import type { VoiceProfile } from '@shared/voiceover'
 import {
   stageValue,
   stageUnlocked,
+  canReuseAudio,
   type VideoProject,
   type WorkflowVoice,
   type PublishPayload,
@@ -26,6 +27,7 @@ import { mediaUrl, workflowCall } from './useWorkflow'
 import { ScenePreview } from './StoryboardEditor'
 import { AudioTrackPlayer } from './AudioTrackPlayer'
 import { RenderActions } from './RenderActions'
+import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
 
 export function AudioPanel({
   project,
@@ -74,13 +76,14 @@ export function AudioPanel({
   const progress = visiblePendingJob?.audioProgress
   const tracks = visiblePendingJob ? (progress?.tracks ?? []) : (audio?.tracks ?? [])
   const total = progress?.total ?? stageValue(project, 'narration')?.scenes.length ?? 0
-  const regenerateDisabledReason =
-    viewingHistory
-      ? '当前正在查看历史版本，请先切换为当前版本。'
-      : disabled || project.jobs.some((job) => job.state === 'running')
+  const regenerateDisabledReason = viewingHistory
+    ? '当前正在查看历史版本，请先切换为当前版本。'
+    : disabled || project.jobs.some((job) => job.state === 'running')
       ? '任务执行中，请等待或取消后再重新生成。'
       : !stageUnlocked(project, 'audio') || project.stages.audio?.status === 'stale'
-        ? '请先审核前置步骤并生成当前完整配音。'
+        ? canReuseAudio(project, project.stages.audio)
+          ? '口播内容未变，可先在右侧沿用并审核此版配音，再重新生成单段。'
+          : '请先审核前置步骤并生成当前完整配音。'
         : pendingJob || !audio
           ? '请先完成完整配音，再重新生成单段。'
           : voice.engine !== 'edge' && !voice.profileId
@@ -175,7 +178,9 @@ export function AudioPanel({
               <Button
                 size="sm"
                 variant="secondary"
-                disabled={disabled || Boolean(pendingJob) || selectedVersion?.status === 'stale'}
+                disabled={
+                  disabled || Boolean(pendingJob) || !canReuseAudio(project, selectedVersion)
+                }
                 onClick={() => selectedVersion && onRestoreVersion(selectedVersion.id)}
               >
                 切换为当前版本
@@ -428,6 +433,16 @@ export function RenderPanel({
     ?.payload ?? stageValue(project, 'narration')) as StagePayloads['narration'] | undefined
   const [activeScene, setActiveScene] = useState(0)
   const player = useRef<HTMLVideoElement>(null)
+  const timeline = renderSceneTimeline(storyboard?.scenes ?? [], audio?.tracks ?? [])
+  useEffect(() => {
+    setTime(0)
+    setActiveScene(0)
+  }, [render?.file.id])
+  const syncPlayback = (media: HTMLVideoElement) => {
+    if (media.seeking) return
+    setTime(media.currentTime)
+    setActiveScene(renderSceneAtTime(timeline, media.currentTime))
+  }
   const scene = storyboard?.scenes[activeScene]
   const latestPlan = project.jobs.find((job) => job.kind === 'motion-plan')
   const pendingPlan =
@@ -436,9 +451,7 @@ export function RenderPanel({
     latestPlan.motionPlan &&
     latestPlan.expectedRevision === project.revision
   const failedPlan =
-    !final &&
-    latestPlan?.state === 'failed' &&
-    latestPlan.expectedRevision === project.revision
+    !final && latestPlan?.state === 'failed' && latestPlan.expectedRevision === project.revision
       ? latestPlan
       : undefined
   const focusMotionPlan = () => {
@@ -454,7 +467,11 @@ export function RenderPanel({
       {render ? (
         <>
           {failedPlan && (
-            <div className="workflow-error workflow-section" role="alert" aria-label="动效计划生成失败">
+            <div
+              className="workflow-error workflow-section"
+              role="alert"
+              aria-label="动效计划生成失败"
+            >
               <strong className="text-body-sm">修改计划未生成，当前没有可确认或预览的计划</strong>
               <p>{failedPlan.error ?? '任务失败，请展开执行记录查看详情。'}</p>
               <p className="workflow-muted">
@@ -479,11 +496,7 @@ export function RenderPanel({
                 {(project.stages.roughcut?.version ?? 0) + 1}，完成后再审核新版。
               </p>
               <div className="workflow-actions">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={focusMotionPlan}
-                >
+                <Button size="sm" variant="secondary" onClick={focusMotionPlan}>
                   查看计划并确认合成
                 </Button>
               </div>
@@ -519,22 +532,8 @@ export function RenderPanel({
             src={mediaUrl(project.id, render.file)}
             poster={mediaUrl(project.id, render.cover)}
             aria-label={final ? '最终成片预览' : '粗剪预览'}
-            onTimeUpdate={(event) => {
-              const current = event.currentTarget.currentTime
-              setTime(current)
-              let start = 0
-              for (const [index, item] of (storyboard?.scenes ?? []).entries()) {
-                const duration =
-                  audio?.tracks
-                    .filter((track) => track.sceneId === item.id)
-                    .reduce((total, track) => total + track.duration, 0) ?? 0
-                if (current >= start && current < start + duration) {
-                  setActiveScene(index)
-                  break
-                }
-                start += duration
-              }
-            }}
+            onTimeUpdate={(event) => syncPlayback(event.currentTarget)}
+            onSeeked={(event) => syncPlayback(event.currentTarget)}
           />
           <div className="workflow-toolbar">
             <span>{render.duration.toFixed(1)} 秒 · 1920 × 1080 · 30 fps</span>
@@ -552,11 +551,7 @@ export function RenderPanel({
                     onClick={() => {
                       setActiveScene(index)
                       if (player.current && audio) {
-                        let time = 0
-                        for (const track of audio.tracks) {
-                          if (track.sceneId === item.id) break
-                          time += track.duration
-                        }
+                        const time = timeline[index].seek
                         player.current.currentTime = time
                         setTime(time)
                       }
@@ -594,6 +589,7 @@ export function RenderPanel({
             project={project}
             final={final}
             sceneId={scene?.id}
+            sceneTitle={scene?.title}
             time={time}
             disabled={disabled || versionId !== 'current'}
             run={run}

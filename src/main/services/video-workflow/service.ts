@@ -9,6 +9,7 @@ import {
 import {
   VIDEO_STAGES,
   stageValue,
+  renderSourceProject,
   stageUnlocked,
   validatePayload,
   type VideoStage,
@@ -19,6 +20,11 @@ import {
   type WorkflowFile,
   validateMotionPlan,
   type PublicationGeneration,
+  audioSourceRevisions,
+  canReuseAudio,
+  storyboardMotionReadiness,
+  sceneMotionEnabled,
+  type WorkflowRevision,
 } from '../../../shared/video-workflow'
 import type { VoiceoverService } from '../voiceover/voiceover-service'
 import { WorkflowFiles } from './files'
@@ -33,7 +39,15 @@ import {
 import { snapshotReference } from './references'
 import { createWorkflowAudio } from './audio'
 import { renderWorkflow } from './render'
-import { motionPrompt, motionScenes, prepareMotionScene } from './motion'
+import {
+  motionPrompt,
+  motionScenes,
+  prepareMotionScene,
+  shouldGenerateInitialMotion,
+  hasExplicitMotionRequirements,
+  storyboardMotionPlan,
+  verifyStoryboardMotion,
+} from './motion'
 import { publicationBase, publicationOptions, publicationPrompt } from './publish'
 import { copyFeedback, copyPrompt } from './copy'
 
@@ -52,6 +66,16 @@ export interface WorkflowGeneration {
   publication?: PublicationGeneration
   copyFeedback?: string
   audioTrackId?: string
+  reuseNarration?: boolean
+}
+function retainedRequirements(previous: string | undefined, feedback: string | undefined) {
+  if (
+    !feedback?.trim() ||
+    previous === feedback.trim() ||
+    previous?.endsWith('\n' + feedback.trim())
+  )
+    return previous
+  return [previous, feedback.trim()].filter(Boolean).join('\n')
 }
 export class VideoWorkflowService {
   readonly repository: VideoWorkflowRepository
@@ -74,10 +98,21 @@ export class VideoWorkflowService {
     this.changed(id)
     return this.repository.get(id)
   }
-  private async verifyInputs(projectId: string, stage: VideoStage, includeCurrent = false) {
-    const project = this.repository.get(projectId)
+  private async verifyInputs(
+    projectId: string,
+    stage: VideoStage,
+    includeCurrent = false,
+    project = this.repository.get(projectId),
+  ) {
     const index = VIDEO_STAGES.indexOf(stage)
     if (index < 0) throw new Error('未知工作流阶段')
+    if (stage === 'render') {
+      if (project.stages.roughcut)
+        await this.files.verifyPayload(projectId, project.stages.roughcut.payload)
+      if (includeCurrent && project.stages.render)
+        await this.files.verifyPayload(projectId, project.stages.render.payload)
+      return
+    }
     for (const dependency of VIDEO_STAGES.slice(0, index + (includeCurrent ? 1 : 0)))
       if (project.stages[dependency])
         await this.files.verifyPayload(projectId, project.stages[dependency]!.payload)
@@ -92,6 +127,8 @@ export class VideoWorkflowService {
     if (!['brief', 'copy', 'storyboard', 'narration', 'publish'].includes(stage))
       throw new Error('媒体步骤需通过生成或导入创建')
     const validated = validatePayload(stage, payload)
+    if (stage === 'storyboard')
+      await verifyStoryboardMotion(validated as StoryboardPayload, new AbortController().signal)
     await this.files.verifyPayload(projectId, validated)
     await this.verifyInputs(projectId, stage)
     this.repository.save(projectId, stage, validated, expected, requestId)
@@ -105,7 +142,63 @@ export class VideoWorkflowService {
     requestId: string,
     note: string,
   ) {
+    const project = this.repository.get(projectId)
+    if (stage === 'storyboard' && project.stages.storyboard) {
+      const readiness = storyboardMotionReadiness(stageValue(project, 'storyboard')!)
+      if (stageValue(project, 'storyboard')!.motionPolicy?.enabled && readiness.unplanned.length)
+        throw new Error(
+          `以下分镜未生成 MG 计划，请在创作设置中生成候选后审核：${readiness.unplanned.join('、')}`,
+        )
+      if (readiness.blockers.length)
+        throw new Error(
+          `请先补齐分镜动效或素材，再审核：${readiness.blockers.map((issue) => `${issue.sceneId}：${issue.message}`).join('；')}`,
+        )
+      await verifyStoryboardMotion(stageValue(project, 'storyboard')!, new AbortController().signal)
+    }
+    const reuseRequest = `audio-reuse:${requestId}`
+    const previousReuse =
+      stage === 'audio' &&
+      this.repository.db
+        .prepare('SELECT id FROM video_workflow_jobs WHERE request_id=?')
+        .get(reuseRequest)
+    if (previousReuse) {
+      this.repository.startJob(
+        projectId,
+        'audio',
+        expected,
+        reuseRequest,
+        'reuse-audio',
+        fingerprint([revisionId, expected]),
+      )
+      return this.notify(projectId)
+    }
     await this.verifyInputs(projectId, stage, true)
+    if (stage === 'audio' && project.stages.audio?.status === 'stale') {
+      if (project.revision !== expected || project.stages.audio.id !== revisionId)
+        throw new Error('审核版本已发生变化，请刷新后重试')
+      this.assertReusableAudio(project, project.stages.audio)
+      this.repository.db.transaction(() => {
+        const job = this.repository.startJob(
+          projectId,
+          'audio',
+          expected,
+          reuseRequest,
+          'reuse-audio',
+          fingerprint([revisionId, expected]),
+          { action: 'reuse-audio', sourceVersion: project.stages.audio!.version },
+        )
+        const rebound = this.repository.finishJob(job.id, project.stages.audio!.payload)
+        this.repository.approve(
+          projectId,
+          'audio',
+          rebound.stages.audio!.id,
+          rebound.revision,
+          requestId,
+          typeof note === 'string' ? note : '',
+        )
+      })()
+      return this.notify(projectId)
+    }
     this.repository.approve(
       projectId,
       stage,
@@ -128,10 +221,46 @@ export class VideoWorkflowService {
       throw new Error('未知生成任务')
     if (
       input.executor === 'template' &&
+      !(input.stage === 'narration' && input.reuseNarration === true) &&
       !['storyboard', 'audio', 'roughcut', 'render'].includes(input.stage)
     )
       throw new Error('该步骤需要 CLI 或人工导入')
     const project = this.repository.get(input.projectId)
+    const motionProject =
+      input.modification || input.motionPlanJobId ? renderSourceProject(project) : project
+    const existingNarration = stageValue(project, 'narration')
+    const storyboard = stageValue(project, 'storyboard')
+    const motionStoryboard = stageValue(motionProject, 'storyboard')
+    if (
+      input.stage === 'storyboard' &&
+      input.executor === 'template' &&
+      (input.settings ?? storyboard)?.motionPolicy?.enabled
+    ) {
+      const runtime = this.runtime.get()
+      if (!runtime.codexPath && !runtime.claudePath)
+        throw new Error('自动 MG 需要配置 Codex CLI 或 Claude Code，再生成分镜候选')
+      input = { ...input, executor: runtime.codexPath ? 'codex' : 'claude' }
+    }
+    if (
+      input.reuseNarration !== undefined &&
+      (input.reuseNarration !== true || input.stage !== 'narration' || input.sceneId || imports)
+    )
+      throw new Error('沿用口播仅用于完整口播稿')
+    if (
+      input.sceneId !== undefined &&
+      (!['storyboard', 'narration'].includes(input.stage) ||
+        typeof input.sceneId !== 'string' ||
+        !storyboard?.scenes.some((scene) => scene.id === input.sceneId))
+    )
+      throw new Error('请选择有效的目标分镜')
+    if (input.stage === 'narration' && (input.sceneId || input.reuseNarration)) {
+      if (
+        !existingNarration ||
+        existingNarration.scenes.map((scene) => scene.id).join() !==
+          storyboard?.scenes.map((scene) => scene.id).join()
+      )
+        throw new Error('分镜数量或顺序已变化，请先生成完整口播稿再进行单镜修改或沿用')
+    }
     const previousAudio = stageValue(project, 'audio')
     if (
       input.audioTrackId !== undefined &&
@@ -160,7 +289,7 @@ export class VideoWorkflowService {
     const publication =
       input.stage === 'publish' ? publicationOptions(input.publication) : undefined
     const feedback = input.stage === 'copy' ? copyFeedback(input.copyFeedback) : undefined
-    await this.verifyInputs(project.id, input.stage, Boolean(input.audioTrackId))
+    await this.verifyInputs(project.id, input.stage, Boolean(input.audioTrackId), motionProject)
     if ((input.modification || input.motionPlanJobId) && input.stage !== 'roughcut')
       throw new Error('修改计划仅用于粗剪')
     if (input.modification && input.motionPlanJobId) throw new Error('请先生成计划，再确认应用')
@@ -194,12 +323,34 @@ export class VideoWorkflowService {
         input.modification.at < 0 ||
         input.modification.at > 300 ||
         (input.modification.sceneId &&
-          !motionScenes(project).some((scene) => scene.id === input.modification!.sceneId)))
+          !motionScenes(motionProject).some((scene) => scene.id === input.modification!.sceneId)))
     )
       throw new Error('请检查修改意见、分镜和定位时间')
     const motion = input.motionPlanJobId
       ? this.repository.motionPlan(project.id, input.motionPlanJobId, input.expectedRevision)
       : undefined
+    if (
+      input.modification &&
+      motionStoryboard?.motionPolicy &&
+      (!motionStoryboard.scenes.some((scene) => sceneMotionEnabled(motionStoryboard, scene.id)) ||
+        (input.modification.sceneId &&
+          !sceneMotionEnabled(motionStoryboard, input.modification.sceneId)))
+    )
+      throw new Error('MG 已关闭或目标分镜已排除，请先调整分镜创作设置再修改动效')
+    const needsInitialMotion =
+      input.stage === 'roughcut' &&
+      !motion &&
+      !input.modification &&
+      shouldGenerateInitialMotion(project)
+    const preparedMotion = needsInitialMotion ? storyboardMotionPlan(project) : undefined
+    const initialMotion = needsInitialMotion && !preparedMotion
+    if (initialMotion) {
+      const runtime = this.runtime.get()
+      if (!runtime.codexPath && !runtime.claudePath)
+        throw new Error(
+          '已要求 MG 动效，请先在执行环境配置 Codex CLI 或 Claude Code；不会使用默认动效替代创作要求',
+        )
+    }
     const job = this.repository.startJob(
       project.id,
       input.stage,
@@ -207,6 +358,18 @@ export class VideoWorkflowService {
       input.requestId,
       imports ? 'manual-audio' : input.executor,
       fingerprint({ ...input, imports }),
+      input.reuseNarration
+        ? { action: 'reuse-narration', sourceVersion: project.stages.narration?.version }
+        : input.sceneId
+          ? {
+              action: 'scene-generate',
+              sceneId: input.sceneId,
+              sceneTitle: storyboard?.scenes.find((scene) => scene.id === input.sceneId)?.title,
+              sceneNumber: storyboard!.scenes.findIndex((scene) => scene.id === input.sceneId) + 1,
+              feedback: input.storyboardModification?.feedback,
+              sourceVersion: project.stages[input.stage]?.version,
+            }
+          : undefined,
     )
     if (job.state !== 'running' || this.running.has(job.id)) return job
     if (input.modification) this.repository.markMotionJob(job.id)
@@ -223,14 +386,17 @@ export class VideoWorkflowService {
       try {
         let payload: unknown
         const runtime = this.runtime.get()
-        if (input.modification) {
+        if (input.reuseNarration) {
+          phase('沿用现有逐镜口播，关联当前已审核分镜，不调用 AI 或配音')
+          payload = existingNarration
+        } else if (input.modification) {
           phase('分析修改意见，规划逐镜元素动效')
           const raw = (await runAgent(
             input.executor as 'codex' | 'claude',
             runtime,
             cwd,
             motionPrompt(
-              project,
+              motionProject,
               input.modification.feedback,
               input.modification.at,
               input.modification.sceneId,
@@ -241,10 +407,19 @@ export class VideoWorkflowService {
             throw new Error(
               `需要回到前置阶段修改：${String(raw.reason ?? '请检查文案、口播或镜头时长')}`,
             )
-          const plan = validateMotionPlan({ ...raw, ...input.modification }, motionScenes(project))
-          if (!input.modification.sceneId && plan.scenes.length !== motionScenes(project).length)
-            throw new Error('整片修改计划必须逐镜覆盖所有分镜，请重新生成')
-          const scenes = stageValue(project, 'storyboard')!
+          const plan = validateMotionPlan(
+            { ...raw, ...input.modification },
+            motionScenes(motionProject),
+          )
+          const scenes = stageValue(motionProject, 'storyboard')!
+          if (plan.scenes.some((scene) => !sceneMotionEnabled(scenes, scene.sceneId)))
+            throw new Error('修改计划包含已排除的分镜，请重新生成计划')
+          if (
+            !input.modification.sceneId &&
+            plan.scenes.length !==
+              scenes.scenes.filter((scene) => sceneMotionEnabled(scenes, scene.id)).length
+          )
+            throw new Error('整片修改计划必须逐镜覆盖所有未排除分镜，请重新生成')
           for (const scene of plan.scenes) {
             phase('校验动效目标与分镜时长')
             const source = scenes.scenes.find((item) => item.id === scene.sceneId)!
@@ -318,36 +493,54 @@ export class VideoWorkflowService {
             },
           })
         } else if (input.stage === 'roughcut' || input.stage === 'render') {
-          let renderMotion = motion
+          let renderMotion = motion ?? preparedMotion
+          if (preparedMotion) phase('复用已审核分镜动效，按实测配音时长编译')
           const templateId = stageValue(project, 'storyboard')?.styleTemplateId
           if (
             !renderMotion &&
+            !stageValue(project, 'storyboard')?.motionPolicy &&
             input.stage === 'roughcut' &&
-            !stageValue(project, 'roughcut') &&
-            templateId
+            (initialMotion || (!stageValue(project, 'roughcut') && templateId))
           ) {
-            const template = this.repository.template(templateId)
-            if (template.motion) {
-              phase('将模板动效风格适配到当前分镜元素')
+            const templateMotion = templateId
+              ? this.repository.template(templateId).motion
+              : undefined
+            if (initialMotion || templateMotion) {
+              phase(
+                initialMotion
+                  ? '按创作要求与逐镜 MG 说明编排元素动效'
+                  : '将模板动效风格适配到当前分镜元素',
+              )
+              const requirements = initialMotion
+                ? '执行创作简报、文案和最新分镜中的 MG 动效要求'
+                : '复用已选择模板的动效风格'
               const raw = (await runAgent(
                 runtime.codexPath ? 'codex' : 'claude',
                 runtime,
                 cwd,
                 motionPrompt(
                   project,
-                  `复用模板的动效节奏与语言，选择当前分镜中真实存在的元素，按当前配音时长适配。模板样本：${JSON.stringify(template.motion)}`,
+                  `${requirements}。${templateMotion ? `复用模板的动效节奏与语言，选择当前分镜中真实存在的元素，按当前配音时长适配。模板样本：${JSON.stringify(templateMotion)}` : ''}`,
                   0,
+                  undefined,
+                  { initial: true },
                 ),
                 controller.signal,
               )) as Record<string, unknown>
+              if (raw.requiresUpstream)
+                throw new Error(
+                  `需要回到前置阶段修改：${String(raw.reason ?? '请检查分镜元素与动效要求')}`,
+                )
               renderMotion = validateMotionPlan(
-                { ...raw, feedback: '复用已选择模板的动效风格', at: 0 },
+                { ...raw, feedback: requirements, at: 0 },
                 motionScenes(project),
               )
+              if (renderMotion.scenes.length !== motionScenes(project).length)
+                throw new Error('初始动效计划必须覆盖所有分镜，不能用默认动效补齐，请重新生成')
             }
           }
           payload = await renderWorkflow({
-            project,
+            project: input.motionPlanJobId ? motionProject : project,
             final: input.stage === 'render',
             files: this.files,
             runtime,
@@ -422,8 +615,22 @@ export class VideoWorkflowService {
                   !existing.scenes.some((scene) => scene.id === input.sceneId)
                 )
                   throw new Error('单镜重绘必须仅返回指定的分镜 ID')
+                const original = existing.scenes.find((scene) => scene.id === input.sceneId)!
+                const unchanged = (['title', 'body', 'layout', 'html'] as const).every(
+                  (key) => original[key] === generated.scenes[0][key],
+                )
+                if (input.storyboardModification && unchanged)
+                  throw new Error('AI 没有对所选分镜作出实际修改，原版本已保留，请细化意见后重试')
                 generated.scenes = existing.scenes.map((scene) =>
-                  scene.id === input.sceneId ? generated.scenes[0] : scene,
+                  scene.id === input.sceneId
+                    ? {
+                        ...generated.scenes[0],
+                        requirements: retainedRequirements(
+                          scene.requirements,
+                          input.storyboardModification?.feedback,
+                        ),
+                      }
+                    : scene,
                 )
               }
               payload = {
@@ -433,11 +640,53 @@ export class VideoWorkflowService {
                 mode: 'agent',
                 referenceSnapshots: snapshots,
               }
+            } else if (input.stage === 'narration' && input.sceneId) {
+              const generated = validatePayload('narration', payload)
+              if (generated.scenes.length !== 1 || generated.scenes[0].id !== input.sceneId)
+                throw new Error('单镜口播必须仅返回指定的分镜 ID')
+              payload = {
+                scenes: existingNarration!.scenes.map((scene) =>
+                  scene.id === input.sceneId ? generated.scenes[0] : scene,
+                ),
+              }
+            } else if (input.stage === 'copy') {
+              payload = {
+                ...validatePayload('copy', payload),
+                requirements: retainedRequirements(
+                  stageValue(project, 'copy')?.requirements,
+                  feedback,
+                ),
+              }
             }
           }
         }
         controller.signal.throwIfAborted()
         if (this.stopped) throw new Error('应用正在退出')
+        if (input.stage === 'storyboard' && input.executor !== 'template') {
+          const candidate = validatePayload('storyboard', payload)
+          const target = input.sceneId
+            ? {
+                ...candidate,
+                scenes: candidate.scenes.filter((scene) => scene.id === input.sceneId),
+              }
+            : candidate
+          if (
+            hasExplicitMotionRequirements({
+              ...project,
+              stages: {
+                ...project.stages,
+                storyboard: { ...project.stages.storyboard!, payload: candidate },
+              },
+            }) &&
+            storyboardMotionReadiness(target).unplanned.length
+          )
+            throw new Error(
+              '分镜未提供可校验的逐元素 MG 计划，不能仅凭注释标记完成；请在创作设置中重新生成分镜候选',
+            )
+          phase('校验分镜动效目标与素材缺口')
+          await verifyStoryboardMotion(target, controller.signal)
+          payload = candidate
+        }
         await this.files.verifyPayload(project.id, payload)
         this.repository.finishJob(job.id, payload)
       } catch (error) {
@@ -471,6 +720,31 @@ export class VideoWorkflowService {
     active?.controller.abort()
     await active?.promise
     return this.notify(job.projectId)
+  }
+  async discardMotionPlans(projectId: string, expected: number) {
+    const project = this.repository.get(projectId)
+    if (project.revision !== expected) throw new Error('项目已更新，请刷新后重试')
+    if (project.jobs.some((job) => job.state === 'running' && job.kind !== 'motion-plan'))
+      throw new Error('请先等待或取消正在执行的任务')
+    for (const job of project.jobs.filter(
+      (job) => job.state === 'running' && job.kind === 'motion-plan',
+    ))
+      await this.cancel(job.id)
+    if (project.stages.roughcut?.status === 'stale' && stageUnlocked(project, 'roughcut')) {
+      const roughcut = stageValue(project, 'roughcut')!
+      await this.files.verifyPayload(projectId, roughcut)
+      if (
+        fingerprint(
+          roughcut.compositionFiles.map((file, index) => [
+            roughcut.compositionNames[index],
+            file.sha256,
+          ]),
+        ) !== roughcut.manifestHash
+      )
+        throw new Error('原粗剪的冻结工程指纹不一致，无法恢复审核')
+    }
+    this.repository.discardMotionPlans(projectId, expected)
+    return this.notify(projectId)
   }
   async dispose() {
     this.stopped = true
@@ -518,16 +792,10 @@ export class VideoWorkflowService {
     const project = this.repository.get(projectId)
     const revision = project.history.find((item) => item.id === revisionId)
     if (!revision || revision.stage !== 'audio') throw new Error('分段配音版本不存在')
-    if (project.stages.audio?.id === revisionId) return project
+    if (project.stages.audio?.id === revisionId && revision.status !== 'stale') return project
     if (project.jobs.some((job) => job.state === 'running'))
       throw new Error('请先等待或取消当前配音任务')
-    const dependencies = fingerprint(
-      VIDEO_STAGES.slice(0, VIDEO_STAGES.indexOf('audio')).map(
-        (stage) => project.stages[stage]!.id,
-      ),
-    )
-    if (revision.dependencies !== dependencies)
-      throw new Error('该分段配音版本对应的口播稿已过期，无法切换')
+    this.assertReusableAudio(project, revision)
     const payload = validatePayload('audio', revision.payload)
     await this.verifyInputs(projectId, 'audio')
     await this.files.verifyPayload(projectId, payload)
@@ -540,6 +808,20 @@ export class VideoWorkflowService {
       `从分段配音 v${revision.version} 切换`,
     )
     return this.notify(projectId)
+  }
+  private assertReusableAudio(
+    project: ReturnType<VideoWorkflowRepository['get']>,
+    revision: WorkflowRevision,
+  ) {
+    const source = audioSourceRevisions(project, revision)
+    if (
+      !canReuseAudio(project, revision) ||
+      !source ||
+      fingerprint(source.map((item) => item.id)) !== revision.dependencies
+    )
+      throw new Error(
+        '该版本来源无法核实或口播内容已变化（正文、读音或分镜顺序不一致），请重新生成对应配音',
+      )
   }
   async saveTemplate(projectId: string, expected: number, name: string, description: string) {
     await this.verifyInputs(projectId, 'render', true)

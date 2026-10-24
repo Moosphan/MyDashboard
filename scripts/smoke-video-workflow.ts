@@ -172,7 +172,105 @@ app.whenReady().then(async () => {
     }
     await generate('audio', sources)
     assert.ok(Math.abs(stageValue(project, 'audio')!.duration - 4) < 0.01)
+    if (process.env.WORKFLOW_MG_REQUIREMENTS_SMOKE === '1') {
+      const storyboard = stageValue(project, 'storyboard')!
+      await saveAndApprove('storyboard', {
+        ...storyboard,
+        scenes: storyboard.scenes.map((scene) => ({
+          ...scene,
+          requirements: '每页 MG 动画，标题先出现，说明文字再出现。',
+        })),
+      })
+      await saveAndApprove('narration', stageValue(project, 'narration'))
+      project = service.repository.save(
+        project.id,
+        'audio',
+        stageValue(project, 'audio'),
+        project.revision,
+        randomUUID(),
+      )
+      project = await service.approve(
+        project.id,
+        'audio',
+        project.stages.audio!.id,
+        project.revision,
+        randomUUID(),
+        '自动化测试数据',
+      )
+      const fakeAgent = join(root, 'initial-mg-codex')
+      const plan = {
+        summary: '每镜标题先上移渐入，说明文字随后缩放渐入。',
+        scenes: storyboard.scenes.map((scene) => ({
+          sceneId: scene.id,
+          effects: [
+            {
+              selector: 'h1',
+              start: 0,
+              duration: 0.6,
+              keyframes: [
+                { opacity: 0, translate: '0px 40px' },
+                { opacity: 1, translate: '0px 0px' },
+              ],
+            },
+            {
+              selector: 'p',
+              start: 0.6,
+              duration: 0.5,
+              keyframes: [
+                { opacity: 0, scale: 0.8 },
+                { opacity: 1, scale: 1 },
+              ],
+            },
+          ],
+        })),
+      }
+      writeFileSync(
+        fakeAgent,
+        `#!${runtime.nodePath}\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(join(root, 'initial-mg-prompt.txt'))},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(plan))});});\n`,
+      )
+      chmodSync(fakeAgent, 0o755)
+      service.runtime.set({ codexPath: fakeAgent })
+    }
     await generate('roughcut')
+    if (process.env.WORKFLOW_MG_REQUIREMENTS_SMOKE === '1') {
+      const roughcut = stageValue(project, 'roughcut')!
+      assert.ok(roughcut.motion?.scenes.every((scene) => scene.effects.length === 2))
+      assert.match(readFileSync(join(root, 'initial-mg-prompt.txt'), 'utf8'), /每页 MG 动画/)
+      const composition = service.files.text(
+        roughcut.compositionFiles[roughcut.compositionNames.indexOf('index.html')],
+      )
+      assert.match(composition, /0px 40px/)
+      assert.match(composition, /"delay":0.6/)
+      assert.match(composition, /data-hf-id/)
+      const videoPath = await service.files.verify(project.id, roughcut.file)
+      const frames = await workflowCommand(
+        runtime.ffmpegPath,
+        [
+          '-v',
+          'error',
+          '-i',
+          videoPath,
+          '-an',
+          '-vf',
+          "select='eq(n,3)+eq(n,27)'",
+          '-vsync',
+          '0',
+          '-f',
+          'framemd5',
+          '-',
+        ],
+        { cwd: root, timeout: 15000 },
+      )
+      const hashes = frames
+        .split('\n')
+        .filter((line) => line && !line.startsWith('#'))
+        .map((line) => line.split(',').at(-1)!.trim())
+      assert.equal(hashes.length, 2)
+      assert.notEqual(hashes[0], hashes[1], 'rendered early and settled MG frames must differ')
+      console.log(
+        'PASS: persisted MG requirements → initial Agent plan → real multi-element animated roughcut',
+      )
+    }
     await generate('render')
     assert.equal(stageValue(project, 'render')!.motion?.scenes.length, 2)
     const exported = await service.exportComposition(project.id, 'render', root)

@@ -424,6 +424,51 @@ app.whenReady().then(async () => {
       'Execution records must display elapsed time',
     )
     await screenshot('02-storyboard-light-1440.png')
+    await click('创作设置')
+    assert.ok(
+      await evaluate(`document.querySelector('[aria-label="Motion graphics 动画"]')`),
+      'Storyboard settings expose automatic MG',
+    )
+    await click('Motion graphics 动画')
+    assert.equal(
+      await evaluate(
+        `document.querySelector('[aria-label="Motion graphics 动画"]').getAttribute('aria-pressed')`,
+      ),
+      'true',
+    )
+    await evaluate(
+      `document.querySelector('[aria-label="排除 MG 的页面"]').closest('details').open=true`,
+    )
+    await click('排除第 2 镜的 MG 动画')
+    assert.equal(
+      await evaluate(
+        `document.querySelector('[aria-label="排除第 2 镜的 MG 动画"]').getAttribute('aria-pressed')`,
+      ),
+      'true',
+    )
+    await screenshot('mg-settings-light-1440.png')
+    window.setSize(1024, 900)
+    await screenshot('mg-settings-light-1024.png')
+    window.webContents.setZoomFactor(2)
+    await screenshot('mg-settings-light-200percent.png')
+    window.webContents.setZoomFactor(1)
+    window.setSize(1440, 1000)
+    await evaluate('document.documentElement.classList.add("dark")')
+    await screenshot('mg-settings-dark-1440.png')
+    await evaluate('document.documentElement.classList.remove("dark")')
+    await evaluate(`document.querySelector('[aria-label="Motion graphics 动画"]').focus()`)
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+    await waitFor(
+      `document.querySelector('[aria-label="Motion graphics 动画"]').getAttribute('aria-pressed')==='false'`,
+      'MG keyboard toggle',
+    )
+    await click('取消')
+    await waitFor('!document.querySelector("[role=dialog]")', 'MG cancel')
+    assert.ok(
+      await evaluate('document.activeElement.textContent.includes("创作设置")'),
+      'MG settings returns focus',
+    )
     const Database = require('better-sqlite3')
     const logFixture = new Database(join(root, 'database/dashboard.db'))
     const logProject = await evaluate(
@@ -487,7 +532,28 @@ app.whenReady().then(async () => {
       longError,
     )
     window.focus()
-    await click('复制错误信息')
+    app.focus({ steal: true })
+    window.show()
+    window.webContents.focus()
+    const copyPoint = await evaluate(`(()=>{
+      const button=[...document.querySelectorAll('button')].find(item=>item.textContent.trim()==='复制错误信息');
+      button.scrollIntoView({block:'center'});
+      const bounds=button.getBoundingClientRect();
+      return {x:Math.round(bounds.left+bounds.width/2),y:Math.round(bounds.top+bounds.height/2)};
+    })()`)
+    await waitFor('document.hasFocus()', 'foreground clipboard document')
+    window.webContents.sendInputEvent({
+      type: 'mouseDown',
+      ...copyPoint,
+      button: 'left',
+      clickCount: 1,
+    })
+    window.webContents.sendInputEvent({
+      type: 'mouseUp',
+      ...copyPoint,
+      button: 'left',
+      clickCount: 1,
+    })
     await waitFor(
       'document.querySelector("[data-job-state=failed]").textContent.includes("已复制")',
       'copy success feedback',
@@ -609,6 +675,62 @@ app.whenReady().then(async () => {
     await click('修改此分镜')
     assert.ok(await evaluate('document.querySelector("[data-storyboard-ai-feedback]")'))
     assert.ok(await evaluate('document.querySelector("[data-storyboard-ai-modify]")'))
+    await fill('AI 修改意见', '标题先出现，再分三拍展开要点，保留事实和口播。')
+    const storyboardEditProject = await evaluate(
+      `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(copyProject.id)});return result.data})()`,
+    )
+    const storyboardEditSource = storyboardEditProject.stages.storyboard.payload
+    const storyboardEditScene = storyboardEditSource.scenes[1]
+    const storyboardEditPrompt = join(root, 'storyboard-edit-prompt.txt')
+    const storyboardEditCLI = join(root, 'storyboard-edit-codex')
+    writeFileSync(
+      storyboardEditCLI,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(storyboardEditPrompt)},prompt);setTimeout(()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboardEditSource, mode: 'agent', scenes: [{ ...storyboardEditScene, title: 'AI 修改后的分镜' }] }))}),700);});\n`,
+    )
+    chmodSync(storyboardEditCLI, 0o755)
+    await evaluate(
+      `window.electronAPI.invoke('workflow:configure',{codexPath:${JSON.stringify(storyboardEditCLI)}})`,
+    )
+    await click('让 AI 按意见修改此镜')
+    await waitFor(
+      '!document.querySelector(".workflow-job-progress") && document.querySelector(".workflow-scene-notes").textContent.includes("AI 修改后的分镜")',
+      'AI scene revision',
+    )
+    assert.ok(readFileSync(storyboardEditPrompt, 'utf8').includes('标题先出现，再分三拍展开要点'))
+    const storyboardEditResult = await evaluate(
+      `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(copyProject.id)});return result.data})()`,
+    )
+    assert.equal(storyboardEditResult.stages.storyboard.status, 'review')
+    assert.equal(
+      storyboardEditResult.stages.storyboard.payload.scenes[1].requirements,
+      '标题先出现，再分三拍展开要点，保留事实和口播。',
+    )
+    assert.deepEqual(
+      storyboardEditResult.stages.storyboard.payload.scenes[0],
+      storyboardEditSource.scenes[0],
+    )
+    assert.equal(storyboardEditResult.jobs[0].operation.sceneId, storyboardEditScene.id)
+    assert.equal(
+      storyboardEditResult.jobs[0].operation.feedback,
+      '标题先出现，再分三拍展开要点，保留事实和口播。',
+    )
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[data-workflow-operation]").textContent.includes("修改意见：标题先出现")',
+      ),
+    )
+    await evaluate('document.querySelector(".workflow-job-details").open=true')
+    await evaluate('document.querySelector(".workflow-job-change").open=true')
+    assert.ok(
+      await evaluate(
+        'document.querySelector(".workflow-job-change").textContent.includes("AI 修改后的分镜")',
+      ),
+    )
+    await screenshot('storyboard-scene-operation-detail.png')
+    await evaluate(
+      `window.electronAPI.invoke('workflow:configure',{codexPath:${JSON.stringify(copyRuntime.codexPath)}})`,
+    )
+    await click('修改此分镜')
     await click('取消')
     await click('创作设置')
     await evaluate(
@@ -650,9 +772,18 @@ app.whenReady().then(async () => {
     )
     await click('创作设置')
     await evaluate(
+      '[...document.querySelectorAll("input[type=radio]")].find(item=>item.value==="template").click()',
+    )
+    await evaluate(
       '[...document.querySelectorAll("input[type=radio]")].find(item=>item.name.startsWith("template-")&&!item.checked).click()',
     )
     await screenshot('03-template-family-light-1440.png')
+    await click('Motion graphics 动画')
+    await evaluate(
+      `document.querySelector('[aria-label="排除 MG 的页面"]').closest('details').open=true`,
+    )
+    await click('排除第 1 镜的 MG 动画')
+    await click('Motion graphics 动画')
     await click('采用视觉模板')
     await click('保存草稿')
     await screenshot('03-save-impact-light-1440.png')
@@ -661,6 +792,21 @@ app.whenReady().then(async () => {
       '[...document.querySelectorAll("button")].some(item=>item.textContent.trim()==="审核通过此版本"&&!item.disabled)',
       'storyboard saved',
     )
+    const persistedMotionPolicy = await evaluate(
+      `(async()=>{const response=await window.electronAPI.invoke('workflow:get',${JSON.stringify(logProject.id)});return response.data.stages.storyboard.payload.motionPolicy})()`,
+    )
+    assert.equal(persistedMotionPolicy.enabled, false)
+    assert.equal(persistedMotionPolicy.excludedSceneIds.length, 1)
+    await click('创作设置')
+    await click('Motion graphics 动画')
+    assert.equal(
+      await evaluate(
+        `document.querySelector('[aria-label="排除第 1 镜的 MG 动画"]').getAttribute('aria-pressed')`,
+      ),
+      'true',
+      'Exclusions persist across settings reopen',
+    )
+    await click('取消')
     await click('执行环境')
     await waitFor('document.querySelector("[role=dialog]")', 'settings dialog')
     window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Tab' })
@@ -696,6 +842,8 @@ app.whenReady().then(async () => {
     window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
     window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
     await waitFor('document.querySelector("[role=dialog]")', 'keyboard review at 200%')
+    window.focus()
+    await delay(150)
     window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
     window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
     await waitFor('!document.querySelector("[role=dialog]")', 'keyboard review closes at 200%')
@@ -814,6 +962,80 @@ app.whenReady().then(async () => {
     assert.equal(generatedNarration.stages.narration.status, 'review')
     assert.deepEqual(generatedNarration.stages.narration.payload, aiNarration)
     assert.equal(generatedNarration.stages.audio, undefined)
+    const editedStoryboard = {
+      ...generatedNarration.stages.storyboard.payload,
+      scenes: generatedNarration.stages.storyboard.payload.scenes.map((scene, index) =>
+        index === 0 ? { ...scene, body: scene.body + '（仅视觉更新）' } : scene,
+      ),
+    }
+    const staleNarration = await evaluate(`(async()=>{
+      const saved=await window.electronAPI.invoke('workflow:save',${JSON.stringify(logProject.id)},'storyboard',${JSON.stringify(editedStoryboard)},${generatedNarration.revision},crypto.randomUUID());
+      if(!saved.success)throw new Error(saved.error);
+      const state=saved.data;
+      const approved=await window.electronAPI.invoke('workflow:approve',state.id,'storyboard',state.stages.storyboard.id,state.revision,crypto.randomUUID(),'');
+      if(!approved.success)throw new Error(approved.error);
+      return approved.data;
+    })()`)
+    assert.equal(staleNarration.stages.narration.status, 'stale')
+    await waitFor(
+      'document.querySelector("[data-narration-reuse]") && !document.querySelector("[data-narration-reuse]").disabled',
+      'reuse narration after a visual edit',
+    )
+    window.focus()
+    await delay(150)
+    await evaluate('document.querySelector("[data-narration-reuse]").focus()')
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+    await waitFor(
+      '!document.querySelector("[data-narration-reuse]") && document.querySelector("[data-workflow-operation]")?.textContent.includes("保留全部口播")',
+      'reuse completes without a CLI',
+    )
+    const reusedNarration = await evaluate(
+      `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(logProject.id)});return result.data})()`,
+    )
+    assert.deepEqual(reusedNarration.stages.narration.payload, aiNarration)
+    assert.equal(reusedNarration.stages.narration.status, 'review')
+    const oneScene = { ...aiNarration.scenes[0], text: '仅重新生成当前镜，其他镜口播完整保留。' }
+    writeFileSync(
+      narrationCLI,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>setTimeout(()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ scenes: [oneScene] }))}),900));\n`,
+    )
+    window.focus()
+    await delay(150)
+    await evaluate('document.querySelector("[data-narration-generate-scene]").focus()')
+    window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+    window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+    await waitFor(
+      'document.querySelector(".workflow-job-progress")',
+      'single scene narration loading',
+    )
+    assert.ok(await evaluate('document.querySelector("[data-narration-generate-scene]").disabled'))
+    await waitFor(
+      '!document.querySelector(".workflow-job-progress") && document.querySelector(".workflow-artifact-card textarea").value.startsWith("仅重新生成当前镜")',
+      'single scene narration result',
+    )
+    const singleNarration = await evaluate(
+      `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(logProject.id)});return result.data})()`,
+    )
+    assert.deepEqual(singleNarration.stages.narration.payload.scenes, [
+      oneScene,
+      ...aiNarration.scenes.slice(1),
+    ])
+    assert.equal(singleNarration.jobs[0].operation.sceneId, oneScene.id)
+    assert.ok(
+      await evaluate(
+        'document.querySelector(".workflow-job-entry").textContent.includes("重新生成单镜口播")',
+      ),
+    )
+    await evaluate(
+      'document.querySelector(".workflow-job-details").open=true;document.querySelector(".workflow-job-change").open=true',
+    )
+    assert.ok(
+      await evaluate(
+        'document.querySelector(".workflow-job-change").textContent.includes("修改前") && document.querySelector(".workflow-job-change").textContent.includes("仅重新生成当前镜")',
+      ),
+    )
+    await screenshot('narration-single-scene-operation-dark.png')
     await evaluate(
       `window.electronAPI.invoke('workflow:configure',${JSON.stringify(previousRuntime)})`,
     )
@@ -838,6 +1060,491 @@ app.whenReady().then(async () => {
       4,
     )
     window.setSize(1440, 1100)
+    for (const theme of ['light', 'dark']) {
+      await evaluate(
+        `(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+      )
+      await waitFor(
+        `[...document.querySelectorAll("button")].some(item=>item.textContent.includes("${theme}_mode"))`,
+        'narration theme settings',
+      )
+      await evaluate(
+        `[...document.querySelectorAll("button")].find(item=>item.textContent.includes("${theme}_mode")).click()`,
+      )
+      await waitFor(
+        `document.documentElement.classList.contains('dark')===${theme === 'dark'}`,
+        'narration theme applied',
+      )
+      await evaluate(
+        `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+      )
+      await waitFor(
+        'document.getElementById("workflow-project-search")',
+        'narration theme project list',
+      )
+      await evaluate(
+        `(()=>{const heading=[...document.querySelectorAll('h3')].find(item=>item.textContent==='UI 验证：从想法到分镜');[...heading.closest('.p-md').querySelectorAll('button')].find(item=>item.textContent==='继续创作').click()})()`,
+      )
+      await waitFor(
+        'document.querySelectorAll(".workflow-step-button").length===8',
+        'narration theme project',
+      )
+      await evaluate('document.querySelectorAll(".workflow-step-button")[3].click()')
+      await waitFor(
+        'document.querySelector("[data-narration-generate-scene]")',
+        'narration scene control after reopen',
+      )
+      for (const width of [1440, 1024]) {
+        window.setSize(width, 1000)
+        await evaluate(
+          'document.querySelector("[data-narration-generate-scene]").scrollIntoView({block:"center"})',
+        )
+        assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+        await screenshot(`narration-scene-${theme}-${width}.png`)
+      }
+      window.webContents.setZoomFactor(2)
+      await evaluate(
+        'document.querySelector("[data-narration-generate-scene]").focus();document.activeElement.scrollIntoView({block:"center"})',
+      )
+      assert.ok(
+        await evaluate(
+          'document.activeElement.matches("[data-narration-generate-scene]") && document.documentElement.scrollWidth<=innerWidth+1',
+        ),
+      )
+      await screenshot(`narration-scene-${theme}-200percent.png`)
+      window.webContents.setZoomFactor(1)
+      window.setSize(1440, 1100)
+    }
+    require('tsx/cjs')
+    const { randomUUID } = require('node:crypto')
+    const {
+      VideoWorkflowRepository,
+    } = require('../src/main/database/repositories/video-workflow-repository.ts')
+    const { WorkflowFiles } = require('../src/main/services/video-workflow/files.ts')
+    const audioFixture = new Database(join(root, 'database/dashboard.db'))
+    try {
+      const repository = new VideoWorkflowRepository(audioFixture)
+      const files = new WorkflowFiles(root, repository)
+      let state = repository.get(logProject.id)
+      state = repository.approve(
+        state.id,
+        'narration',
+        state.stages.narration.id,
+        state.revision,
+        randomUUID(),
+      )
+      const wav = Buffer.alloc(48044)
+      wav.write('RIFF')
+      wav.writeUInt32LE(wav.length - 8, 4)
+      wav.write('WAVEfmt ', 8)
+      wav.writeUInt32LE(16, 16)
+      wav.writeUInt16LE(1, 20)
+      wav.writeUInt16LE(1, 22)
+      wav.writeUInt32LE(24000, 24)
+      wav.writeUInt32LE(48000, 28)
+      wav.writeUInt16LE(2, 32)
+      wav.writeUInt16LE(16, 34)
+      wav.write('data', 36)
+      wav.writeUInt32LE(wav.length - 44, 40)
+      const file = await files.write(state.id, wav, '.wav')
+      const subtitles = await files.write(
+        state.id,
+        '1\n00:00:00,000 --> 00:00:01,000\n隔离测试\n',
+        '.srt',
+      )
+      const tracks = state.stages.narration.payload.scenes.map((scene) => ({
+        sceneId: scene.id,
+        text: scene.text,
+        duration: 1,
+        file,
+      }))
+      state = repository.save(
+        state.id,
+        'audio',
+        { file, subtitles, tracks, duration: tracks.length },
+        state.revision,
+        randomUUID(),
+      )
+      state = repository.approve(
+        state.id,
+        'audio',
+        state.stages.audio.id,
+        state.revision,
+        randomUUID(),
+      )
+      const originalAudio = state.stages.audio
+      for (const theme of ['dark', 'light']) {
+        await evaluate(
+          `(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+        )
+        await waitFor(
+          `[...document.querySelectorAll('button')].some(item=>item.textContent.includes('${theme}_mode'))`,
+          'audio reuse theme settings',
+        )
+        await evaluate(
+          `[...document.querySelectorAll('button')].find(item=>item.textContent.includes('${theme}_mode')).click()`,
+        )
+        await waitFor(
+          `document.documentElement.classList.contains('dark')===${theme === 'dark'}`,
+          'audio reuse theme applied',
+        )
+        state = repository.save(
+          state.id,
+          'narration',
+          state.stages.narration.payload,
+          state.revision,
+          randomUUID(),
+        )
+        state = repository.approve(
+          state.id,
+          'narration',
+          state.stages.narration.id,
+          state.revision,
+          randomUUID(),
+        )
+        window.webContents.send('workflow:updated', state.id)
+        await evaluate(
+          `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+        )
+        await waitFor(
+          'document.getElementById("workflow-project-search")',
+          'audio reuse project list',
+        )
+        await evaluate(
+          `(()=>{const heading=[...document.querySelectorAll('h3')].find(item=>item.textContent==='UI 验证：从想法到分镜');[...heading.closest('.p-md').querySelectorAll('button')].find(item=>item.textContent==='继续创作').click()})()`,
+        )
+        await waitFor(
+          'document.querySelectorAll(".workflow-step-button").length===8',
+          'audio reuse reopened project',
+        )
+        await evaluate('document.querySelectorAll(".workflow-step-button")[4].click()')
+        await waitFor(
+          'document.querySelector("[data-audio-reuse-ready]")',
+          'unchanged stale audio can be reused',
+        )
+        for (const width of [1440, 1024]) {
+          window.setSize(width, 1000)
+          await evaluate(
+            '[...document.querySelectorAll("button")].find(item=>item.textContent.trim()==="沿用并审核此版配音").scrollIntoView({block:"center"})',
+          )
+          assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+          await screenshot(`audio-reuse-${theme}-${width}.png`)
+        }
+        window.webContents.setZoomFactor(2)
+        await evaluate(
+          '[...document.querySelectorAll("button")].find(item=>item.textContent.trim()==="沿用并审核此版配音").focus();document.activeElement.scrollIntoView({block:"center"})',
+        )
+        assert.ok(
+          await evaluate(
+            '!document.activeElement.disabled && document.activeElement.textContent.includes("沿用并审核")',
+          ),
+        )
+        await screenshot(`audio-reuse-${theme}-200percent.png`)
+        window.focus()
+        await delay(150)
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+        window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+        await waitFor('document.querySelector("[role=dialog]")', 'reuse confirmation dialog')
+        assert.ok(
+          await evaluate(
+            'document.querySelector("[role=dialog]").textContent.includes("创建并审核新版本")',
+          ),
+        )
+        await screenshot(`audio-reuse-confirm-${theme}.png`)
+        window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+        window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+        await waitFor(
+          '!document.querySelector("[role=dialog]") && document.activeElement.textContent.includes("沿用并审核")',
+          'reuse focus returns',
+        )
+        await click('沿用并审核此版配音')
+        await click('确认审核通过')
+        await waitFor(
+          '!document.querySelector("[role=dialog]") && !document.querySelector("button[aria-label=继续下一步]").disabled',
+          'reuse approves and unlocks next stage',
+        )
+        state = repository.get(state.id)
+        assert.equal(state.stages.audio.status, 'approved')
+        assert.deepEqual(state.stages.audio.payload, originalAudio.payload)
+        assert.equal(
+          state.history.find((revision) => revision.id === originalAudio.id).status,
+          'stale',
+        )
+        assert.equal(state.jobs[0].operation.action, 'reuse-audio')
+        assert.ok(
+          await evaluate(
+            'document.querySelector("[data-workflow-operation]").textContent.includes("保留原配音文件")',
+          ),
+        )
+        window.webContents.setZoomFactor(1)
+        window.setSize(1440, 1100)
+      }
+    } finally {
+      audioFixture.close()
+    }
+    const cancelFixture = new Database(join(root, 'database/dashboard.db'))
+    try {
+      const current = await evaluate(
+        `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(logProject.id)});return result.data})()`,
+      )
+      const audio = current.stages.audio.payload
+      const roughcut = {
+        file: audio.file,
+        cover: audio.file,
+        duration: audio.duration,
+        width: 1920,
+        height: 1080,
+        compositionFiles: [audio.file],
+        compositionNames: ['narration.wav'],
+        manifestHash: require('node:crypto')
+          .createHash('sha256')
+          .update(JSON.stringify([['narration.wav', audio.file.sha256]]))
+          .digest('hex'),
+        checks: 'isolated cancellation UI fixture',
+        sourceStoryboard: current.stages.storyboard.id,
+        sourceAudio: current.stages.audio.id,
+      }
+      const timestamp = new Date().toISOString()
+      cancelFixture
+        .prepare(
+          "INSERT INTO video_workflow_revisions(id,project_id,stage,version,payload,dependencies,status,note,created_at) VALUES(?,?,'roughcut',1,?,?,'stale','UI fixture',?)",
+        )
+        .run(
+          'ui-stale-roughcut',
+          current.id,
+          JSON.stringify(roughcut),
+          'previous-dependencies',
+          timestamp,
+        )
+      cancelFixture
+        .prepare(
+          "INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,kind,motion_plan,created_at,updated_at) VALUES(?,?,'roughcut',?,?,?,'fixture','cancelled','旧版取消后尚未恢复审核','motion-plan',?,?,?)",
+        )
+        .run(
+          'ui-discard-motion',
+          current.id,
+          'ui-discard-motion',
+          current.revision,
+          'codex',
+          JSON.stringify({ summary: '待放弃的 MG', feedback: '增加 MG', at: 0, scenes: [] }),
+          timestamp,
+          timestamp,
+        )
+      window.webContents.send('workflow:updated', current.id)
+      await evaluate('document.querySelectorAll(".workflow-step-button")[5].click()')
+      await waitFor(
+        'document.getElementById("workflow-motion-plan")',
+        'roughcut cancellation controls',
+      )
+      await evaluate('document.getElementById("workflow-motion-plan").open=true')
+      assert.ok(
+        await evaluate(
+          '[...document.querySelectorAll("button")].some(item=>item.textContent.trim()==="取消修改计划"&&!item.disabled)',
+        ),
+      )
+      assert.ok(
+        await evaluate(
+          '![...document.querySelectorAll("button")].some(item=>item.textContent.trim()==="不加 MG，重新合成粗剪")',
+        ),
+      )
+      await fill('修改意见', '放弃这次 MG 修改')
+      await evaluate(
+        '[...document.querySelectorAll("button")].find(item=>item.textContent.trim()==="取消修改计划").focus()',
+      )
+      window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+      window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+      await waitFor(
+        '[...document.querySelectorAll("button")].some(item=>item.textContent.trim()==="审核通过此版本"&&!item.disabled)',
+        'legacy cancellation restored original video review',
+      )
+      const discarded = await evaluate(
+        `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(current.id)});return result.data})()`,
+      )
+      assert.equal(discarded.jobs.find((job) => job.id === 'ui-discard-motion').state, 'cancelled')
+      assert.equal(discarded.revision, current.revision + 1)
+      assert.equal(
+        discarded.stages.roughcut.status,
+        'review',
+        'Cancellation retains the existing video and restores manual review',
+      )
+      assert.deepEqual(discarded.stages.roughcut.payload, roughcut)
+      assert.equal(discarded.stages.roughcut.id, 'ui-stale-roughcut')
+      assert.equal(
+        await evaluate(`localStorage.getItem('video-motion-feedback:${current.id}')`),
+        null,
+      )
+      await waitFor(
+        'document.activeElement?.id==="workflow-motion-plan-summary"',
+        'discard returns keyboard focus',
+      )
+      for (const theme of ['light', 'dark']) {
+        await evaluate(`document.documentElement.classList.toggle('dark',${theme === 'dark'})`)
+        for (const width of [1440, 1024]) {
+          window.setSize(width, 1000)
+          await evaluate(
+            'document.getElementById("workflow-motion-plan-summary").scrollIntoView({block:"center"})',
+          )
+          await screenshot(`cancel-static-${theme}-${width}.png`)
+        }
+        window.webContents.setZoomFactor(2)
+        await evaluate(
+          'document.getElementById("workflow-motion-plan-summary").focus();document.activeElement.scrollIntoView({block:"center"})',
+        )
+        await screenshot(`cancel-static-${theme}-200percent.png`)
+        window.webContents.setZoomFactor(1)
+      }
+      window.setSize(1440, 1100)
+      await approve()
+      const approved = await evaluate(
+        `(async()=>{const result=await window.electronAPI.invoke('workflow:get',${JSON.stringify(current.id)});return result.data})()`,
+      )
+      assert.equal(approved.stages.roughcut.status, 'approved')
+      assert.equal(approved.stages.roughcut.id, 'ui-stale-roughcut')
+      assert.deepEqual(approved.stages.roughcut.payload, roughcut)
+      assert.ok(
+        !approved.jobs.some((job) => job.stage === 'roughcut' && job.executor === 'template'),
+        'No roughcut rendering task should be created',
+      )
+    } finally {
+      cancelFixture.close()
+    }
+    const seekFixture = new Database(join(root, 'database/dashboard.db'))
+    try {
+      const repository = new VideoWorkflowRepository(seekFixture)
+      const files = new WorkflowFiles(root, repository)
+      const state = repository.get(logProject.id)
+      const durations = [
+        11.3795, 14.176458, 16.48, 16.97425, 16.269333, 15.36, 15.390667, 18.24, 19.76, 14.96,
+        13.76, 16.96, 17.294, 15.84, 16.4, 12.8,
+      ]
+      const fixtureVideo = join(root, 'scene-seek.mp4')
+      const encoded = require('node:child_process').spawnSync('ffmpeg', [
+        '-v',
+        'error',
+        '-f',
+        'lavfi',
+        '-i',
+        'color=c=navy:s=64x36:r=30:d=253',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-pix_fmt',
+        'yuv420p',
+        '-y',
+        fixtureVideo,
+      ])
+      assert.equal(encoded.status, 0, encoded.stderr.toString())
+      const videoFile = await files.write(state.id, readFileSync(fixtureVideo), '.mp4')
+      const storyboard = {
+        ...state.stages.storyboard.payload,
+        scenes: durations.map((_, index) => ({
+          ...state.stages.storyboard.payload.scenes[0],
+          id: `seek-${index + 1}`,
+          title: `定位分镜 ${index + 1}`,
+        })),
+      }
+      const narration = {
+        scenes: storyboard.scenes.map((scene, index) => ({
+          id: scene.id,
+          text: `定位口播 ${index + 1}`,
+        })),
+      }
+      const audio = {
+        ...state.stages.audio.payload,
+        duration: durations.reduce((total, duration) => total + duration, 0),
+        tracks: durations.map((duration, index) => ({
+          ...state.stages.audio.payload.tracks[0],
+          sceneId: storyboard.scenes[index].id,
+          duration,
+        })),
+      }
+      for (const [stage, payload] of Object.entries({ storyboard, narration, audio })) {
+        seekFixture
+          .prepare('UPDATE video_workflow_revisions SET payload=? WHERE id=?')
+          .run(JSON.stringify(payload), state.stages[stage].id)
+      }
+      seekFixture.prepare('UPDATE video_workflow_revisions SET payload=? WHERE id=?').run(
+        JSON.stringify({
+          ...state.stages.roughcut.payload,
+          file: videoFile,
+          duration: audio.duration,
+          sourceNarration: state.stages.narration.id,
+        }),
+        state.stages.roughcut.id,
+      )
+      window.webContents.send('workflow:updated', state.id)
+      await waitFor(
+        'document.querySelectorAll("[aria-label=视频分镜定位] button").length===16 && document.querySelector("video")?.readyState>=2',
+        'sixteen-scene actual video',
+      )
+      for (const index of [5, 8, 12, 15, 0, 10, 7, 3, 14, 1, 2, 4, 6, 9, 11, 13]) {
+        await evaluate(
+          `document.querySelectorAll('[aria-label=视频分镜定位] button')[${index}].click()`,
+        )
+        await waitFor('!document.querySelector("video").seeking', 'scene seek settled')
+        await delay(300)
+        assert.equal(
+          await evaluate(
+            'Array.from(document.querySelectorAll("[aria-label=视频分镜定位] button")).findIndex(item=>item.getAttribute("aria-pressed")==="true")',
+          ),
+          index,
+          `Scene ${index + 1} must stay selected after seeking`,
+        )
+        assert.ok(
+          await evaluate(
+            `document.querySelector('.workflow-scene-notes').textContent.includes(${JSON.stringify(`定位口播 ${index + 1}`)})`,
+          ),
+        )
+      }
+      await evaluate('document.querySelector("video").play()')
+      await evaluate(
+        'document.querySelectorAll("[aria-label=视频分镜定位] button")[4].click();document.querySelectorAll("[aria-label=视频分镜定位] button")[11].click();document.querySelectorAll("[aria-label=视频分镜定位] button")[6].click()',
+      )
+      await waitFor('!document.querySelector("video").seeking', 'rapid playing seek settled')
+      await delay(300)
+      assert.ok(
+        await evaluate(
+          'document.querySelectorAll("[aria-label=视频分镜定位] button")[6].getAttribute("aria-pressed")==="true"',
+        ),
+      )
+      await evaluate(
+        'document.querySelector("video").pause();document.querySelector("video").currentTime=5',
+      )
+      await waitFor(
+        'document.querySelectorAll("[aria-label=视频分镜定位] button")[0].getAttribute("aria-pressed")==="true"',
+        'native seek selects first scene',
+      )
+      await evaluate('document.querySelectorAll("[aria-label=视频分镜定位] button")[5].click()')
+      await waitFor('!document.querySelector("video").seeking', 'keyboard start settled')
+      for (const theme of ['light', 'dark']) {
+        await evaluate(`document.documentElement.classList.toggle('dark',${theme === 'dark'})`)
+        for (const width of [1440, 1024]) {
+          window.setSize(width, 1000)
+          await evaluate(
+            'document.querySelectorAll("[aria-label=视频分镜定位] button")[8].scrollIntoView({block:"center"});document.querySelectorAll("[aria-label=视频分镜定位] button")[8].focus()',
+          )
+          window.focus()
+          window.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' })
+          window.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' })
+          await waitFor(
+            '!document.querySelector("video").seeking && document.querySelectorAll("[aria-label=视频分镜定位] button")[8].getAttribute("aria-pressed")==="true"',
+            'keyboard scene seek',
+          )
+          assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'))
+          await screenshot(`scene-seek-${theme}-${width}.png`)
+        }
+        window.webContents.setZoomFactor(2)
+        await evaluate(
+          'document.querySelectorAll("[aria-label=视频分镜定位] button")[8].scrollIntoView({block:"center"})',
+        )
+        await screenshot(`scene-seek-${theme}-200percent.png`)
+        window.webContents.setZoomFactor(1)
+      }
+      window.setSize(1440, 1100)
+    } finally {
+      seekFixture.close()
+    }
     if (process.env.WORKFLOW_SEED_DIR) {
       const media = await evaluate(
         '(async()=>{const result=await window.electronAPI.invoke("workflow:list");const project=result.data.find(item=>item.stages.render);return {id:project.id,file:project.stages.render.payload.file}})()',

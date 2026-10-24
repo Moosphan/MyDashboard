@@ -16,8 +16,61 @@ import {
   type MotionPlan,
   type VideoStyleTemplate,
   stageValue,
+  renderSourceProject,
   validateMotionPlan,
+  type WorkflowOperation,
+  type StagePayloads,
 } from '../../../shared/video-workflow'
+
+function sceneChanges(
+  stage: VideoStage,
+  before: WorkflowRevision['payload'] | undefined,
+  after: WorkflowRevision['payload'],
+): NonNullable<WorkflowOperation['changes']> {
+  if (stage !== 'storyboard' && stage !== 'narration') return []
+  const previous = (before as StagePayloads['storyboard' | 'narration'] | undefined)?.scenes ?? []
+  const current = (after as StagePayloads['storyboard' | 'narration']).scenes
+  const changes: NonNullable<WorkflowOperation['changes']> = []
+  for (const sceneId of new Set([...previous, ...current].map((scene) => scene.id))) {
+    const source = previous.find((scene) => scene.id === sceneId)
+    const result = current.find((scene) => scene.id === sceneId)
+    const title =
+      result && 'title' in result
+        ? result.title
+        : source && 'title' in source
+          ? source.title
+          : sceneId
+    const fields =
+      !source || !result
+        ? ['scene']
+        : stage === 'storyboard'
+          ? ['title', 'body', 'layout', 'html', 'requirements', 'motion']
+          : ['text', 'pronunciation']
+    for (const field of fields) {
+      const value = (scene: typeof source) =>
+        field === 'scene'
+          ? JSON.stringify(scene ?? null)
+          : field === 'motion'
+            ? JSON.stringify(
+                (scene as unknown as Record<string, unknown> | undefined)?.[field] ?? null,
+              )
+            : String((scene as unknown as Record<string, unknown> | undefined)?.[field] ?? '')
+      const oldValue = value(source),
+        newValue = value(result)
+      if (oldValue !== newValue)
+        changes.push({ sceneId, title, field, before: oldValue, after: newValue })
+    }
+  }
+  if (previous.map((scene) => scene.id).join() !== current.map((scene) => scene.id).join())
+    changes.push({
+      sceneId: 'order',
+      title: '分镜顺序',
+      field: 'order',
+      before: previous.map((scene) => scene.id).join(' → '),
+      after: current.map((scene) => scene.id).join(' → '),
+    })
+  return changes
+}
 
 export function fingerprint(value: unknown) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -55,6 +108,7 @@ interface JobRow {
   audio_progress: string | null
   kind: 'generation' | 'motion-plan'
   motion_plan: string | null
+  operation: string | null
   created_at: string
   updated_at: string
 }
@@ -185,6 +239,7 @@ export class VideoWorkflowRepository {
     expected: number,
     requestId: string,
     note = '',
+    recordEdit = true,
   ): VideoProject {
     return this.db.transaction(() => {
       const payload = validatePayload(stage, value)
@@ -195,14 +250,31 @@ export class VideoWorkflowRepository {
         (stage === 'roughcut' || stage === 'render') &&
         (payload as { motion?: MotionPlan }).motion
       ) {
+        const source = payload as StagePayloads['roughcut']
+        const storyboard = (
+          source.sourceStoryboard
+            ? project.history.find(
+                (item) => item.id === source.sourceStoryboard && item.stage === 'storyboard',
+              )?.payload
+            : project.stages.storyboard?.payload
+        ) as StagePayloads['storyboard'] | undefined
+        const audio = (
+          source.sourceAudio
+            ? project.history.find(
+                (item) => item.id === source.sourceAudio && item.stage === 'audio',
+              )?.payload
+            : project.stages.audio?.payload
+        ) as StagePayloads['audio'] | undefined
+        if (!storyboard || !audio) throw new Error('冻结工程的来源分镜或配音版本不存在')
         validateMotionPlan(
           (payload as { motion: MotionPlan }).motion,
-          stageValue(project, 'storyboard')!.scenes.map((scene) => ({
+          storyboard.scenes.map((scene) => ({
             id: scene.id,
-            duration: stageValue(project, 'audio')!
-              .tracks.filter((track) => track.sceneId === scene.id)
+            duration: audio.tracks
+              .filter((track) => track.sceneId === scene.id)
               .reduce((total, track) => total + track.duration, 0),
           })),
+          { allowEmpty: true },
         )
       }
       if (stage === 'narration') {
@@ -236,6 +308,47 @@ export class VideoWorkflowRepository {
             "UPDATE video_workflow_revisions SET status='stale' WHERE project_id=? AND stage=?",
           )
           .run(id, dependent)
+      if (recordEdit && stage === 'storyboard' && project.stages.storyboard) {
+        const changes = sceneChanges(stage, project.stages.storyboard.payload, payload)
+        if (changes.length) {
+          const sceneIds = [...new Set(changes.map((change) => change.sceneId))]
+          const operation: WorkflowOperation = {
+            action: 'scene-edit',
+            ...(sceneIds.length === 1
+              ? {
+                  sceneId: sceneIds[0],
+                  sceneTitle: changes[0].title,
+                  sceneNumber:
+                    (payload as StagePayloads['storyboard']).scenes.findIndex(
+                      (scene) => scene.id === sceneIds[0],
+                    ) + 1 || undefined,
+                }
+              : {}),
+            sourceVersion: project.stages.storyboard.version,
+            resultVersion: version,
+            changes,
+          }
+          const now = new Date().toISOString()
+          this.db
+            .prepare(
+              'INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,operation,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+            )
+            .run(
+              randomUUID(),
+              id,
+              stage,
+              `edit:${requestId}`,
+              expected,
+              'manual-edit',
+              fingerprint(payload),
+              'succeeded',
+              '分镜修改已保存，等待人工审核',
+              JSON.stringify(operation),
+              now,
+              now,
+            )
+        }
+      }
       this.bump(id)
       return this.get(id)
     })()
@@ -282,6 +395,7 @@ export class VideoWorkflowRepository {
     requestId: string,
     executor: string,
     inputFingerprint = '',
+    operation?: WorkflowOperation,
   ): WorkflowJob {
     return this.db.transaction(() => {
       const previous = this.db
@@ -305,7 +419,7 @@ export class VideoWorkflowRepository {
         now = new Date().toISOString()
       this.db
         .prepare(
-          'INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,error,created_at,updated_at,operation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
         )
         .run(
           jobId,
@@ -320,6 +434,7 @@ export class VideoWorkflowRepository {
           null,
           now,
           now,
+          operation ? JSON.stringify(operation) : null,
         )
       return this.job(jobId)!
     })()
@@ -338,6 +453,7 @@ export class VideoWorkflowRepository {
       ...(row.audio_progress ? { audioProgress: JSON.parse(row.audio_progress) } : {}),
       kind: row.kind,
       ...(row.motion_plan ? { motionPlan: JSON.parse(row.motion_plan) } : {}),
+      ...(row.operation ? { operation: JSON.parse(row.operation) } : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     }
@@ -374,7 +490,7 @@ export class VideoWorkflowRepository {
     const job = this.job(id)
     if (!job || job.state !== 'running' || job.kind !== 'motion-plan')
       throw new Error('修改计划任务已结束')
-    const project = this.current(job.projectId, job.expectedRevision)
+    const project = renderSourceProject(this.current(job.projectId, job.expectedRevision))
     const scenes = stageValue(project, 'storyboard')!.scenes.map((scene) => ({
       id: scene.id,
       duration: stageValue(project, 'audio')!
@@ -402,6 +518,60 @@ export class VideoWorkflowRepository {
     )
       throw new Error('修改计划已过期或不属于当前项目，请重新提出修改')
     return job.motionPlan
+  }
+  discardMotionPlans(projectId: string, expected: number) {
+    return this.db.transaction(() => {
+      const project = this.current(projectId, expected)
+      if (project.jobs.some((job) => job.state === 'running'))
+        throw new Error('请先等待或取消正在执行的任务')
+      this.db
+        .prepare(
+          "UPDATE video_workflow_jobs SET state='cancelled',phase='已放弃修改计划，保留原视频与历史',updated_at=? WHERE project_id=? AND kind='motion-plan' AND state<>'cancelled'",
+        )
+        .run(new Date().toISOString(), projectId)
+      const roughcut = project.stages.roughcut
+      if (roughcut?.status === 'stale' && stageUnlocked(project, 'roughcut')) {
+        const now = new Date().toISOString()
+        this.db
+          .prepare(
+            "UPDATE video_workflow_revisions SET status='review',dependencies=?,approved_at=NULL,note=? WHERE id=?",
+          )
+          .run(
+            this.dependencies(project, 'roughcut'),
+            '已取消修改计划，沿用原粗剪的画面、配音、字幕和时长，等待重新审核；后续上游修改未应用到此视频',
+            roughcut.id,
+          )
+        this.db
+          .prepare(
+            "UPDATE video_workflow_revisions SET status='stale' WHERE project_id=? AND stage IN ('render','publish')",
+          )
+          .run(projectId)
+        this.db
+          .prepare(
+            'INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,operation,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+          )
+          .run(
+            randomUUID(),
+            projectId,
+            'roughcut',
+            `retain-roughcut:${projectId}:${expected}`,
+            expected,
+            'reuse-roughcut',
+            fingerprint(roughcut.payload),
+            'succeeded',
+            `修改计划已取消，保留粗剪 v${roughcut.version}，等待审核；未重新合成视频`,
+            JSON.stringify({
+              action: 'reuse-roughcut',
+              sourceVersion: roughcut.version,
+              resultVersion: roughcut.version,
+            } satisfies WorkflowOperation),
+            now,
+            now,
+          )
+        this.bump(projectId)
+      }
+      return this.get(projectId)
+    })()
   }
   templates(): VideoStyleTemplate[] {
     const rows = this.db
@@ -469,14 +639,33 @@ export class VideoWorkflowRepository {
       throw new Error('输入已过期，请重新生成')
     }
     return this.db.transaction(() => {
+      const previous = this.get(job.projectId).stages[job.stage]
       const result = this.save(
         job.projectId,
         job.stage,
         payload,
         job.expectedRevision,
         `job:${id}`,
-        `由 ${job.executor} 生成`,
+        job.operation?.action === 'reuse-narration'
+          ? `沿用口播 v${job.operation.sourceVersion}，关联当前已审核分镜`
+          : job.operation?.action === 'reuse-audio'
+            ? `从分段配音 v${job.operation.sourceVersion} 切换`
+            : job.operation?.sceneId
+              ? `由 ${job.executor} 仅修改 ${job.operation.sceneTitle ?? job.operation.sceneId}`
+              : `由 ${job.executor} 生成`,
+        false,
       )
+      if (job.operation) {
+        const revision = result.stages[job.stage]!
+        this.db.prepare('UPDATE video_workflow_jobs SET operation=? WHERE id=?').run(
+          JSON.stringify({
+            ...job.operation,
+            resultVersion: revision.version,
+            changes: sceneChanges(job.stage, previous?.payload, revision.payload),
+          }),
+          id,
+        )
+      }
       this.updateJob(id, { state: 'succeeded', phase: '已完成，等待人工审核' })
       return { ...result, jobs: this.get(job.projectId).jobs }
     })()

@@ -41,6 +41,13 @@ export interface StoryScene {
   body: string
   layout: SceneLayout
   html?: string
+  requirements?: string
+  motion?: StoryboardSceneMotion
+}
+export interface StoryboardSceneMotion {
+  summary: string
+  effects: MotionEffect[]
+  blockers: string[]
 }
 export interface StoryboardPayload {
   mode: 'template' | 'agent'
@@ -50,6 +57,7 @@ export interface StoryboardPayload {
   referenceFile?: WorkflowFile
   referenceSnapshots?: WorkflowFile[]
   styleTemplateId?: string
+  motionPolicy?: { enabled: boolean; excludedSceneIds: string[] }
   scenes: StoryScene[]
 }
 export type WorkflowVoice = Omit<VoiceRequest, 'text' | 'clientRequestId'>
@@ -90,8 +98,12 @@ export interface MotionFrame {
   opacity?: number
   translate?: string
   scale?: number
+  scaleX?: number
+  scaleY?: number
   rotate?: string
 }
+export const MOTION_CAPABILITIES =
+  'opacity(0–1)、translate("0px 20px")、scale(0–4)、scaleX(0–4)、scaleY(0–4)、rotate("10deg")；scale 为等比缩放，scaleX/scaleY 为方向缩放，不在同一关键帧混用。横线展开用 scaleX，柱形增长用 scaleY，缩放原点由 HTML transform-origin 设置。'
 export interface MotionEffect {
   selector: string
   start: number
@@ -146,7 +158,7 @@ export interface PublishPayload {
 }
 export interface StagePayloads {
   brief: { text: string; duration: number; audience?: string; references?: string }
-  copy: { text: string }
+  copy: { text: string; requirements?: string }
   storyboard: StoryboardPayload
   narration: { scenes: { id: string; text: string; pronunciation?: string }[] }
   audio: AudioPayload
@@ -165,6 +177,16 @@ export interface WorkflowRevision {
   approvedAt: string | null
   note: string
 }
+export interface WorkflowOperation {
+  action: 'scene-edit' | 'scene-generate' | 'reuse-narration' | 'reuse-audio' | 'reuse-roughcut'
+  sceneId?: string
+  sceneTitle?: string
+  sceneNumber?: number
+  feedback?: string
+  sourceVersion?: number
+  resultVersion?: number
+  changes?: { sceneId: string; title: string; field: string; before: string; after: string }[]
+}
 export interface WorkflowJob {
   id: string
   projectId: string
@@ -178,6 +200,7 @@ export interface WorkflowJob {
   audioProgress?: AudioProgress
   kind?: 'generation' | 'motion-plan'
   motionPlan?: MotionPlan
+  operation?: WorkflowOperation
   createdAt: string
   updatedAt: string
 }
@@ -217,6 +240,27 @@ export function stageValue<Stage extends VideoStage>(
 ): StagePayloads[Stage] | undefined {
   return project.stages[stage]?.payload as StagePayloads[Stage] | undefined
 }
+export function renderSourceProject(
+  project: VideoProject,
+  render = stageValue(project, 'roughcut'),
+): VideoProject {
+  if (!render) return project
+  const stages = { ...project.stages }
+  const sources = [
+    ['storyboard', render.sourceStoryboard],
+    ['narration', render.sourceNarration],
+    ['audio', render.sourceAudio],
+  ] as const
+  for (const [stage, id] of sources) {
+    if (!id) continue
+    const source =
+      project.history.find((item) => item.id === id && item.stage === stage) ??
+      (project.stages[stage]?.id === id ? project.stages[stage] : undefined)
+    if (!source) throw new Error('预览视频的来源分镜、口播或配音版本不存在，请恢复来源版本后重试')
+    stages[stage] = source
+  }
+  return { ...project, stages }
+}
 export function stageUnlocked(project: VideoProject, stage: VideoStage) {
   return (
     !project.archived &&
@@ -224,6 +268,35 @@ export function stageUnlocked(project: VideoProject, stage: VideoStage) {
       (item) => project.stages[item]?.status === 'approved',
     )
   )
+}
+
+export function audioSourceRevisions(project: VideoProject, revision: WorkflowRevision) {
+  if (revision.stage !== 'audio') return undefined
+  const index = project.history.findIndex((item) => item.id === revision.id)
+  if (index < 0) return undefined
+  const earlier = project.history.slice(index + 1)
+  const inputs = VIDEO_STAGES.slice(0, VIDEO_STAGES.indexOf('audio')).map((stage) =>
+    earlier.find((item) => item.stage === stage),
+  )
+  return inputs.every((item): item is WorkflowRevision => Boolean(item)) ? inputs : undefined
+}
+
+export function canReuseAudio(project: VideoProject, revision: WorkflowRevision | undefined) {
+  if (!revision || !stageUnlocked(project, 'audio')) return false
+  const inputs = audioSourceRevisions(project, revision)
+  const source = inputs?.find((item) => item.stage === 'narration')?.payload as
+    | StagePayloads['narration']
+    | undefined
+  const current = stageValue(project, 'narration')
+  const signature = (payload: StagePayloads['narration']) =>
+    JSON.stringify(
+      payload.scenes.map((scene) => ({
+        id: scene.id,
+        text: scene.text,
+        pronunciation: scene.pronunciation ?? '',
+      })),
+    )
+  return Boolean(source && current && signature(source) === signature(current))
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -281,7 +354,11 @@ export function validatePayload<Stage extends VideoStage>(
       audience: optionalText(input.audience, '目标受众', 500),
       references: optionalText(input.references, '参考资料', 15000),
     }
-  else if (stage === 'copy') output = { text: text(input.text, '文案') }
+  else if (stage === 'copy')
+    output = {
+      text: text(input.text, '文案'),
+      ...(input.requirements ? { requirements: text(input.requirements, '创作要求', 30000) } : {}),
+    }
   else if (stage === 'storyboard' || stage === 'narration') {
     if (!Array.isArray(input.scenes) || !input.scenes.length || input.scenes.length > 60)
       throw new Error('需要 1–60 个分镜')
@@ -305,6 +382,10 @@ export function validatePayload<Stage extends VideoStage>(
         body: text(scene.body, '分镜正文', 6000),
         layout: scene.layout as SceneLayout,
         ...(scene.html ? { html: text(scene.html, 'HTML', 200000) } : {}),
+        ...(scene.requirements
+          ? { requirements: text(scene.requirements, '分镜修改要求', 30000) }
+          : {}),
+        ...(scene.motion ? { motion: validateStoryboardSceneMotion(id, scene.motion) } : {}),
       }
     })
     if (stage === 'narration') output = { scenes } as StagePayloads['narration']
@@ -327,11 +408,29 @@ export function validatePayload<Stage extends VideoStage>(
         throw new Error('参考链接仅支持 http/https，最多 8 条')
       if (typeof input.referenceText === 'string' && input.referenceText.length > 15000)
         throw new Error('参考描述最多 15000 字符')
+      let motionPolicy: StoryboardPayload['motionPolicy']
+      if (input.motionPolicy !== undefined) {
+        const policy = record(input.motionPolicy)
+        if (
+          typeof policy.enabled !== 'boolean' ||
+          !Array.isArray(policy.excludedSceneIds) ||
+          policy.excludedSceneIds.length > 60 ||
+          policy.excludedSceneIds.some(
+            (id) => typeof id !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(id),
+          )
+        )
+          throw new Error('MG 开关或排除分镜格式无效')
+        motionPolicy = {
+          enabled: policy.enabled,
+          excludedSceneIds: [...new Set(policy.excludedSceneIds as string[])],
+        }
+      }
       output = {
         mode: input.mode as 'template' | 'agent',
         template: String(input.template),
         references: references as string[],
         referenceText: typeof input.referenceText === 'string' ? input.referenceText : '',
+        ...(motionPolicy ? { motionPolicy } : {}),
         ...(input.styleTemplateId
           ? { styleTemplateId: text(input.styleTemplateId, '风格模板', 80) }
           : {}),
@@ -420,9 +519,14 @@ export function validatePayload<Stage extends VideoStage>(
 export function validateMotionPlan(
   value: unknown,
   scenes: { id: string; duration: number }[],
+  options: { allowEmpty?: boolean } = {},
 ): MotionPlan {
   const input = record(value)
-  if (!Array.isArray(input.scenes) || !input.scenes.length || input.scenes.length > 60)
+  if (
+    !Array.isArray(input.scenes) ||
+    (!input.scenes.length && !options.allowEmpty) ||
+    input.scenes.length > 60
+  )
     throw new Error('动效计划需要分镜')
   const seen = new Set<string>()
   const planned = input.scenes.map((value) => {
@@ -431,7 +535,11 @@ export function validateMotionPlan(
     const duration = scenes[sceneIndex]?.duration
     if (!duration || seen.has(String(scene.sceneId))) throw new Error('动效分镜不存在或重复')
     seen.add(String(scene.sceneId))
-    if (!Array.isArray(scene.effects) || !scene.effects.length || scene.effects.length > 80)
+    if (
+      !Array.isArray(scene.effects) ||
+      (!scene.effects.length && !options.allowEmpty) ||
+      scene.effects.length > 80
+    )
       throw new Error('每镜需要 1–80 项动效')
     const effects = scene.effects.map((value): MotionEffect => {
       const effect = record(value)
@@ -471,13 +579,15 @@ export function validateMotionPlan(
         if (
           !Object.keys(frame).length ||
           Object.keys(frame).some(
-            (key) => !['opacity', 'translate', 'scale', 'rotate'].includes(key),
+            (key) => !['opacity', 'translate', 'scale', 'scaleX', 'scaleY', 'rotate'].includes(key),
           )
         )
           throw new Error('动效只支持透明度、位移、缩放和旋转，不执行代码')
+        if (frame.scale !== undefined && (frame.scaleX !== undefined || frame.scaleY !== undefined))
+          throw new Error('等比缩放与方向缩放不能在同一关键帧混用')
         const result: MotionFrame = {}
         for (const [key, current] of Object.entries(frame)) {
-          if (key === 'opacity' || key === 'scale') {
+          if (key === 'opacity' || key === 'scale' || key === 'scaleX' || key === 'scaleY') {
             if (
               typeof current !== 'number' ||
               !Number.isFinite(current) ||
@@ -497,6 +607,17 @@ export function validateMotionPlan(
         return result
       })
       const easing = effect.easing ?? 'ease-out'
+      if (
+        !(['opacity', 'translate', 'scale', 'scaleX', 'scaleY', 'rotate'] as const).some(
+          (property) => {
+            const values = keyframes
+              .map((frame) => frame[property])
+              .filter((value) => value !== undefined)
+            return new Set(values).size > 1
+          },
+        )
+      )
+        throw new Error('动效关键帧没有实际变化，请重新生成有效动效')
       if (!['linear', 'ease', 'ease-in', 'ease-out', 'ease-in-out'].includes(String(easing)))
         throw new Error('无效缓动曲线')
       if (
@@ -548,6 +669,44 @@ export function validateMotionPlan(
     at: input.at,
     ...(sceneId ? { sceneId } : {}),
     scenes: planned,
+  }
+}
+
+function validateStoryboardSceneMotion(id: string, value: unknown): StoryboardSceneMotion {
+  const motion = record(value)
+  const summary = text(motion.summary, '分镜动效说明', 1500)
+  if (!Array.isArray(motion.blockers) || motion.blockers.length > 20)
+    throw new Error('请提供动效与素材缺口列表，已完成时填空数组')
+  const blockers = motion.blockers.map((value) => text(value, '动效或素材缺口', 1000))
+  if (!Array.isArray(motion.effects)) throw new Error('缺少结构化分镜动效')
+  const effects =
+    motion.effects.length || !blockers.length
+      ? validateMotionPlan(
+          { summary, feedback: summary, at: 0, scenes: [{ sceneId: id, effects: motion.effects }] },
+          [{ id, duration: 1 }],
+        ).scenes[0].effects
+      : []
+  return { summary, effects, blockers }
+}
+
+export function sceneMotionEnabled(storyboard: StoryboardPayload, sceneId: string) {
+  return (
+    !storyboard.motionPolicy ||
+    (storyboard.motionPolicy.enabled && !storyboard.motionPolicy.excludedSceneIds.includes(sceneId))
+  )
+}
+
+export function storyboardMotionReadiness(storyboard: StoryboardPayload) {
+  const included = storyboard.scenes.filter((scene) => sceneMotionEnabled(storyboard, scene.id))
+  return {
+    total: storyboard.scenes.length,
+    planned: included.filter(
+      (scene) => scene.motion && !scene.motion.blockers.length && scene.motion.effects.length,
+    ).length,
+    unplanned: included.filter((scene) => !scene.motion).map((scene) => scene.id),
+    blockers: included.flatMap((scene) =>
+      (scene.motion?.blockers ?? []).map((message) => ({ sceneId: scene.id, message })),
+    ),
   }
 }
 

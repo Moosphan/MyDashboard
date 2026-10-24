@@ -6,10 +6,12 @@ import { Badge } from '@/components/ui/badge'
 import { VoiceInput, VoiceTextArea } from '../components/voiceover/VoiceControls'
 import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
 import {
+  canReuseAudio,
   VIDEO_STAGES,
   VIDEO_STAGE_LABELS,
   stageUnlocked,
   stageValue,
+  storyboardMotionReadiness,
   type StagePayloads,
   type VideoProject,
   type VideoStage,
@@ -152,7 +154,8 @@ export function StageWorkspace({
     executor: storyboardModification
       ? executor
       : (stage === 'storyboard' &&
-            (settings ?? (draft.payload as StagePayloads['storyboard'])).mode === 'template') ||
+            (settings ?? (draft.payload as StagePayloads['storyboard'])).mode === 'template' &&
+            !(settings ?? (draft.payload as StagePayloads['storyboard'])).motionPolicy?.enabled) ||
           ['audio', 'roughcut', 'render'].includes(stage)
         ? 'template'
         : executor,
@@ -166,7 +169,11 @@ export function StageWorkspace({
         ? { platform: publishPlatform, feedback: publishFeedback[publishPlatform] }
         : undefined,
   })
-  const generate = (sceneId?: string, settings?: StagePayloads['storyboard']) => {
+  const generate = (
+    sceneId?: string,
+    settings?: StagePayloads['storyboard'],
+    storyboardModification?: { sceneId: string; feedback: string },
+  ) => {
     if (stage === 'copy' && draft.dirty) {
       setError('请先保存或放弃当前文案的修改，再生成新版本。')
       return Promise.resolve(false)
@@ -176,11 +183,14 @@ export function StageWorkspace({
       return Promise.resolve(false)
     }
     if (sceneId && draft.dirty) {
-      setError('单镜重绘基于已保存分镜，请先保存当前修改。')
+      setError('单镜生成基于已保存内容，请先保存或放弃当前修改。')
       return Promise.resolve(false)
     }
     return run(async () => {
-      const job = await workflowCall<WorkflowJob>('generate', generationInput(sceneId, settings))
+      const job = await workflowCall<WorkflowJob>(
+        'generate',
+        generationInput(sceneId, settings, storyboardModification),
+      )
       setPending({ id: job.id, payload: draft.payload })
     })
   }
@@ -213,18 +223,36 @@ export function StageWorkspace({
       onProject(result)
       setReview(false)
     }, '当前版本已审核通过，可继续下一步')
+  const motionReadiness =
+    stage === 'storyboard'
+      ? storyboardMotionReadiness(draft.payload as StagePayloads['storyboard'])
+      : undefined
+  const motionBlocked = Boolean(
+    motionReadiness &&
+    (motionReadiness.blockers.length ||
+      ((draft.payload as StagePayloads['storyboard']).motionPolicy?.enabled &&
+        motionReadiness.unplanned.length)),
+  )
   const canApprove =
     unlocked &&
     revision &&
     revision.status !== 'approved' &&
-    revision.status !== 'stale' &&
+    (revision.status !== 'stale' || (stage === 'audio' && canReuseAudio(project, revision))) &&
     !draft.dirty &&
+    !motionBlocked &&
     !running &&
     !busy
   const status = revision ? revisionStatus[revision.status] : '待开始'
   const previousStage = VIDEO_STAGES[VIDEO_STAGES.indexOf(stage) - 1]
   const storyboard = stageValue(project, 'storyboard')
   const narrationScene = (draft.payload as StagePayloads['narration']).scenes?.[activeScene]
+  const savedNarration = stageValue(project, 'narration')
+  const narrationAligned = Boolean(
+    savedNarration &&
+    storyboard &&
+    savedNarration.scenes.map((scene) => scene.id).join() ===
+      storyboard.scenes.map((scene) => scene.id).join(),
+  )
   const checks = {
     brief: '目标、受众与资料',
     copy: '事实、结构与表达',
@@ -385,7 +413,7 @@ export function StageWorkspace({
                       )
                         ? 'AI 正在生成口播…'
                         : revision
-                          ? 'AI 重新生成口播稿'
+                          ? 'AI 重新生成全部口播稿'
                           : 'AI 生成口播稿'}
                     </Button>
                   )}
@@ -491,7 +519,12 @@ export function StageWorkspace({
                       disabled={busy || Boolean(running)}
                       rows={15}
                       value={(draft.payload as StagePayloads['copy']).text}
-                      onChange={(event) => draft.update({ text: event.target.value })}
+                      onChange={(event) =>
+                        draft.update({
+                          ...(draft.payload as StagePayloads['copy']),
+                          text: event.target.value,
+                        })
+                      }
                       placeholder="点击上方「AI 生成文案」开始，也可以直接撰写或编辑生成结果。"
                     />
                     <p className="workflow-muted">
@@ -504,7 +537,7 @@ export function StageWorkspace({
                     projectId={project.id}
                     value={draft.payload as StagePayloads['storyboard']}
                     onChange={draft.update}
-                    disabled={!unlocked || busy}
+                    disabled={!unlocked || busy || Boolean(running)}
                     onRegenerate={generate}
                     onAiModify={(sceneId, feedback) =>
                       generate(sceneId, draft.payload as StagePayloads['storyboard'], {
@@ -532,6 +565,11 @@ export function StageWorkspace({
                           : '请先审核通过文案与分镜，再生成口播。'}
                       </p>
                       {draft.dirty && <p>有未保存的口播修改，请先保存或放弃修改，再重新生成。</p>}
+                      {revision?.status === 'stale' && (
+                        <p>
+                          前序内容已更新。仅调整画面且口播仍适用时，可沿用现有口播；需要改词时，仅重新生成对应分镜。沿用或生成后仍需人工审核。
+                        </p>
+                      )}
                     </div>
                     {storyboard && (
                       <VoiceSelect
@@ -543,6 +581,61 @@ export function StageWorkspace({
                           label: String(index + 1).padStart(2, '0') + ' · ' + scene.title,
                         }))}
                       />
+                    )}
+                    {savedNarration && (
+                      <div className="workflow-section">
+                        <div className="workflow-toolbar flex-wrap">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            data-narration-generate-scene
+                            disabled={
+                              !unlocked ||
+                              busy ||
+                              Boolean(running) ||
+                              draft.dirty ||
+                              draft.conflict ||
+                              !narrationAligned ||
+                              !storyboard?.scenes[activeScene]
+                            }
+                            onClick={() => generate(storyboard?.scenes[activeScene]?.id)}
+                          >
+                            AI 仅重新生成当前镜口播
+                          </Button>
+                          {revision?.status === 'stale' && (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              data-narration-reuse
+                              disabled={
+                                !unlocked ||
+                                busy ||
+                                Boolean(running) ||
+                                draft.dirty ||
+                                draft.conflict ||
+                                !narrationAligned
+                              }
+                              onClick={() =>
+                                void run(async () => {
+                                  const job = await workflowCall<WorkflowJob>('generate', {
+                                    ...generationInput(),
+                                    executor: 'template',
+                                    reuseNarration: true,
+                                  })
+                                  setPending({ id: job.id, payload: draft.payload })
+                                })
+                              }
+                            >
+                              沿用现有口播稿
+                            </Button>
+                          )}
+                        </div>
+                        {!narrationAligned && (
+                          <p className="workflow-muted">
+                            分镜数量或顺序已变化，请先生成全部口播稿。
+                          </p>
+                        )}
+                      </div>
                     )}
                     {narrationScene &&
                       [narrationScene].map((scene) => (
@@ -714,7 +807,11 @@ export function StageWorkspace({
                 disabled={!canApprove}
                 onClick={() => setReview(true)}
               >
-                审核通过此版本
+                {stage === 'audio' &&
+                revision?.status === 'stale' &&
+                canReuseAudio(project, revision)
+                  ? '沿用并审核此版配音'
+                  : '审核通过此版本'}
               </Button>
               {draft.dirty && <p className="workflow-muted">请先保存修改，再审核当前版本。</p>}
             </div>
@@ -725,6 +822,13 @@ export function StageWorkspace({
                 <h3 className="workflow-section-title">任务与执行</h3>
                 <p className="workflow-muted">{VIDEO_STAGE_LABELS[stage]} · 仅执行已获准阶段</p>
               </div>
+              {stage === 'audio' &&
+                revision?.status === 'stale' &&
+                canReuseAudio(project, revision) && (
+                  <p className="workflow-muted" data-audio-reuse-ready>
+                    口播正文、读音与分镜顺序未变，可沿用已有配音。审核时校验文件并创建新版本，无需重新生成。
+                  </p>
+                )}
               <ExecutionLog
                 key={`${project.id}:${stage}`}
                 jobs={project.jobs.filter((job) => job.stage === stage)}
@@ -763,7 +867,7 @@ export function StageWorkspace({
                   </Button>
                   {stage === 'roughcut' && pendingMotionPlan && (
                     <p className="workflow-muted" role="status">
-                      已有待确认的动效计划，请先在上方确认计划，再合成新版粗剪。
+                      已有待确认的动效计划，可在上方确认计划，或取消修改计划后沿用原视频并审核继续。
                     </p>
                   )}
                 </fieldset>
@@ -871,7 +975,18 @@ export function StageWorkspace({
                   确认通过「{VIDEO_STAGE_LABELS[stage]}」v{revision?.version}
                 </Dialog.Title>
                 <Dialog.Description className="workflow-muted mt-2">
-                  请确认当前已保存内容准确且可以进入下一步。后续修改会使依赖此版本的步骤失效。
+                  {stage === 'audio' &&
+                  revision?.status === 'stale' &&
+                  canReuseAudio(project, revision)
+                    ? '口播正文、读音与顺序未变。确认后将校验已有文件，沿用此版音频创建并审核新版本，无需重新生成配音。'
+                    : stage === 'roughcut' &&
+                        project.jobs.some(
+                          (job) =>
+                            job.operation?.action === 'reuse-roughcut' &&
+                            job.operation.resultVersion === revision?.version,
+                        )
+                      ? '本次沿用预览中的原粗剪及其原配音、字幕和时长。取消的修改计划与后续上游修改不会加入此视频，正式成片将复用这份冻结工程。'
+                      : '请确认当前已保存内容准确且可以进入下一步。后续修改会使依赖此版本的步骤失效。'}
                 </Dialog.Description>
               </div>
             </div>

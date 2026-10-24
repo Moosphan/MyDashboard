@@ -127,6 +127,9 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     return exported
   })
   handle('workflow:cancel', (id: string) => getVideoWorkflow().cancel(id))
+  handle('workflow:discardMotionPlans', (id: string, expected: number) =>
+    getVideoWorkflow().discardMotionPlans(id, expected),
+  )
   handle('workflow:runtime', () => getVideoWorkflow().runtime.get())
   handle('workflow:showFile', async (projectId: string, file: WorkflowFile) => {
     const path = await getVideoWorkflow().files.verify(projectId, file)

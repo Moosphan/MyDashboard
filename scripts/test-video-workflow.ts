@@ -9,8 +9,10 @@ import {
   validatePayload,
   splitNarration,
   stageValue,
+  stageUnlocked,
   type AudioProgress,
   validateMotionPlan,
+  storyboardMotionReadiness,
 } from '../src/shared/video-workflow'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -43,9 +45,108 @@ import { resolveVoiceRequest } from '../src/shared/voiceover'
 import { createWorkflowAudio, workflowVoiceSeed } from '../src/main/services/video-workflow/audio'
 import {
   defaultMotion,
+  extractMotionRequirements,
+  hasExplicitMotionRequirements,
   mergeMotion,
   motionPrompt,
+  shouldGenerateInitialMotion,
+  storyboardMotionPlan,
 } from '../src/main/services/video-workflow/motion'
+import {
+  renderSceneTimeline,
+  renderSceneAtTime,
+} from '../src/renderer/modules/video/workflow/render-timeline'
+
+test('scene selection seeks to the first rendered frame and survives browser time precision', () => {
+  const durations = [
+    11.3795, 14.176458, 16.48, 16.97425, 16.269333, 15.36, 15.390667, 18.24, 19.76, 14.96, 13.76,
+    16.96, 17.294, 15.84, 16.4, 12.8,
+  ]
+  const scenes = durations.map((_, index) => ({ id: `scene-${index + 1}` }))
+  const tracks = durations.flatMap((duration, index) => [
+    { sceneId: scenes[index].id, duration: duration / 3 },
+    { sceneId: scenes[index].id, duration: (duration * 2) / 3 },
+  ])
+  const timeline = renderSceneTimeline(scenes, tracks)
+  for (const [index, item] of timeline.entries()) {
+    const browserTime = Math.floor(item.seek * 1e6) / 1e6
+    assert.equal(renderSceneAtTime(timeline, browserTime), index)
+    assert.ok(item.seek >= item.start - 1e-6)
+    assert.ok(item.seek - item.start < 1 / 30)
+    assert.equal(renderSceneAtTime(timeline, item.start - 0.01), Math.max(0, index - 1))
+  }
+  assert.equal(renderSceneAtTime(timeline, 252.067), 15)
+  assert.equal(renderSceneAtTime(timeline, 0), 0)
+})
+
+test('local animation edits do not reimpose unrelated historical MG requirements', () => {
+  const { db, state } = visualFixture()
+  try {
+    stageValue(state, 'brief')!.text = '每页都要有 MG 动画，第二镜必须添加真实录屏。'
+    stageValue(state, 'storyboard')!.scenes[1].html =
+      '<!-- MG：缺失的新旧标题交替 --><h1>第二镜</h1>'
+    const prompt = motionPrompt(state, '只让第一镜标题慢一点入场', 0, 'one')
+    assert.doesNotMatch(prompt, /以下要求是必须执行的数据/)
+    assert.doesNotMatch(prompt, /缺失的新旧标题交替/)
+    assert.match(prompt, /历史创作要求仅作背景/)
+    assert.match(prompt, /不得因未涉及的历史要求返回 requiresUpstream/)
+    assert.match(prompt, /若本次修改需要新增或替换文字、HTML 元素、图形或素材/)
+  } finally {
+    db.close()
+  }
+})
+
+test('animation edits and persisted plans use the preview video sources after upstream changes', () => {
+  const { db, repository, state: original, render } = visualFixture()
+  try {
+    let state = repository.save(
+      original.id,
+      'roughcut',
+      {
+        ...render,
+        sourceStoryboard: original.stages.storyboard!.id,
+        sourceAudio: original.stages.audio!.id,
+        sourceNarration: original.stages.narration!.id,
+      },
+      original.revision,
+      randomUUID(),
+    )
+    for (const stage of ['storyboard', 'narration', 'audio'] as const) {
+      const payload = structuredClone(stageValue(original, stage)!)
+      if ('scenes' in payload) {
+        payload.scenes.forEach((scene, index) => {
+          scene.id = `replacement-${index}`
+        })
+      } else {
+        payload.tracks.forEach((track, index) => {
+          track.sceneId = `replacement-${index}`
+        })
+      }
+      state = repository.save(state.id, stage, payload, state.revision, randomUUID())
+      state = repository.approve(
+        state.id,
+        stage,
+        state.stages[stage]!.id,
+        state.revision,
+        randomUUID(),
+      )
+    }
+    const prompt = motionPrompt(state, '标题入场慢一点', 0, 'one')
+    assert.match(prompt, /"id":"one","duration":2/)
+    assert.doesNotMatch(prompt, /replacement-/)
+    const job = repository.startJob(state.id, 'roughcut', state.revision, randomUUID(), 'codex')
+    repository.markMotionJob(job.id)
+    repository.finishMotionPlan(job.id, {
+      ...defaultMotion(original),
+      sceneId: 'one',
+      scenes: [defaultMotion(original).scenes[0]],
+    })
+    assert.equal(repository.motionPlan(state.id, job.id, state.revision).scenes[0].sceneId, 'one')
+    assert.equal(repository.get(state.id).stages.audio!.id, state.stages.audio!.id)
+  } finally {
+    db.close()
+  }
+})
 
 function fixture() {
   const db = new Database(':memory:')
@@ -55,6 +156,318 @@ function fixture() {
   const project = repository.create('演示项目')
   return { db, repository, project }
 }
+
+test('directional scaling from storyboard MG plans validates and compiles to real WAAPI scale', () => {
+  const plan = validateMotionPlan(
+    {
+      at: 0,
+      feedback: '验证方向缩放',
+      summary: '连接线沿横轴展开，柱状图沿纵轴增长',
+      scenes: [
+        {
+          sceneId: 'one',
+          effects: [
+            {
+              selector: '#line',
+              start: 0,
+              duration: 0.5,
+              keyframes: [
+                { scaleX: 0, scaleY: 1 },
+                { scaleX: 1, scaleY: 1 },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    [{ id: 'one', duration: 2 }],
+  )
+  assert.deepEqual(plan.scenes[0].effects[0].keyframes, [
+    { scaleX: 0, scaleY: 1 },
+    { scaleX: 1, scaleY: 1 },
+  ])
+  const { db, state } = visualFixture()
+  const document = hyperframesDocument(state, ['<div id="line">line</div>'], {
+    ...plan,
+    scenes: [{ ...plan.scenes[0], sceneId: stageValue(state, 'storyboard')!.scenes[0].id }],
+  })
+  assert.match(document, /"scale":"0 1"/)
+  assert.match(document, /"scale":"1 1"/)
+  assert.doesNotMatch(document, /"scaleX":/)
+  for (const keyframes of [
+    [{ scaleX: -1 }, { scaleX: 1 }],
+    [{ scaleY: 0 }, { scaleY: Infinity }],
+    [
+      { scale: 0, scaleX: 0 },
+      { scale: 1, scaleX: 1 },
+    ],
+  ])
+    assert.throws(() =>
+      validateMotionPlan(
+        {
+          at: 0,
+          feedback: '验证方向缩放',
+          summary: 'invalid',
+          scenes: [
+            {
+              sceneId: 'one',
+              effects: [{ selector: '#line', start: 0, duration: 0.5, keyframes }],
+            },
+          ],
+        },
+        [{ id: 'one', duration: 2 }],
+      ),
+    )
+  db.close()
+})
+
+test('storyboard motion declarations survive persistence and bind to measured narration durations', () => {
+  const { db, state } = visualFixture()
+  try {
+    const original = stageValue(state, 'storyboard')!
+    const storyboard = validatePayload('storyboard', {
+      ...original,
+      scenes: original.scenes.map((scene) => ({
+        ...scene,
+        motion: {
+          summary: '横向连接线展开',
+          blockers: [],
+          effects: [
+            {
+              selector: 'h1',
+              start: 0.1,
+              duration: 0.4,
+              keyframes: [{ scaleX: 0 }, { scaleX: 1 }],
+            },
+          ],
+        },
+      })),
+    })
+    assert.equal(storyboard.scenes[0].motion?.summary, '横向连接线展开')
+    assert.deepEqual(storyboardMotionReadiness(storyboard), {
+      total: original.scenes.length,
+      planned: original.scenes.length,
+      unplanned: [],
+      blockers: [],
+    })
+    const project = {
+      ...state,
+      stages: { ...state.stages, storyboard: { ...state.stages.storyboard!, payload: storyboard } },
+    }
+    const plan = storyboardMotionPlan(project)!
+    const duration = stageValue(state, 'audio')!
+      .tracks.filter((track) => track.sceneId === original.scenes[0].id)
+      .reduce((sum, track) => sum + track.duration, 0)
+    assert.equal(plan.scenes[0].effects[0].start, duration * 0.1)
+    assert.equal(plan.scenes[0].effects[0].duration, duration * 0.4)
+    const missing = {
+      ...storyboard,
+      scenes: storyboard.scenes.map((scene, index) =>
+        index === 0
+          ? { ...scene, motion: { ...scene.motion!, blockers: ['尚未取得真实投稿封面'] } }
+          : scene,
+      ),
+    }
+    assert.equal(storyboardMotionReadiness(missing).blockers[0].message, '尚未取得真实投稿封面')
+    assert.throws(
+      () =>
+        storyboardMotionPlan({
+          ...project,
+          stages: {
+            ...project.stages,
+            storyboard: { ...project.stages.storyboard, payload: missing },
+          },
+        }),
+      /真实投稿封面/,
+    )
+    assert.equal(
+      storyboardMotionPlan(state),
+      undefined,
+      'legacy comment-only storyboards must not be reported as prepared',
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('storyboard prompt and motion planner share directional capabilities and require materialized targets', () => {
+  const { db, state } = visualFixture()
+  try {
+    const prompt = agentPrompt(
+      state,
+      'storyboard',
+      { motionPolicy: { enabled: true, excludedSceneIds: ['scene-2'] } },
+      '',
+    )
+    assert.match(prompt, /scaleX/)
+    assert.match(prompt, /0–1.*归一化/)
+    assert.match(prompt, /blockers/)
+    assert.match(prompt, /内置 MG 规则.*所有未排除/)
+    assert.match(prompt, /scene-2/)
+    assert.match(motionPrompt(state, '', 0), /scaleX/)
+  } finally {
+    db.close()
+  }
+})
+
+test('storyboard MG policy persists and exclusions prevent fallback effects', () => {
+  const { db, state } = visualFixture()
+  try {
+    const original = stageValue(state, 'storyboard')!
+    const ids = original.scenes.map((scene) => scene.id)
+    const motion = {
+      summary: '对象展开',
+      blockers: [],
+      effects: [
+        { selector: 'h1', start: 0, duration: 0.3, keyframes: [{ scaleX: 0 }, { scaleX: 1 }] },
+      ],
+    }
+    const storyboard = validatePayload('storyboard', {
+      ...original,
+      motionPolicy: { enabled: true, excludedSceneIds: [ids[1]] },
+      scenes: original.scenes.map((scene, index) => ({
+        ...scene,
+        motion: index ? { ...motion, blockers: ['未取得封面'] } : motion,
+      })),
+    })
+    assert.deepEqual(storyboard.motionPolicy, { enabled: true, excludedSceneIds: [ids[1]] })
+    assert.equal(storyboardMotionReadiness(storyboard).planned, 1)
+    assert.deepEqual(storyboardMotionReadiness(storyboard).blockers, [])
+    const project = {
+      ...state,
+      stages: { ...state.stages, storyboard: { ...state.stages.storyboard!, payload: storyboard } },
+    }
+    const plan = storyboardMotionPlan(project)!
+    assert.deepEqual(
+      plan.scenes.map((scene) => scene.sceneId),
+      [ids[0]],
+    )
+    assert.deepEqual(
+      mergeMotion(project, plan).scenes.find((scene) => scene.sceneId === ids[1])?.effects,
+      [],
+    )
+    assert.throws(
+      () => mergeMotion(project, { ...plan, scenes: [{ ...plan.scenes[0], sceneId: ids[1] }] }),
+      /已排除/,
+    )
+    for (const policy of [
+      { enabled: false, excludedSceneIds: [] },
+      { enabled: true, excludedSceneIds: ids },
+    ]) {
+      const disabled = {
+        ...project,
+        stages: {
+          ...project.stages,
+          storyboard: {
+            ...project.stages.storyboard,
+            payload: { ...storyboard, motionPolicy: policy },
+          },
+        },
+      }
+      assert.deepEqual(storyboardMotionPlan(disabled)!.scenes, [])
+      assert.ok(defaultMotion(disabled).scenes.every((scene) => !scene.effects.length))
+      assert.ok(
+        mergeMotion(disabled, storyboardMotionPlan(disabled)!).scenes.every(
+          (scene) => !scene.effects.length,
+        ),
+      )
+      assert.throws(() => mergeMotion(disabled, plan), /关闭|已排除/)
+    }
+    assert.throws(
+      () =>
+        validatePayload('storyboard', {
+          ...original,
+          motionPolicy: { enabled: 'yes', excludedSceneIds: [] },
+        }),
+      /MG/,
+    )
+    assert.throws(
+      () =>
+        validatePayload('storyboard', {
+          ...original,
+          motionPolicy: { enabled: true, excludedSceneIds: [7] },
+        }),
+      /MG/,
+    )
+    const missing = {
+      ...project,
+      stages: {
+        ...project.stages,
+        storyboard: {
+          ...project.stages.storyboard,
+          payload: { ...storyboard, scenes: original.scenes },
+        },
+      },
+    }
+    assert.throws(() => storyboardMotionPlan(missing), /分镜.*未.*计划/)
+    const offPrompt = agentPrompt(
+      state,
+      'storyboard',
+      { motionPolicy: { enabled: false, excludedSceneIds: [] } },
+      '',
+    )
+    assert.match(offPrompt, /MG 已关闭/)
+  } finally {
+    db.close()
+  }
+})
+
+test('storyboard approval catches missing MG before roughcut and keeps existing speech versions', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-mg-approval-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('Must not synthesize')
+  })
+  try {
+    const storyboard = stageValue(initial, 'storyboard')!
+    let state = repository.save(
+      initial.id,
+      'storyboard',
+      { ...storyboard, motionPolicy: { enabled: true, excludedSceneIds: [] } },
+      initial.revision,
+      randomUUID(),
+    )
+    assert.deepEqual(stageValue(state, 'narration'), stageValue(initial, 'narration'))
+    assert.deepEqual(stageValue(state, 'audio'), stageValue(initial, 'audio'))
+    await assert.rejects(
+      service.approve(
+        state.id,
+        'storyboard',
+        state.stages.storyboard!.id,
+        state.revision,
+        randomUUID(),
+        '',
+      ),
+      /未生成 MG 计划/,
+    )
+    assert.equal(repository.get(state.id).stages.storyboard!.status, 'review')
+    state = repository.save(
+      state.id,
+      'storyboard',
+      { ...storyboard, motionPolicy: { enabled: false, excludedSceneIds: ['one'] } },
+      state.revision,
+      randomUUID(),
+    )
+    const approved = await service.approve(
+      state.id,
+      'storyboard',
+      state.stages.storyboard!.id,
+      state.revision,
+      randomUUID(),
+      '',
+    )
+    assert.deepEqual(stageValue(approved, 'storyboard')!.motionPolicy, {
+      enabled: false,
+      excludedSceneIds: ['one'],
+    })
+    assert.equal(approved.stages.storyboard!.status, 'approved')
+    assert.equal(approved.history.filter((revision) => revision.stage === 'storyboard').length, 3)
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('motion plans accept only finite scene-local declarative animations', () => {
   const input = {
@@ -109,6 +522,12 @@ test('motion plans accept only finite scene-local declarative animations', () =>
     { selector: 'body,script' },
     { keyframes: [{ transform: 'url(https://example.com)' }, { opacity: 1 }] },
     { keyframes: [{ opacity: 2 }, { opacity: 1 }] },
+    {
+      keyframes: [
+        { opacity: 1, scale: 1 },
+        { scale: 1, opacity: 1 },
+      ],
+    },
     { iterations: -1 },
   ]) {
     assert.throws(() =>
@@ -120,6 +539,219 @@ test('motion plans accept only finite scene-local declarative animations', () =>
         [{ id: 'one', duration: 2 }],
       ),
     )
+  }
+})
+
+test('motion requirements are extracted from explicit brief text and storyboard MG comments', () => {
+  const { db, state } = visualFixture()
+  const project = {
+    ...state,
+    stages: {
+      ...state.stages,
+      brief: {
+        ...state.stages.brief!,
+        payload: {
+          ...stageValue(state, 'brief')!,
+          text: '每页都要有 MG 动画，标题和要点分步出现。',
+        },
+      },
+      storyboard: {
+        ...state.stages.storyboard!,
+        payload: {
+          ...stageValue(state, 'storyboard')!,
+          scenes: stageValue(state, 'storyboard')!.scenes.map((scene, index) => ({
+            ...scene,
+            html: `<!-- MG规划：${index === 0 ? '署名先出现，再展开标题' : '要点逐项进入'} -->${sceneHtml(scene, 'technical')}`,
+          })),
+        },
+      },
+    },
+  }
+  const requirements = extractMotionRequirements(project)
+  assert.equal(hasExplicitMotionRequirements(project), true)
+  assert.match(requirements, /每页都要有 MG 动画/)
+  assert.match(requirements, /MG规划：署名先出现，再展开标题/)
+  assert.equal(hasExplicitMotionRequirements(state), false)
+  db.close()
+})
+
+test('initial motion prompt carries explicit requirements and requires every scene', () => {
+  const { db, state, render } = visualFixture()
+  const project = {
+    ...state,
+    stages: {
+      ...state.stages,
+      brief: {
+        ...state.stages.brief!,
+        payload: { ...stageValue(state, 'brief')!, text: '每页都要有 MG 动画。' },
+      },
+      storyboard: {
+        ...state.stages.storyboard!,
+        payload: {
+          ...stageValue(state, 'storyboard')!,
+          scenes: stageValue(state, 'storyboard')!.scenes.map((scene) => ({
+            ...scene,
+            html: `<!-- MG规划：${scene.title} 逐项入场 -->${sceneHtml(scene, 'technical')}`,
+          })),
+        },
+      },
+    },
+  }
+  const prompt = motionPrompt(project, '', 0, undefined, { initial: true })
+  assert.match(prompt, /每页都要有 MG 动画/)
+  assert.match(prompt, /MG规划：第一镜 逐项入场/)
+  assert.match(prompt, /每一个分镜都必须返回至少一项动效/)
+  assert.match(prompt, /不得忽略简报、文案或 HTML 注释中的动效要求/)
+  assert.equal(shouldGenerateInitialMotion(project), true)
+  assert.equal(shouldGenerateInitialMotion(state), false)
+  const current = {
+    ...project,
+    stages: {
+      ...project.stages,
+      roughcut: {
+        ...state.stages.audio!,
+        stage: 'roughcut' as const,
+        payload: {
+          ...render,
+          sourceStoryboard: state.stages.storyboard!.id,
+          motion: { ...defaultMotion(state), feedback: '用户确认的逐镜动效' },
+        },
+      },
+    },
+  }
+  assert.equal(
+    shouldGenerateInitialMotion(current),
+    false,
+    'audio-only regeneration must retain the confirmed motion',
+  )
+  assert.equal(
+    shouldGenerateInitialMotion({
+      ...current,
+      stages: {
+        ...current.stages,
+        storyboard: { ...current.stages.storyboard!, id: 'new-storyboard' },
+      },
+    }),
+    true,
+  )
+  assert.equal(
+    shouldGenerateInitialMotion({
+      ...current,
+      stages: {
+        ...current.stages,
+        roughcut: {
+          ...current.stages.roughcut!,
+          payload: {
+            ...render,
+            sourceStoryboard: state.stages.storyboard!.id,
+            motion: defaultMotion(state),
+          },
+        },
+      },
+    }),
+    true,
+    'existing default-only videos must receive requested MG',
+  )
+  db.close()
+})
+
+test('explicit MG requests invoke the motion Agent before roughcut rendering and never fall back on failure', async () => {
+  const { db, repository, project } = fixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-mg-required-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('No synthesis')
+  })
+  try {
+    const audioFile = await service.files.write(project.id, 'fixture audio', '.wav')
+    const subtitles = await service.files.write(project.id, 'fixture subtitles', '.srt')
+    let state = project
+    const payloads = {
+      brief: { text: '每页都需要 MG 动画。', duration: 10 },
+      copy: { text: '说明原理' },
+      storyboard: {
+        mode: 'agent',
+        template: 'technical',
+        scenes: [
+          {
+            id: 'one',
+            title: '原理',
+            body: '解释',
+            layout: 'title',
+            html: '<!-- MG规划：标题先入场，再展开原理 --><h1>原理</h1>',
+          },
+          { id: 'two', title: '总结', body: '结论', layout: 'summary' },
+        ],
+      },
+      narration: {
+        scenes: [
+          { id: 'one', text: '说明原理。' },
+          { id: 'two', text: '总结结论。' },
+        ],
+      },
+      audio: {
+        file: audioFile,
+        subtitles,
+        duration: 4,
+        tracks: [
+          { sceneId: 'one', file: audioFile, duration: 2, text: '说明原理。' },
+          { sceneId: 'two', file: audioFile, duration: 2, text: '总结结论。' },
+        ],
+      },
+    }
+    for (const stage of ['brief', 'copy', 'storyboard', 'narration', 'audio'] as const) {
+      state = repository.save(project.id, stage, payloads[stage], state.revision, randomUUID())
+      state = repository.approve(
+        project.id,
+        stage,
+        state.stages[stage]!.id,
+        state.revision,
+        randomUUID(),
+      )
+    }
+    const capture = join(root, 'initial-motion.txt')
+    const script = join(root, 'motion-codex')
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],JSON.stringify({requiresUpstream:true,reason:'需要增加图形后再编排 MG'}));});\n`,
+    )
+    chmodSync(script, 0o755)
+    service.runtime.set({ codexPath: script, claudePath: '' })
+    const request = {
+      projectId: project.id,
+      stage: 'roughcut' as const,
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+      executor: 'template' as const,
+    }
+    const job = await service.generate(request)
+    for (let attempt = 0; attempt < 100 && repository.job(job.id)!.state === 'running'; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.match(repository.job(job.id)!.error ?? '', /需要增加图形后再编排 MG/)
+    assert.match(readFileSync(capture, 'utf8'), /每页都需要 MG 动画/)
+    assert.match(readFileSync(capture, 'utf8'), /标题先入场，再展开原理/)
+    assert.equal(repository.get(project.id).stages.roughcut, undefined)
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ summary: '只返回首镜', scenes: [defaultMotion(state).scenes[0]] }))}));\n`,
+    )
+    const incomplete = await service.generate({ ...request, requestId: randomUUID() })
+    for (
+      let attempt = 0;
+      attempt < 100 && repository.job(incomplete.id)!.state === 'running';
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.match(repository.job(incomplete.id)!.error ?? '', /必须覆盖所有分镜/)
+    assert.equal(repository.get(project.id).stages.roughcut, undefined)
+    service.runtime.set({ codexPath: '', claudePath: '' })
+    await assert.rejects(
+      service.generate({ ...request, requestId: randomUUID() }),
+      /MG.*Codex.*Claude/,
+    )
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
@@ -427,6 +1059,133 @@ test('motion proposals persist without changing approvals, then a new roughcut o
   }
 })
 
+test('discarding expired and pending motion plans preserves media, approvals and project inputs', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-discard-plan-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('No synthesis')
+  })
+  try {
+    const job = repository.startJob(
+      initial.id,
+      'roughcut',
+      initial.revision,
+      randomUUID(),
+      'codex',
+      'plan',
+    )
+    repository.markMotionJob(job.id)
+    repository.finishMotionPlan(job.id, defaultMotion(initial))
+    const before = repository.get(initial.id)
+    const result = await service.discardMotionPlans(initial.id, before.revision)
+    assert.equal(result.revision, before.revision)
+    assert.deepEqual(result.stages, before.stages)
+    assert.equal(repository.job(job.id)!.state, 'cancelled')
+    assert.ok(repository.job(job.id)!.motionPlan, 'History must retain the abandoned proposal')
+    assert.throws(() => repository.motionPlan(initial.id, job.id, before.revision), /过期/)
+    await service.discardMotionPlans(initial.id, before.revision)
+    await assert.rejects(service.discardMotionPlans(initial.id, before.revision - 1), /更新/)
+    const running = repository.startJob(
+      initial.id,
+      'audio',
+      before.revision,
+      randomUUID(),
+      'template',
+      'running',
+    )
+    await assert.rejects(service.discardMotionPlans(initial.id, before.revision), /运行|执行|等待/)
+    repository.updateJob(running.id, { state: 'cancelled', phase: 'fixture cleanup' })
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cancelling a motion plan restores the same frozen roughcut for review without regenerating media', () => {
+  const { db, repository, state: initial, render } = visualFixture()
+  try {
+    let state = repository.save(
+      initial.id,
+      'roughcut',
+      {
+        ...render,
+        sourceStoryboard: initial.stages.storyboard!.id,
+        sourceAudio: initial.stages.audio!.id,
+        sourceNarration: initial.stages.narration!.id,
+        motion: defaultMotion(initial),
+      },
+      initial.revision,
+      randomUUID(),
+    )
+    const previous = state.stages.roughcut!
+    const proposal = repository.startJob(
+      state.id,
+      'roughcut',
+      state.revision,
+      randomUUID(),
+      'codex',
+    )
+    repository.markMotionJob(proposal.id)
+    repository.finishMotionPlan(proposal.id, defaultMotion(state))
+    const audio = stageValue(state, 'audio')!
+    state = repository.save(
+      state.id,
+      'audio',
+      {
+        ...audio,
+        duration: 0.6,
+        tracks: audio.tracks.map((track) => ({ ...track, duration: 0.3 })),
+      },
+      state.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'audio',
+      state.stages.audio!.id,
+      state.revision,
+      randomUUID(),
+    )
+    assert.equal(state.stages.roughcut!.status, 'stale')
+    const currentAudio = state.stages.audio!
+    state = repository.discardMotionPlans(state.id, state.revision)
+    assert.equal(state.stages.roughcut!.status, 'review')
+    assert.equal(state.stages.roughcut!.id, previous.id)
+    assert.equal(state.stages.roughcut!.version, previous.version)
+    assert.deepEqual(state.stages.roughcut!.payload, previous.payload)
+    assert.deepEqual(state.stages.audio, currentAudio)
+    assert.equal(state.jobs.find((job) => job.id === proposal.id)!.state, 'cancelled')
+    assert.equal(state.jobs[0].operation?.action, 'reuse-roughcut')
+    assert.equal(stageUnlocked(state, 'render'), false)
+    const recoveredRevision = state.revision
+    assert.equal(
+      repository.discardMotionPlans(state.id, state.revision).revision,
+      recoveredRevision,
+    )
+    state = repository.approve(
+      state.id,
+      'roughcut',
+      state.stages.roughcut!.id,
+      state.revision,
+      randomUUID(),
+    )
+    assert.equal(state.stages.roughcut!.status, 'approved')
+    assert.equal(stageUnlocked(state, 'render'), true)
+    state = repository.save(state.id, 'render', previous.payload, state.revision, randomUUID())
+    assert.deepEqual(state.stages.render!.payload, previous.payload)
+    assert.deepEqual(state.stages.audio, currentAudio)
+    state = repository.save(state.id, 'audio', audio, state.revision, randomUUID())
+    assert.equal(state.stages.roughcut!.status, 'stale')
+    assert.throws(
+      () => repository.approve(state.id, 'roughcut', previous.id, state.revision, randomUUID()),
+      /前置|审核|过期/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
 test('style templates require an approved current final and freeze multi-scene visual and motion references', () => {
   const { db, repository, state: initial, render } = visualFixture()
   try {
@@ -634,7 +1393,57 @@ test('AI storyboard modification updates only the requested scene and leaves a r
     assert.equal(result.stages.storyboard!.status, 'review')
     assert.equal(storyboard.scenes.find((scene) => scene.id === 'one')!.title, '修改后的第一镜')
     assert.equal(storyboard.scenes.find((scene) => scene.id === 'two')!.title, '第二镜')
+    assert.equal(storyboard.scenes[0].requirements, '把第一镜改成三步卡片，保留原有事实和口播。')
+    assert.match(extractMotionRequirements(result), /把第一镜改成三步卡片/)
     assert.ok(readFileSync(capture, 'utf8').includes('把第一镜改成三步卡片'))
+    const revisedScene = storyboard.scenes[0]
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboard, scenes: [revisedScene] }))}));\n`,
+    )
+    const noChange = await service.generate({
+      projectId: initial.id,
+      stage: 'storyboard',
+      executor: 'codex',
+      expectedRevision: result.revision,
+      requestId: randomUUID(),
+      sceneId: 'one',
+      storyboardModification: { sceneId: 'one', feedback: '把卡片排版改为左右两栏。' },
+    })
+    for (
+      let attempt = 0;
+      attempt < 100 && repository.job(noChange.id)!.state === 'running';
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(repository.job(noChange.id)!.state, 'failed')
+    assert.match(repository.job(noChange.id)!.error ?? '', /没有.*修改/)
+    assert.equal(repository.get(initial.id).stages.storyboard!.id, result.stages.storyboard!.id)
+    const latestFeedback = '保留原有事实和口播。'
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboard, scenes: [{ ...revisedScene, title: '再次调整的标题' }] }))}));\n`,
+    )
+    const latest = await service.generate({
+      projectId: initial.id,
+      stage: 'storyboard',
+      executor: 'codex',
+      expectedRevision: result.revision,
+      requestId: randomUUID(),
+      sceneId: 'one',
+      storyboardModification: { sceneId: 'one', feedback: latestFeedback },
+    })
+    for (
+      let attempt = 0;
+      attempt < 100 && repository.job(latest.id)!.state === 'running';
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(repository.job(latest.id)!.state, 'succeeded')
+    assert.equal(
+      stageValue(repository.get(initial.id), 'storyboard')!.scenes[0].requirements,
+      revisedScene.requirements + '\n' + latestFeedback,
+    )
   } finally {
     await service.dispose()
     db.close()
@@ -840,10 +1649,7 @@ test('workflow cloning derives stable per-segment seeds and keeps voice configur
           },
         })
         assert.ok(captured.length >= 3, 'covers both chunk and scene boundaries')
-        assert.equal(
-          new Set(captured.map((request) => request.options.seed)).size,
-          captured.length,
-        )
+        assert.equal(new Set(captured.map((request) => request.options.seed)).size, captured.length)
         assert.ok(captured.every((request) => Number.isInteger(request.options.seed)))
         assert.ok(captured.every((request) => request.profileId === 'original-profile'))
         assert.ok(captured.every((request) => request.profileRevision === 1))
@@ -1011,6 +1817,171 @@ test('single-track regeneration replaces only the selected chunk and preserves t
   }
 })
 
+test('unchanged narration allows direct approval of stale audio with file validation and a new revision', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-reuse-audio-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('Reusing audio must not load a voice engine')
+  })
+  try {
+    const file = await service.files.write(initial.id, 'existing verified audio', '.wav')
+    const original = stageValue(initial, 'audio')!
+    let state = repository.save(
+      initial.id,
+      'audio',
+      {
+        ...original,
+        file,
+        subtitles: file,
+        tracks: original.tracks.map((track) => ({ ...track, file })),
+      },
+      initial.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'audio',
+      state.stages.audio!.id,
+      state.revision,
+      randomUUID(),
+    )
+    const originalId = state.stages.audio!.id
+    const originalPayload = stageValue(state, 'audio')!
+    const storyboard = stageValue(state, 'storyboard')!
+    state = repository.save(
+      state.id,
+      'storyboard',
+      {
+        ...storyboard,
+        scenes: storyboard.scenes.map((scene, index) =>
+          index === 0 ? { ...scene, body: '仅画面内容变化' } : scene,
+        ),
+      },
+      state.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'storyboard',
+      state.stages.storyboard!.id,
+      state.revision,
+      randomUUID(),
+    )
+    state = repository.save(
+      state.id,
+      'narration',
+      stageValue(state, 'narration'),
+      state.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'narration',
+      state.stages.narration!.id,
+      state.revision,
+      randomUUID(),
+    )
+    assert.equal(state.stages.audio!.status, 'stale')
+    writeFileSync(service.files.path(file), 'tampered audio')
+    await assert.rejects(
+      service.approve(state.id, 'audio', originalId, state.revision, randomUUID(), ''),
+      /文件丢失或内容被修改/,
+    )
+    assert.equal(repository.get(state.id).revision, state.revision)
+    writeFileSync(service.files.path(file), 'existing verified audio')
+    db.prepare('UPDATE video_workflow_revisions SET dependencies=? WHERE id=?').run(
+      'unverified-source',
+      originalId,
+    )
+    await assert.rejects(
+      service.approve(state.id, 'audio', originalId, state.revision, randomUUID(), ''),
+      /来源无法核实/,
+    )
+    db.prepare('UPDATE video_workflow_revisions SET dependencies=? WHERE id=?').run(
+      state.stages.audio!.dependencies,
+      originalId,
+    )
+    const approval = randomUUID()
+    const approved = await service.approve(
+      state.id,
+      'audio',
+      originalId,
+      state.revision,
+      approval,
+      '确认沿用',
+    )
+    assert.equal(approved.stages.audio!.status, 'approved')
+    assert.notEqual(approved.stages.audio!.id, originalId)
+    assert.deepEqual(stageValue(approved, 'audio'), originalPayload)
+    assert.equal(approved.history.find((revision) => revision.id === originalId)!.status, 'stale')
+    assert.equal(approved.jobs[0].operation?.action, 'reuse-audio')
+    const retry = await service.approve(
+      state.id,
+      'audio',
+      originalId,
+      state.revision,
+      approval,
+      '确认沿用',
+    )
+    assert.equal(retry.stages.audio!.id, approved.stages.audio!.id)
+    state = repository.save(
+      approved.id,
+      'narration',
+      {
+        scenes: stageValue(approved, 'narration')!.scenes.map((scene, index) =>
+          index === 0 ? { ...scene, text: '口播正文已经变化' } : scene,
+        ),
+      },
+      approved.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'narration',
+      state.stages.narration!.id,
+      state.revision,
+      randomUUID(),
+    )
+    await assert.rejects(
+      service.approve(state.id, 'audio', state.stages.audio!.id, state.revision, randomUUID(), ''),
+      /口播.*变化|口播.*不一致/,
+    )
+    await assert.rejects(
+      service.restoreAudioVersion(state.id, originalId, state.revision, randomUUID()),
+      /口播.*变化|口播.*不一致/,
+    )
+    for (const scenes of [
+      stageValue(approved, 'narration')!.scenes.map((scene, index) =>
+        index === 0 ? { ...scene, pronunciation: '读音已改变' } : scene,
+      ),
+    ]) {
+      state = repository.save(state.id, 'narration', { scenes }, state.revision, randomUUID())
+      state = repository.approve(
+        state.id,
+        'narration',
+        state.stages.narration!.id,
+        state.revision,
+        randomUUID(),
+      )
+      await assert.rejects(
+        service.approve(
+          state.id,
+          'audio',
+          state.stages.audio!.id,
+          state.revision,
+          randomUUID(),
+          '',
+        ),
+        /口播.*变化|口播.*不一致/,
+      )
+    }
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('audio history lists timestamped versions and safely restores a matching previous version', async () => {
   const { db, repository, state: initial } = visualFixture()
   const root = mkdtempSync(join(tmpdir(), 'workflow-audio-history-'))
@@ -1036,7 +2007,12 @@ test('audio history lists timestamped versions and safely restores a matching pr
     let state = repository.save(
       initial.id,
       'audio',
-      { ...first, file: fileA, subtitles: fileA, tracks: first.tracks.map((track) => ({ ...track, file: fileA })) },
+      {
+        ...first,
+        file: fileA,
+        subtitles: fileA,
+        tracks: first.tracks.map((track) => ({ ...track, file: fileA })),
+      },
       initial.revision,
       randomUUID(),
     )
@@ -1052,7 +2028,12 @@ test('audio history lists timestamped versions and safely restores a matching pr
     state = repository.save(
       state.id,
       'audio',
-      { ...previousPayload, file: fileB, subtitles: fileB, tracks: previousPayload.tracks.map((track) => ({ ...track, file: fileB })) },
+      {
+        ...previousPayload,
+        file: fileB,
+        subtitles: fileB,
+        tracks: previousPayload.tracks.map((track) => ({ ...track, file: fileB })),
+      },
       state.revision,
       randomUUID(),
     )
@@ -1230,6 +2211,7 @@ test('AI copy uses approved brief and revision feedback, preserves history and r
     assert.ok(readFileSync(capture, 'utf8').includes('# 初稿'))
     state = repository.get(state.id)
     assert.equal(state.stages.copy!.version, 2)
+    assert.match(stageValue(state, 'copy')!.requirements ?? '', /开头先讲一个具体案例/)
     assert.equal(state.stages.copy!.status, 'review')
     assert.equal(state.stages.storyboard!.status, 'stale')
     assert.ok(state.history.some((item) => item.id === original))
@@ -1259,6 +2241,237 @@ test('AI copy uses approved brief and revision feedback, preserves history and r
     await service.dispose()
     db.close()
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('visual scene edits can reuse saved narration without invoking an agent or voice synthesis', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-reuse-narration-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('Must not synthesize voice')
+  })
+  try {
+    const original = stageValue(initial, 'narration')!
+    const storyboard = stageValue(initial, 'storyboard')!
+    let state = repository.save(
+      initial.id,
+      'storyboard',
+      {
+        ...storyboard,
+        scenes: storyboard.scenes.map((scene, index) =>
+          index === 0 ? { ...scene, body: '新的视觉表现' } : scene,
+        ),
+      },
+      initial.revision,
+      randomUUID(),
+    )
+    assert.equal(state.stages.narration!.status, 'stale')
+    await assert.rejects(
+      service.generate({
+        projectId: state.id,
+        stage: 'narration',
+        executor: 'template',
+        reuseNarration: true,
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+      }),
+      /审核/,
+    )
+    state = repository.approve(
+      state.id,
+      'storyboard',
+      state.stages.storyboard!.id,
+      state.revision,
+      randomUUID(),
+    )
+    const job = await service.generate({
+      projectId: state.id,
+      stage: 'narration',
+      executor: 'template',
+      reuseNarration: true,
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+    })
+    for (let attempt = 0; attempt < 100 && repository.job(job.id)?.state === 'running'; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(repository.job(job.id)?.state, 'succeeded', repository.job(job.id)?.error ?? '')
+    state = repository.get(state.id)
+    assert.deepEqual(stageValue(state, 'narration'), original)
+    assert.equal(state.stages.narration!.status, 'review')
+    assert.equal(state.stages.narration!.version, initial.stages.narration!.version + 1)
+    assert.equal(repository.job(job.id)!.operation?.action, 'reuse-narration')
+    state = repository.save(
+      state.id,
+      'storyboard',
+      {
+        ...storyboard,
+        scenes: [...storyboard.scenes].reverse(),
+      },
+      state.revision,
+      randomUUID(),
+    )
+    state = repository.approve(
+      state.id,
+      'storyboard',
+      state.stages.storyboard!.id,
+      state.revision,
+      randomUUID(),
+    )
+    await assert.rejects(
+      service.generate({
+        projectId: state.id,
+        stage: 'narration',
+        executor: 'template',
+        reuseNarration: true,
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+      }),
+      /数量或顺序/,
+    )
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('single-scene narration regenerates only the target and rejects out-of-scope results', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-scene-narration-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('No voice synthesis')
+  })
+  try {
+    const original = stageValue(initial, 'narration')!
+    const script = join(root, 'fake-codex')
+    const capture = join(root, 'prompt.txt')
+    const result = { scenes: [{ id: 'one', text: '仅更新第一镜的口播', pronunciation: '略停顿' }] }
+    const configureResult = (value: unknown) => {
+      writeFileSync(
+        script,
+        `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(value))});});\n`,
+      )
+      chmodSync(script, 0o755)
+    }
+    configureResult(result)
+    service.runtime.set({ codexPath: script })
+    const storyboard = stageValue(initial, 'storyboard')!
+    let source = repository.save(
+      initial.id,
+      'storyboard',
+      {
+        ...storyboard,
+        scenes: storyboard.scenes.map((scene, index) =>
+          index === 0 ? { ...scene, body: '第一页新内容' } : scene,
+        ),
+      },
+      initial.revision,
+      randomUUID(),
+    )
+    source = repository.approve(
+      source.id,
+      'storyboard',
+      source.stages.storyboard!.id,
+      source.revision,
+      randomUUID(),
+    )
+    assert.equal(source.stages.narration!.status, 'stale')
+    const job = await service.generate({
+      projectId: initial.id,
+      stage: 'narration',
+      executor: 'codex',
+      sceneId: 'one',
+      expectedRevision: source.revision,
+      requestId: randomUUID(),
+    })
+    for (let attempt = 0; attempt < 100 && repository.job(job.id)?.state === 'running'; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(repository.job(job.id)?.state, 'succeeded', repository.job(job.id)?.error ?? '')
+    let state = repository.get(initial.id)
+    assert.deepEqual(stageValue(state, 'narration')!.scenes, [result.scenes[0], original.scenes[1]])
+    assert.match(readFileSync(capture, 'utf8'), /仅生成 ID=one/)
+    assert.equal(repository.job(job.id)!.operation?.sceneId, 'one')
+    assert.equal(repository.job(job.id)!.operation?.resultVersion, state.stages.narration!.version)
+    assert.ok(
+      repository
+        .job(job.id)!
+        .operation?.changes?.some(
+          (change) =>
+            change.field === 'text' &&
+            change.before === original.scenes[0].text &&
+            change.after === result.scenes[0].text,
+        ),
+    )
+    configureResult({ scenes: [{ id: 'two', text: '错误目标' }] })
+    const failed = await service.generate({
+      projectId: state.id,
+      stage: 'narration',
+      executor: 'codex',
+      sceneId: 'one',
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+    })
+    for (
+      let attempt = 0;
+      attempt < 100 && repository.job(failed.id)?.state === 'running';
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 30))
+    assert.equal(repository.job(failed.id)?.state, 'failed')
+    assert.deepEqual(
+      stageValue(repository.get(state.id), 'narration'),
+      stageValue(state, 'narration'),
+    )
+    await assert.rejects(
+      service.generate({
+        projectId: state.id,
+        stage: 'narration',
+        executor: 'codex',
+        sceneId: 'missing',
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+      }),
+      /分镜/,
+    )
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('manual storyboard edits persist scene-level before/after operations without duplicate records', () => {
+  const { db, repository, state: initial } = visualFixture()
+  try {
+    const storyboard = stageValue(initial, 'storyboard')!
+    const changed = {
+      ...storyboard,
+      scenes: storyboard.scenes.map((scene, index) =>
+        index === 0 ? { ...scene, title: '新的第一页标题' } : scene,
+      ),
+    }
+    const request = randomUUID()
+    const state = repository.save(initial.id, 'storyboard', changed, initial.revision, request)
+    const operation = state.jobs[0]?.operation
+    assert.equal(operation?.action, 'scene-edit')
+    assert.equal(operation?.sceneId, 'one')
+    assert.equal(operation?.sourceVersion, initial.stages.storyboard!.version)
+    assert.equal(operation?.resultVersion, state.stages.storyboard!.version)
+    assert.deepEqual(operation?.changes, [
+      {
+        sceneId: 'one',
+        title: '新的第一页标题',
+        field: 'title',
+        before: storyboard.scenes[0].title,
+        after: '新的第一页标题',
+      },
+    ])
+    assert.equal(
+      repository.save(initial.id, 'storyboard', changed, initial.revision, request).jobs.length,
+      state.jobs.length,
+    )
+  } finally {
+    db.close()
   }
 })
 

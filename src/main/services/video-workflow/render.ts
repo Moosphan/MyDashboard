@@ -202,7 +202,16 @@ export function hyperframesDocument(
         })
     }
     const values = (motion?.scenes.find((item) => item.sceneId === scene.id)?.effects ?? []).map(
-      (effect) => ({ ...effect, root: `scene-${index}`, delay: offset + effect.start }),
+      (effect) => ({
+        ...effect,
+        keyframes: effect.keyframes.map(({ scaleX, scaleY, ...frame }) =>
+          scaleX !== undefined || scaleY !== undefined
+            ? { ...frame, scale: `${scaleX ?? 1} ${scaleY ?? 1}` }
+            : frame,
+        ),
+        root: `scene-${index}`,
+        delay: offset + effect.start,
+      }),
     )
     offset += audio.tracks
       .filter((track) => track.sceneId === scene.id)
@@ -332,7 +341,8 @@ export async function renderWorkflow(input: {
         reusableFrames = undefined
       }
     }
-    if (reusableFrames) phase(`复用已冻结分镜帧 ${reusableFrames.length}/${storyboard.scenes.length}`)
+    if (reusableFrames)
+      phase(`复用已冻结分镜帧 ${reusableFrames.length}/${storyboard.scenes.length}`)
     const markup: string[] = []
     const fontFamilies: string[] = []
     const compiledMotion: MotionPlan = { ...motion, scenes: [] }
@@ -365,7 +375,11 @@ export async function renderWorkflow(input: {
         compositionNames.push(name)
         compositionFiles.push(cachedFrame)
       } else {
-        const image = await captureStoryboard(sceneHtml(scene, storyboard.template), signal, scene.title)
+        const image = await captureStoryboard(
+          sceneHtml(scene, storyboard.template),
+          signal,
+          scene.title,
+        )
         writeFileSync(join(cwd, name), image)
         compositionNames.push(name)
         compositionFiles.push(await files.import(project.id, join(cwd, name)))
@@ -392,13 +406,16 @@ export async function renderWorkflow(input: {
   )
   const report = JSON.parse(checked)
   assertHyperframesCheck(report)
+  const hasMotion = motion?.scenes.some(
+    (scene) => scene.effects.length > 0 || (scene.transition && scene.transition.type !== 'cut'),
+  )
   const checks = JSON.stringify({
     version: '0.8.181',
     ok: true,
     samples: report.layout.samples.length,
     warnings: report.lint?.warnings ?? [],
-    staticKeyframes: !motion,
-    motionEngine: motion ? 'waapi' : undefined,
+    staticKeyframes: !hasMotion,
+    motionEngine: hasMotion ? 'waapi' : undefined,
   })
   const output = join(cwd, final ? 'final.mp4' : 'roughcut.mp4')
   phase(final ? '渲染最终成片 · 1920×1080 / 30 fps' : '渲染粗剪 · 完成后等待人工审核')
@@ -415,7 +432,12 @@ export async function renderWorkflow(input: {
     !video ||
     video.width !== 1920 ||
     video.height !== 1080 ||
-    Math.abs(probed.duration - stageValue(project, 'audio')!.duration) > 0.15
+    Math.abs(
+      probed.duration -
+        (final
+          ? stageValue(project, 'roughcut')!.duration
+          : stageValue(project, 'audio')!.duration),
+    ) > 0.15
   )
     throw new Error('输出视频的画幅或音画时长不符合要求')
   return {
@@ -431,8 +453,12 @@ export async function renderWorkflow(input: {
     ),
     checks,
     ...(motion ? { motion } : {}),
-    sourceStoryboard: project.stages.storyboard!.id,
-    sourceAudio: project.stages.audio!.id,
-    sourceNarration: project.stages.narration!.id,
+    sourceStoryboard: final
+      ? stageValue(project, 'roughcut')!.sourceStoryboard
+      : project.stages.storyboard!.id,
+    sourceAudio: final ? stageValue(project, 'roughcut')!.sourceAudio : project.stages.audio!.id,
+    sourceNarration: final
+      ? stageValue(project, 'roughcut')!.sourceNarration
+      : project.stages.narration!.id,
   }
 }

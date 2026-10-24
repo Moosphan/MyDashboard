@@ -28,7 +28,7 @@ export function workflowVoiceSeed(
     hash ^= character.codePointAt(0) ?? 0
     hash = Math.imul(hash, 16777619)
   }
-  return (hash >>> 0) || 1
+  return hash >>> 0 || 1
 }
 
 export async function probeMedia(
@@ -139,16 +139,10 @@ export async function createWorkflowAudio(input: {
         }).options,
       }
   if (!imports && voice.engine !== 'edge') {
-    const runtime = service.runtime.get()
-    if (
-      !runtime.engines[voice.engine].ready ||
-      (voice.options.denoise && !runtime.denoising?.ready)
-    ) {
-      signal.throwIfAborted()
-      phase('检测本地配音与降噪环境')
-      await service.runtime.check()
-      signal.throwIfAborted()
-    }
+    signal.throwIfAborted()
+    phase('检测本地配音与降噪环境')
+    await service.runtime.ensureChecked()
+    signal.throwIfAborted()
   }
   const tracks: AudioTrack[] = [],
     normalized: string[] = []

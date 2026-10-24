@@ -71,6 +71,16 @@
 
 ### VIDEO-WORKFLOW-001：视频创作工作流（2026-10-22）
 
+- 粗剪动画修改与分镜定位（2026-10-24 用户授权）：`MediaPanels.tsx` 使用统一的实测分镜时间轴与视频帧定位，修复跳回上一镜；`RenderActions.tsx` 沿用原说明位置解释可修改的动画范围及预览来源。继续使用已批准的 React 18/Radix、原生播放器、主题与分栏，不新增控件、样式、图标或依赖。负责人和 HeroUI 迁移退出里程碑沿用本例外。验证见 [粗剪动画修改与分镜定位验证](video-workflow-motion-seek-verification.md)。
+
+- 取消计划并沿用原视频（2026-10-24 用户纠偏）：移除误加的“不加 MG”合成按钮，仅由 `RenderActions.tsx` 原修改区域的“取消修改计划”恢复原粗剪的审核入口。`StageWorkspace.tsx` 沿用原审核按钮和弹窗，说明保留原画面、声音、字幕与时长；`ExecutionLog.tsx` 记录沿用原视频、未重新合成。沿用本分支 React 18/Radix、原主题、分栏与审核位置，不新增依赖、样式或图标。负责人及 HeroUI 生产迁移退出里程碑沿用本例外。验证见 [取消计划与沿用原视频验证](video-workflow-cancel-plan-retain-verification.md)。
+
+- 分镜内置 MG（2026-10-24 用户授权）：`StoryboardEditor.tsx` 在原创作设置复用既有 Toggle、details 和按钮提供动画开关及逐镜排除，在原主栏解释计划与缺口；`StageWorkspace.tsx` 复用审核门禁，执行时锁定设置。React 18/Radix 局部例外、主题及布局沿用，不引入组件库、图标或新补齐入口。负责人为项目维护者，退出里程碑为工作流 HeroUI 生产迁移。验证见 [分镜 MG 开关与就绪契约验证](video-workflow-storyboard-mg-verification.md)。
+
+- 旧配音沿用与环境缓存（2026-10-24 用户授权）：`StageWorkspace.tsx` 在既有审核位置提供“沿用并审核此版配音”及确认说明，`MediaPanels.tsx` 根据口播一致性开放历史恢复并解释单段重生成的前置动作，`ExecutionLog.tsx` 显示真实沿用记录。复用当前 Button/Radix、主题与布局，不增加组件库、样式或图标。服务端核实历史依赖和音频文件后创建新版本，环境状态自动恢复或重检。负责人和 HeroUI 迁移退出里程碑沿用本例外；验证见 [配音沿用与环境缓存验证](video-workflow-audio-reuse-runtime-verification.md)。
+
+- 单镜口播与修改记录（2026-10-24 用户授权）：`StageWorkspace.tsx` 复用既有 Button 提供沿用口播及当前镜生成，在分镜选择与正文之间展示；`ExecutionLog.tsx` 沿用现有时间线与原生 details 展示真实修改目标、意见、源/结果版本、字段前后差异，`workflow.css` 仅为差异文本沿用现有中性主题。复用 React 18/Radix 已批准例外，不引入依赖、不调整字段/分栏/审核动作。负责人及退出里程碑同 VIDEO-WORKFLOW-001。验证见 [单镜口播与修改记录验证](video-workflow-scene-narration-verification.md)。
+
 - 范围：`src/renderer/modules/video/workflow/` 与视频模块入口，分支 `feature/video_studio_workflow`。
 - 用户明确批准：本分支沿用现有组件与主题；HeroUI 改版由另外分支执行。复用现有 Button、Card、Radix Select/Tabs/Dialog、配音字段及 Material Symbols，不更换全局依赖和样式。
 - 布局批准依据（2026-10-23 明确纠偏）：用户指定 `video-workflow-ui-spec.md` 与高保真稿作为布局基线。此前将“复用组件”理解为可以重新组织页面有误；组件例外不涵盖信息顺序、网格比例、断点和动作位置。原封面/音频/演示布局保留于素材库。
@@ -85,6 +95,8 @@
 - 分段配音版本与 Qwen3 一致性（2026-10-24 用户追加）：`MediaPanels.tsx` 复用现有 VoiceSelect、Button 和原生播放器，显示音频版本号、生成时间、历史试听及安全恢复入口；服务端复用阶段 revision，校验口播依赖和受管文件后创建待审核新版本。Qwen3/VoxCPM2 工作流保留基础种子并按片段派生，单段重生成加入任务盐值，避免第九段异常音色因固定 `42` 重复。沿用 React 18/Radix 局部例外与现有布局，不引入新库。验证见 [分段配音版本历史与 Qwen3 音色一致性验证](../video-workflow-audio-history-qwen3-verification.md)。
 
 ## 4. 评审与回归清单
+
+`VIDEO-WORKFLOW-001` MG 要求与 AI 修改传参纠偏（2026-10-24）：保留现有分镜弹窗、控件、主题与审核布局，仅修复 `StoryboardEditor.tsx` 未取出 `onAiModify` 回调及 `StageWorkspace.tsx` 未转交第三个参数的问题。文案创作要求与单镜修改意见随版本持久保存，动态粗剪读取简报、文案、分镜创作要求及 MG 注释并生成真实元素计划；漏镜、无变化关键帧和原样分镜拒绝作为成功修改。已有明确确认的动效在仅配音变化时复用。继续沿用本例外的负责人和 HeroUI 迁移退出里程碑，无新增组件、样式或依赖。验证见 [MG 要求与修改意见验证](video-workflow-motion-requirements-verification.md)。
 
 `VIDEO-WORKFLOW-001` 错误复制修订（2026-10-24 用户授权）：`ExecutionLog.tsx` 在原生 details 中复用既有 Button 添加“复制错误信息”，显示成功或失败反馈；`workflow.css` 仅允许错误原文选择。沿用工作流已批准的 React 18 / Radix 局部例外，无新增库、图标或主题，记录信息顺序与审核动作不变。负责人为项目维护者，退出里程碑为工作流 HeroUI 生产迁移。验证见 [粗剪字体与错误复制验证](video-workflow-font-copy-verification.md)。
 

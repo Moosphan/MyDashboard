@@ -23,6 +23,10 @@ const resultLabels: Record<WorkflowJob['state'], string> = {
 }
 
 function executorName(job: WorkflowJob) {
+  if (job.operation?.action === 'reuse-roughcut') return '沿用已生成视频'
+  if (job.operation?.action === 'reuse-audio') return '沿用已保存配音'
+  if (job.operation?.action === 'reuse-narration') return '沿用已保存口播'
+  if (job.executor === 'manual-edit') return '人工编辑'
   if (job.executor === 'codex') return 'Codex CLI'
   if (job.executor === 'claude') return 'Claude Code CLI'
   if (job.executor === 'manual-audio') return '音频导入'
@@ -30,6 +34,30 @@ function executorName(job: WorkflowJob) {
   if (job.stage === 'audio') return '配音引擎'
   if (job.stage === 'roughcut' || job.stage === 'render') return 'HyperFrames'
   return '视觉模板'
+}
+
+const changeNames: Record<string, string> = {
+  title: '画面标题',
+  body: '屏幕文字',
+  layout: '布局',
+  html: 'HTML 画面',
+  requirements: '创作要求',
+  motion: 'MG 动效计划',
+  text: '口播正文',
+  pronunciation: '读音与停顿',
+  scene: '分镜内容',
+  order: '分镜顺序',
+}
+
+function taskName(job: WorkflowJob) {
+  if (job.operation?.action === 'reuse-roughcut') return '取消修改计划并沿用粗剪'
+  if (job.operation?.action === 'reuse-audio') return '沿用并审核分段配音'
+  if (job.kind === 'motion-plan') return '生成元素动效修改计划'
+  if (job.operation?.action === 'reuse-narration') return '沿用现有口播稿'
+  if (job.operation?.action === 'scene-edit') return '保存分镜修改'
+  if (job.operation?.sceneId)
+    return job.stage === 'narration' ? '重新生成单镜口播' : 'AI 修改单个分镜'
+  return taskNames[job.stage]
 }
 
 function timestamp(value: string) {
@@ -121,9 +149,7 @@ export function ExecutionLog({
           {visible.map((job) => (
             <li key={job.id} className="workflow-job-entry" data-job-state={job.state}>
               <div className="workflow-job-title">
-                <strong>
-                  {job.kind === 'motion-plan' ? '生成元素动效修改计划' : taskNames[job.stage]}
-                </strong>
+                <strong>{taskName(job)}</strong>
                 <span className="workflow-job-result">
                   {job.state === 'running' && (
                     <span className="workflow-job-spinner" aria-hidden="true" />
@@ -139,6 +165,42 @@ export function ExecutionLog({
                   {timestamp(job.createdAt)}
                 </time>
               </p>
+              {job.operation && (
+                <div className="workflow-job-phase" data-workflow-operation>
+                  <p>
+                    {job.operation.sceneId
+                      ? `目标：${job.operation.sceneNumber ? `第 ${job.operation.sceneNumber} 镜 · ` : ''}${job.operation.sceneTitle ?? '指定分镜'}`
+                      : job.operation.action === 'reuse-narration'
+                        ? '保留全部口播正文和读音提示，关联当前已审核分镜。'
+                        : job.operation.action === 'reuse-audio'
+                          ? '口播内容一致，保留原配音文件、音色和字幕，关联当前口播版本。'
+                          : job.operation.action === 'reuse-roughcut'
+                            ? '保留原粗剪画面、配音、字幕和时长，未重新合成；等待审核后继续正式成片。'
+                            : '修改范围见任务详情。'}
+                  </p>
+                  {job.operation.feedback && <p>修改意见：{job.operation.feedback}</p>}
+                  {job.operation.sourceVersion !== undefined && (
+                    <p>
+                      来源 v{job.operation.sourceVersion}
+                      {job.operation.resultVersion !== undefined
+                        ? ` → 结果 v${job.operation.resultVersion}`
+                        : ''}
+                    </p>
+                  )}
+                  {Boolean(job.operation.changes?.length) && (
+                    <p>
+                      已修改：
+                      {[
+                        ...new Set(
+                          job.operation.changes!.map(
+                            (change) => changeNames[change.field] ?? change.field,
+                          ),
+                        ),
+                      ].join('、')}
+                    </p>
+                  )}
+                </div>
+              )}
               <div className="workflow-job-meta">
                 <span>{executorName(job)}</span>
                 <span>
@@ -157,7 +219,7 @@ export function ExecutionLog({
                   <div
                     className="workflow-job-progress"
                     role="progressbar"
-                    aria-label={`${job.kind === 'motion-plan' ? '生成动效计划' : taskNames[job.stage]}执行中，进度未提供`}
+                    aria-label={`${taskName(job)}执行中，进度未提供`}
                   >
                     <span />
                   </div>
@@ -178,6 +240,12 @@ export function ExecutionLog({
                     <dt>任务 ID</dt>
                     <dd className="workflow-job-id">{job.id}</dd>
                   </div>
+                  {job.operation?.sceneId && (
+                    <div>
+                      <dt>分镜 ID</dt>
+                      <dd className="workflow-job-id">{job.operation.sceneId}</dd>
+                    </div>
+                  )}
                   <div>
                     <dt>{job.state === 'running' ? '更新于' : '结束于'}</dt>
                     <dd>
@@ -187,6 +255,30 @@ export function ExecutionLog({
                     </dd>
                   </div>
                 </dl>
+                {job.operation?.changes?.map((change, index) => (
+                  <details
+                    key={`${change.sceneId}:${change.field}:${index}`}
+                    className="workflow-job-details workflow-job-change"
+                  >
+                    <summary>
+                      {change.title} · {changeNames[change.field] ?? change.field} · 修改前后
+                    </summary>
+                    <p>修改前</p>
+                    <pre
+                      tabIndex={0}
+                      aria-label={`${changeNames[change.field] ?? change.field}修改前`}
+                    >
+                      {change.before || '（空）'}
+                    </pre>
+                    <p>修改后</p>
+                    <pre
+                      tabIndex={0}
+                      aria-label={`${changeNames[change.field] ?? change.field}修改后`}
+                    >
+                      {change.after || '（空）'}
+                    </pre>
+                  </details>
+                ))}
                 {job.error && <JobError key={job.error} error={job.error} />}
               </details>
             </li>

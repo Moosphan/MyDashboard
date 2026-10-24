@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { Toggle } from '@/components/ui/toggle'
 import { VoiceInput, VoiceRadioGroup, VoiceTextArea } from '../components/voiceover/VoiceControls'
 import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
 import {
   SCENE_LAYOUTS,
   TEMPLATE_FAMILIES,
+  storyboardMotionReadiness,
+  sceneMotionEnabled,
   type StoryboardPayload,
   type StoryScene,
   type WorkflowFile,
@@ -92,6 +95,7 @@ export function StoryboardEditor({
   onChange,
   disabled,
   onRegenerate,
+  onAiModify,
   onCreate,
   narration,
 }: {
@@ -179,6 +183,7 @@ export function StoryboardEditor({
     if (candidate.mode === 'agent') {
       if (
         !candidate.styleTemplateId &&
+        !candidate.motionPolicy?.enabled &&
         !candidate.referenceText?.trim() &&
         !references.length &&
         !candidate.referenceFile
@@ -197,8 +202,13 @@ export function StoryboardEditor({
       }
     }
     const settings = { ...candidate, references }
-    if (candidate.mode === 'template' && value.scenes.length) {
-      onChange({ ...value, mode: 'template', template: candidate.template })
+    if (candidate.mode === 'template' && value.scenes.length && !candidate.motionPolicy?.enabled) {
+      onChange({
+        ...value,
+        mode: 'template',
+        template: candidate.template,
+        motionPolicy: candidate.motionPolicy,
+      })
     } else {
       setStarting(true)
       const started = await onCreate(
@@ -256,6 +266,36 @@ export function StoryboardEditor({
           创作设置
         </Button>
       </div>
+      {(value.motionPolicy || value.scenes.some((item) => item.motion)) && (
+        <div className="workflow-notice" data-storyboard-motion-status>
+          {value.motionPolicy?.enabled !== false
+            ? `MG 动画已开启 · ${storyboardMotionReadiness(value).planned} 镜计划就绪 · ${value.scenes.filter((item) => !sceneMotionEnabled(value, item.id)).length} 镜已排除。预览为静态关键帧，粗剪按实测配音时长应用动画。`
+            : 'MG 动画已关闭，粗剪保留静态分镜。'}
+          {value.motionPolicy?.enabled && storyboardMotionReadiness(value).unplanned.length > 0 && (
+            <p>
+              尚有 {storyboardMotionReadiness(value).unplanned.length}{' '}
+              镜缺少计划，请在创作设置中生成分镜候选后审核。
+            </p>
+          )}
+          {storyboardMotionReadiness(value).blockers.map((issue, issueIndex) => (
+            <p key={`${issue.sceneId}-${issueIndex}`} className="workflow-error">
+              {value.scenes.find((item) => item.id === issue.sceneId)?.title}：{issue.message}
+            </p>
+          ))}
+          {scene?.motion && sceneMotionEnabled(value, scene.id) && (
+            <details className="mt-2">
+              <summary className="cursor-pointer">本镜 MG 计划：{scene.motion.summary}</summary>
+              {scene.motion.effects.map((effect, effectIndex) => (
+                <p key={effectIndex} className="workflow-muted">
+                  {effect.selector} · 镜内 {Math.round(effect.start * 100)}%–
+                  {Math.round((effect.start + effect.duration * (effect.iterations ?? 1)) * 100)}% ·{' '}
+                  {Object.keys(effect.keyframes[0]).join('、')}
+                </p>
+              ))}
+            </details>
+          )}
+        </div>
+      )}
       <ScenePreview projectId={projectId} value={value} scene={scene} />
       <div className="workflow-toolbar workflow-muted">
         <span>
@@ -356,13 +396,76 @@ export function StoryboardEditor({
             <Button size="sm" disabled={starting} onClick={() => void applySettings()}>
               {starting
                 ? '正在启动…'
-                : candidate.mode === 'template' && value.scenes.length
+                : candidate.mode === 'template' &&
+                    value.scenes.length &&
+                    !candidate.motionPolicy?.enabled
                   ? '采用视觉模板'
                   : '生成分镜候选'}
             </Button>
           </>
         }
       >
+        <div className="workflow-section">
+          <Toggle
+            label="Motion graphics 动画"
+            aria-label="Motion graphics 动画"
+            disabled={starting}
+            pressed={candidate.motionPolicy?.enabled ?? false}
+            onPressedChange={(enabled) => {
+              setCandidate({
+                ...candidate,
+                motionPolicy: {
+                  enabled,
+                  excludedSceneIds: candidate.motionPolicy?.excludedSceneIds ?? [],
+                },
+              })
+              setScope('all')
+            }}
+          />
+          <p className="workflow-muted">
+            开启后，本地 Agent 自动为所有未排除页面生成独立元素与解释性 MG
+            计划；审核后按实际配音时长应用。不会自动重做口播或配音。
+          </p>
+          {!candidate.motionPolicy && (
+            <p className="workflow-muted">当前沿用原有创作要求；显式关闭后不应用 MG。</p>
+          )}
+          {candidate.motionPolicy?.enabled && value.scenes.length > 0 && (
+            <details>
+              <summary className="workflow-muted cursor-pointer">
+                排除页面（
+                {
+                  candidate.motionPolicy.excludedSceneIds.filter((id) =>
+                    value.scenes.some((item) => item.id === id),
+                  ).length
+                }
+                ）
+              </summary>
+              <div className="workflow-section mt-2" role="group" aria-label="排除 MG 的页面">
+                {value.scenes.map((item, itemIndex) => (
+                  <Toggle
+                    key={item.id}
+                    label={`第 ${itemIndex + 1} 镜 · ${item.title}`}
+                    aria-label={`排除第 ${itemIndex + 1} 镜的 MG 动画`}
+                    disabled={starting}
+                    pressed={candidate.motionPolicy!.excludedSceneIds.includes(item.id)}
+                    onPressedChange={(excluded) => {
+                      const policy = candidate.motionPolicy!
+                      setCandidate({
+                        ...candidate,
+                        motionPolicy: {
+                          ...policy,
+                          excludedSceneIds: excluded
+                            ? [...policy.excludedSceneIds, item.id]
+                            : policy.excludedSceneIds.filter((id) => id !== item.id),
+                        },
+                      })
+                    }}
+                  />
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
         <VoiceSelect
           label="我的模板"
           value={candidate.styleTemplateId ?? 'builtin'}
@@ -613,6 +716,16 @@ export function StoryboardEditor({
                 onClick={() => {
                   onChange({
                     ...value,
+                    ...(value.motionPolicy
+                      ? {
+                          motionPolicy: {
+                            ...value.motionPolicy,
+                            excludedSceneIds: value.motionPolicy.excludedSceneIds.filter(
+                              (id) => id !== sceneDraft.id,
+                            ),
+                          },
+                        }
+                      : {}),
                     scenes: value.scenes.filter((item) => item.id !== sceneDraft.id),
                   })
                   setEditing(false)
@@ -633,7 +746,8 @@ export function StoryboardEditor({
                 placeholder="例如：把本镜改成三步卡片，突出关键数据，保留原有事实和口播。"
               />
               <p className="workflow-muted">
-                AI 只修改当前分镜并生成待审核版本；不会直接覆盖已审核内容。需要保持事实、口播和镜头顺序。
+                AI
+                只修改当前分镜并生成待审核版本；不会直接覆盖已审核内容。需要保持事实、口播和镜头顺序。
               </p>
               <div className="workflow-actions">
                 <Button

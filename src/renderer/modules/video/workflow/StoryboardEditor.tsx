@@ -100,6 +100,7 @@ export function StoryboardEditor({
   onChange: (payload: StoryboardPayload) => void
   disabled: boolean
   onRegenerate: (sceneId: string) => void
+  onAiModify: (sceneId: string, feedback: string) => Promise<boolean>
   onCreate: (settings: StoryboardPayload, sceneId?: string) => Promise<boolean>
   narration?: { scenes: { id: string; text: string }[] }
 }) {
@@ -108,6 +109,8 @@ export function StoryboardEditor({
   const [editing, setEditing] = useState(false)
   const [candidate, setCandidate] = useState(value)
   const [sceneDraft, setSceneDraft] = useState<StoryScene | null>(null)
+  const [aiFeedback, setAiFeedback] = useState('')
+  const [aiStarting, setAiStarting] = useState(false)
   const [scope, setScope] = useState('all')
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
@@ -213,7 +216,22 @@ export function StoryboardEditor({
   const openEditor = () => {
     if (scene) {
       setSceneDraft({ ...scene })
+      setAiFeedback('')
+      setError('')
       setEditing(true)
+    }
+  }
+  const runAiModification = async () => {
+    if (!sceneDraft || !aiFeedback.trim()) {
+      setError('请填写 AI 修改意见。')
+      return
+    }
+    setAiStarting(true)
+    const started = await onAiModify(sceneDraft.id, aiFeedback.trim())
+    setAiStarting(false)
+    if (started) {
+      setAiFeedback('')
+      setEditing(false)
     }
   }
   return (
@@ -603,18 +621,45 @@ export function StoryboardEditor({
                 移除此镜
               </Button>
             </div>
-            {value.mode === 'agent' && (
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => {
-                  onRegenerate(sceneDraft.id)
-                  setEditing(false)
-                }}
-              >
-                用已保存要求重绘当前一镜
-              </Button>
-            )}
+            <div className="workflow-section workflow-divider">
+              <VoiceTextArea
+                label="AI 修改意见"
+                data-storyboard-ai-feedback
+                rows={3}
+                maxLength={5000}
+                disabled={aiStarting}
+                value={aiFeedback}
+                onChange={(event) => setAiFeedback(event.target.value)}
+                placeholder="例如：把本镜改成三步卡片，突出关键数据，保留原有事实和口播。"
+              />
+              <p className="workflow-muted">
+                AI 只修改当前分镜并生成待审核版本；不会直接覆盖已审核内容。需要保持事实、口播和镜头顺序。
+              </p>
+              <div className="workflow-actions">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  data-storyboard-ai-modify
+                  disabled={aiStarting || !aiFeedback.trim()}
+                  onClick={() => void runAiModification()}
+                >
+                  {aiStarting ? '正在生成分镜…' : '让 AI 按意见修改此镜'}
+                </Button>
+                {value.mode === 'agent' && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={aiStarting}
+                    onClick={() => {
+                      onRegenerate(sceneDraft.id)
+                      setEditing(false)
+                    }}
+                  >
+                    用已保存要求重绘当前一镜
+                  </Button>
+                )}
+              </div>
+            </div>
           </>
         )}
       </WorkflowDialog>

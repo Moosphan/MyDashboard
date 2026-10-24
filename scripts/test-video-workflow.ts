@@ -585,6 +585,63 @@ test('saved styles guide Agent storyboard generation with new approved copy and 
   }
 })
 
+test('AI storyboard modification updates only the requested scene and leaves a review revision', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-storyboard-edit-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('No voice synthesis during storyboard modification')
+  })
+  try {
+    const output = {
+      mode: 'agent',
+      template: 'technical',
+      scenes: [
+        {
+          id: 'one',
+          title: '修改后的第一镜',
+          body: '将问题拆成三步说明',
+          layout: 'steps',
+          html: '<h1>修改后的第一镜</h1>',
+        },
+      ],
+    }
+    const script = join(root, 'fake-codex')
+    const capture = join(root, 'prompt.txt')
+    writeFileSync(
+      script,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(output))});});\n`,
+    )
+    chmodSync(script, 0o755)
+    service.runtime.set({ codexPath: script })
+    const job = await service.generate({
+      projectId: initial.id,
+      stage: 'storyboard',
+      executor: 'codex',
+      expectedRevision: initial.revision,
+      requestId: randomUUID(),
+      settings: { mode: 'agent', template: 'technical' },
+      sceneId: 'one',
+      storyboardModification: {
+        sceneId: 'one',
+        feedback: '把第一镜改成三步卡片，保留原有事实和口播。',
+      },
+    })
+    for (let attempt = 0; attempt < 100 && repository.job(job.id)!.state === 'running'; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(repository.job(job.id)!.state, 'succeeded', repository.job(job.id)!.error ?? '')
+    const result = repository.get(initial.id)
+    const storyboard = stageValue(result, 'storyboard')!
+    assert.equal(result.stages.storyboard!.status, 'review')
+    assert.equal(storyboard.scenes.find((scene) => scene.id === 'one')!.title, '修改后的第一镜')
+    assert.equal(storyboard.scenes.find((scene) => scene.id === 'two')!.title, '第二镜')
+    assert.ok(readFileSync(capture, 'utf8').includes('把第一镜改成三步卡片'))
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('audio publishes durable playable segments before later segments fail or are cancelled', async () => {
   for (const outcome of ['failed', 'cancelled', 'interrupted', 'succeeded'] as const) {
     const { db, repository, project } = fixture()

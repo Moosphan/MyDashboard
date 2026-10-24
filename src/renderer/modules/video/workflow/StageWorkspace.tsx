@@ -140,19 +140,25 @@ export function StageWorkspace({
       onProject(result)
       setImpact(false)
     }, '草稿已保存，等待人工审核')
-  const generationInput = (sceneId?: string, settings?: StagePayloads['storyboard']) => ({
+  const generationInput = (
+    sceneId?: string,
+    settings?: StagePayloads['storyboard'],
+    storyboardModification?: { sceneId: string; feedback: string },
+  ) => ({
     projectId: project.id,
     stage,
     expectedRevision: project.revision,
     requestId: crypto.randomUUID(),
-    executor:
-      (stage === 'storyboard' &&
-        (settings ?? (draft.payload as StagePayloads['storyboard'])).mode === 'template') ||
-      ['audio', 'roughcut', 'render'].includes(stage)
+    executor: storyboardModification
+      ? executor
+      : (stage === 'storyboard' &&
+            (settings ?? (draft.payload as StagePayloads['storyboard'])).mode === 'template') ||
+          ['audio', 'roughcut', 'render'].includes(stage)
         ? 'template'
         : executor,
     settings: stage === 'storyboard' ? (settings ?? draft.payload) : undefined,
     sceneId,
+    storyboardModification,
     voice,
     copyFeedback: stage === 'copy' ? copyFeedback : undefined,
     publication:
@@ -500,6 +506,12 @@ export function StageWorkspace({
                     onChange={draft.update}
                     disabled={!unlocked || busy}
                     onRegenerate={generate}
+                    onAiModify={(sceneId, feedback) =>
+                      generate(sceneId, draft.payload as StagePayloads['storyboard'], {
+                        sceneId,
+                        feedback,
+                      })
+                    }
                     onCreate={(settings, sceneId) => generate(sceneId, settings)}
                     narration={stageValue(project, 'narration')}
                   />

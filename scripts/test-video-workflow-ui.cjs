@@ -606,6 +606,10 @@ app.whenReady().then(async () => {
         '!document.querySelector(".workflow-scene-notes").textContent.includes("取消编辑不改变画面")',
       ),
     )
+    await click('修改此分镜')
+    assert.ok(await evaluate('document.querySelector("[data-storyboard-ai-feedback]")'))
+    assert.ok(await evaluate('document.querySelector("[data-storyboard-ai-modify]")'))
+    await click('取消')
     await click('创作设置')
     await evaluate(
       '[...document.querySelectorAll("input[type=radio]")].find(item=>item.value==="agent").click()',

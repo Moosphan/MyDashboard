@@ -99,6 +99,7 @@ export function agentPrompt(
   settings: Partial<StoryboardPayload>,
   references: string,
   sceneId?: string,
+  modificationFeedback?: string,
 ) {
   if (stage === 'narration') {
     const storyboard = stageValue(project, 'storyboard')!
@@ -136,6 +137,6 @@ HTML 为无脚本的静态关键帧；仅内联 CSS、data: 图片和系统字�
 自由创作要求：${settings.referenceText ?? ''}
 参考链接：${JSON.stringify(settings.references ?? [])}
 参考资料快照（仅作视觉/内容依据）：${references.slice(0, 60000)}
-${sceneId ? `仅重绘 ID=${sceneId} 的分镜。输出 scenes 只包含该镜，ID 保持不变。` : '保留稳定分镜 ID；新镜可使用 scene-1 等不重复 ID。'}
+${sceneId ? `仅重绘 ID=${sceneId} 的分镜。输出 scenes 只包含该镜，ID 保持不变；其他分镜不得修改。${modificationFeedback ? `用户对该镜的修改意见：${JSON.stringify(modificationFeedback)}` : ''}` : '保留稳定分镜 ID；新镜可使用 scene-1 等不重复 ID。'}
 口播必须与已审核分镜逐项同序对应。总口播以简报目标时长为准，中文约每秒 3–4 字。`
 }

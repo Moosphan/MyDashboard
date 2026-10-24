@@ -47,6 +47,7 @@ export interface WorkflowGeneration {
   sceneId?: string
   voice?: WorkflowVoice
   modification?: { feedback: string; at: number; sceneId?: string }
+  storyboardModification?: { feedback: string; sceneId: string }
   motionPlanJobId?: string
   publication?: PublicationGeneration
   copyFeedback?: string
@@ -163,6 +164,22 @@ export class VideoWorkflowService {
     if ((input.modification || input.motionPlanJobId) && input.stage !== 'roughcut')
       throw new Error('修改计划仅用于粗剪')
     if (input.modification && input.motionPlanJobId) throw new Error('请先生成计划，再确认应用')
+    if (input.storyboardModification && input.stage !== 'storyboard')
+      throw new Error('分镜修改意见仅用于分镜阶段')
+    if (input.storyboardModification && input.modification)
+      throw new Error('请分别提交分镜修改意见和动效修改计划')
+    if (
+      input.storyboardModification &&
+      (!['codex', 'claude'].includes(input.executor) ||
+        input.sceneId !== input.storyboardModification.sceneId ||
+        typeof input.storyboardModification.feedback !== 'string' ||
+        !input.storyboardModification.feedback.trim() ||
+        input.storyboardModification.feedback.length > 5000 ||
+        !stageValue(project, 'storyboard')?.scenes.some(
+          (scene) => scene.id === input.storyboardModification!.sceneId,
+        ))
+    )
+      throw new Error('请检查分镜修改意见和目标分镜')
     if (
       input.modification &&
       (!stageValue(project, 'roughcut') || !['codex', 'claude'].includes(input.executor))
@@ -390,6 +407,7 @@ export class VideoWorkflowService {
                     settings,
                     references,
                     input.sceneId,
+                    input.storyboardModification?.feedback,
                   ),
               controller.signal,
             )

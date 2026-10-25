@@ -418,10 +418,23 @@ export async function renderWorkflow(input: {
     motionEngine: hasMotion ? 'waapi' : undefined,
   })
   const output = join(cwd, final ? 'final.mp4' : 'roughcut.mp4')
+  const renderProfile = {
+    quality: final ? ('delivery' as const) : ('looks' as const),
+    fps: 30 as const,
+  }
   phase(final ? '渲染最终成片 · 1920×1080 / 30 fps' : '渲染粗剪 · 完成后等待人工审核')
   await hyperframes(
     runtime,
-    ['render', cwd, '--output', output, '--quality', final ? 'delivery' : 'looks', '--fps', '30'],
+    [
+      'render',
+      cwd,
+      '--output',
+      output,
+      '--quality',
+      renderProfile.quality,
+      '--fps',
+      String(renderProfile.fps),
+    ],
     cwd,
     signal,
     3600000,
@@ -452,6 +465,8 @@ export async function renderWorkflow(input: {
       compositionFiles.map((file, index) => [compositionNames[index], file.sha256]),
     ),
     checks,
+    renderProfile,
+    ...(final ? { sourceRoughcut: project.stages.roughcut!.id } : {}),
     ...(motion ? { motion } : {}),
     sourceStoryboard: final
       ? stageValue(project, 'roughcut')!.sourceStoryboard

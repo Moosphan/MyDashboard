@@ -12,6 +12,7 @@ import {
   stageUnlocked,
   stageValue,
   storyboardMotionReadiness,
+  storyboardReviewBlockReason,
   type StagePayloads,
   type VideoProject,
   type VideoStage,
@@ -546,6 +547,21 @@ export function StageWorkspace({
                       })
                     }
                     onCreate={(settings, sceneId) => generate(sceneId, settings)}
+                    unsaved={draft.dirty}
+                    onAcceptIllustration={() =>
+                      run(async () => {
+                        if (draft.dirty)
+                          throw new Error('请先保存或放弃当前修改，再接受示意图降级。')
+                        const result = await workflowCall<VideoProject>(
+                          'acceptIllustration',
+                          project.id,
+                          project.revision,
+                          crypto.randomUUID(),
+                        )
+                        draft.reset(result)
+                        onProject(result)
+                      }, '已接受当前素材缺口降级，保留现有分镜与 MG 动画；已保存待审核版本')
+                    }
                     narration={stageValue(project, 'narration')}
                   />
                 )}
@@ -805,6 +821,7 @@ export function StageWorkspace({
                 ref={approveButton}
                 size="sm"
                 disabled={!canApprove}
+                aria-describedby={motionBlocked ? 'storyboard-review-blocked' : undefined}
                 onClick={() => setReview(true)}
               >
                 {stage === 'audio' &&
@@ -813,6 +830,16 @@ export function StageWorkspace({
                   ? '沿用并审核此版配音'
                   : '审核通过此版本'}
               </Button>
+              {motionBlocked && (
+                <p
+                  id="storyboard-review-blocked"
+                  role="status"
+                  className="workflow-error"
+                  data-storyboard-review-blocked
+                >
+                  {storyboardReviewBlockReason(draft.payload as StagePayloads['storyboard'])}
+                </p>
+              )}
               {draft.dirty && <p className="workflow-muted">请先保存修改，再审核当前版本。</p>}
             </div>
           </Card>

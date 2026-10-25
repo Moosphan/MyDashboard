@@ -273,6 +273,9 @@ app.whenReady().then(async () => {
     }
     await generate('render')
     assert.equal(stageValue(project, 'render')!.motion?.scenes.length, 2)
+    assert.equal(stageValue(project, 'render')!.sourceRoughcut, project.stages.roughcut!.id)
+    assert.deepEqual(stageValue(project, 'render')!.renderProfile, { quality: 'delivery', fps: 30 })
+    assert.deepEqual(stageValue(project, 'roughcut')!.renderProfile, { quality: 'looks', fps: 30 })
     const exported = await service.exportComposition(project.id, 'render', root)
     assert.ok(readFileSync(join(exported, 'index.html'), 'utf8').includes('element.animate'))
     const style = await service.saveTemplate(

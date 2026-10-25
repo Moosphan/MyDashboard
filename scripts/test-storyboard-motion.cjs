@@ -220,8 +220,85 @@ app.whenReady().then(async () => {
       retainedVersion,
       'Invalid AI targets preserve approved storyboard',
     )
+    const gap = '实物图片尚未取得；当前为已标注的原创示意图'
+    const fallback = {
+      ...storyboard,
+      scenes: ['one', 'two', 'three'].map((id) => ({
+        ...storyboard.scenes[0],
+        id,
+        html: storyboard.scenes[0].html + '<p>原创示意图 · 非实拍</p>',
+        motion: { ...storyboard.scenes[0].motion, blockers: [gap] },
+      })),
+    }
+    state = await service.save(state.id, 'storyboard', fallback, state.revision, randomUUID())
+    await assert.rejects(
+      service.approve(
+        state.id,
+        'storyboard',
+        state.stages.storyboard.id,
+        state.revision,
+        randomUUID(),
+        '',
+      ),
+      /补齐/,
+    )
+    const request = randomUUID()
+    const expected = state.revision
+    const beforeFallback = structuredClone(state.stages.storyboard.payload)
+    state = await service.acceptIllustration(state.id, expected, request)
+    assert.equal(state.stages.storyboard.status, 'review')
+    assert.equal(
+      state.stages.storyboard.payload.scenes.filter((scene) => scene.materialFallback).length,
+      3,
+    )
+    assert.deepEqual(
+      state.stages.storyboard.payload.scenes.map(({ materialFallback, ...scene }) => scene),
+      beforeFallback.scenes,
+    )
+    assert.deepEqual(state.stages.storyboard.payload.scenes[0].motion.blockers, [gap])
+    assert.equal(state.jobs[0].operation.action, 'accept-illustration')
+    const acceptedVersion = state.stages.storyboard.id
+    assert.equal(
+      (await service.acceptIllustration(state.id, expected, request)).stages.storyboard.id,
+      acceptedVersion,
+    )
+    await assert.rejects(service.acceptIllustration(state.id, expected - 1, randomUUID()), /更新/)
+    state = await service.approve(
+      state.id,
+      'storyboard',
+      acceptedVersion,
+      state.revision,
+      randomUUID(),
+      '',
+    )
+    const edited = structuredClone(state.stages.storyboard.payload)
+    edited.scenes[0].html += '<p>新画面</p>'
+    state = await service.save(state.id, 'storyboard', edited, state.revision, randomUUID())
+    assert.equal(state.stages.storyboard.payload.scenes[0].materialFallback, undefined)
+    const hidden = {
+      ...fallback,
+      scenes: [
+        fallback.scenes[0],
+        {
+          ...fallback.scenes[1],
+          html:
+            storyboard.scenes[0].html +
+            '<style>.hidden-label{display:none}</style><p class="hidden-label">原创示意图</p>',
+        },
+      ],
+    }
+    state = await service.save(state.id, 'storyboard', hidden, state.revision, randomUUID())
+    await assert.rejects(
+      service.acceptIllustration(state.id, state.revision, randomUUID()),
+      /可见.*标注/,
+    )
+    assert.equal(
+      service.repository.get(state.id).revision,
+      state.revision,
+      'Batch fallback is atomic when one scene lacks a visible label',
+    )
     console.log(
-      'PASS: template MG routes to local Agent, applies built-in policy, persists exclusions, rejects missing DOM before approval and preserves history',
+      'PASS: explicit material fallback retains gaps, requires visible label, records review version, is idempotent and expires after editing',
     )
     console.log(
       'PASS: actual DOM targets, exclusions, directional WAAPI scaling and reverse seek:',

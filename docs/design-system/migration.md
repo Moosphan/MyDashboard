@@ -58,6 +58,10 @@
 
 ## 3. 例外记录
 
+`VIDEO-WORKFLOW-001` 正片差异说明（2026-10-25 用户授权及截图修订）：`FinalRenderComparison.tsx` 与 `MediaPanels.tsx` 复用现有 Button ghost/icon、WorkflowDialog、表格文字和主题。按用户反馈在播放器规格旁以图标按钮打开对比弹窗，移除正文整块提示；补充可访问名称、提示标题、焦点返回与表格定位容器，修复隐藏 caption 撑大页面的问题。使用 HeroUI 缺少的比较业务图标 `@heroicons/react@2.2.0` outline，不引入新的控件库或布局断点。存量 React 18 例外负责人为项目维护者，退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-final-comparison-verification.md`。
+
+`VIDEO-WORKFLOW-001` 分镜素材降级（2026-10-24 用户授权）：`StoryboardEditor.tsx`、`StageWorkspace.tsx`、`ExecutionLog.tsx` 沿用本工作流现有 React 18 / Radix / Button 与主题例外。保留主栏、审核栏及操作位置；仅在既有缺口说明中增加一个批量降级按钮、确认弹窗和审核旁原因。接受仅创建待审核记录，不替换素材或改动 MG。负责人为项目维护者；退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-material-fallback-verification.md`。
+
 音色裁剪局部例外（2026-10-23，用户明确批准“允许本次局部例外，先完成音频裁剪”）：`VOICE-TRIM-001` 覆盖 `VoiceReferenceTimeline.tsx`、`VoiceProfilePanel.tsx`、`VoiceEngineFields.tsx`、`VoiceoverDialog.tsx` 与 `voiceover.css`。时间轴为专用音频业务组件，复用现有 VoiceButton、VoiceNumber 和主题，不引入 React 19 / Tailwind 4。责任为项目维护者，退出里程碑为 Voiceover 的 HeroUI 3.2.6 生产迁移。保留视频工作流与其既有例外；验证为 voiceover / workflow 测试、Electron 导入选段试听保存、明暗主题、视口与键盘。
 
 | ID          | 范围                       | 理由                                                 | 责任           | 退出里程碑               | 状态     |

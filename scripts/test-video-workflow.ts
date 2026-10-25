@@ -13,6 +13,8 @@ import {
   type AudioProgress,
   validateMotionPlan,
   storyboardMotionReadiness,
+  storyboardReviewBlockReason,
+  retainMaterialFallback,
 } from '../src/shared/video-workflow'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -56,6 +58,99 @@ import {
   renderSceneTimeline,
   renderSceneAtTime,
 } from '../src/renderer/modules/video/workflow/render-timeline'
+import { compareFinalRender } from '../src/shared/video-render-comparison'
+
+test('final render comparison binds to its frozen source instead of the newest roughcut', () => {
+  const { db, state, render } = visualFixture()
+  try {
+    const roughcut = {
+      ...state.stages.audio!,
+      id: 'rough-source',
+      stage: 'roughcut' as const,
+      version: 2,
+      createdAt: '2026-10-24T10:00:00.000Z',
+      payload: {
+        ...render,
+        manifestHash: 'b'.repeat(64),
+        renderProfile: { quality: 'looks' as const, fps: 30 },
+        sourceAudio: 'original-audio',
+      },
+    }
+    const final = {
+      ...roughcut,
+      id: 'final',
+      stage: 'render' as const,
+      version: 1,
+      createdAt: '2026-10-24T11:00:00.000Z',
+      payload: {
+        ...roughcut.payload,
+        file: { ...render.file, size: 2048, sha256: 'e'.repeat(64) },
+        renderProfile: { quality: 'delivery' as const, fps: 30 },
+        sourceRoughcut: roughcut.id,
+      },
+    }
+    const newer = {
+      ...roughcut,
+      id: 'new-roughcut',
+      version: 3,
+      createdAt: '2026-10-24T12:00:00.000Z',
+      payload: { ...roughcut.payload, manifestHash: 'c'.repeat(64) },
+    }
+    const project = {
+      ...state,
+      history: [newer, final, roughcut, ...state.history],
+      stages: { ...state.stages, roughcut: newer, render: final },
+    }
+    const comparison = compareFinalRender(project, final)
+    assert.equal(comparison.source?.id, roughcut.id)
+    assert.equal(comparison.sourceMatch, 'recorded')
+    assert.equal(comparison.sameComposition, true)
+    assert.equal(comparison.qualityChange, 'delivery')
+    assert.equal(comparison.sameFile, false)
+    assert.equal(comparison.durationDelta, 0)
+    assert.equal(comparison.sizeDelta, 2047)
+    const validated = validatePayload('render', final.payload)
+    assert.deepEqual(validated.renderProfile, final.payload.renderProfile)
+    assert.equal(validated.sourceRoughcut, roughcut.id)
+    assert.throws(
+      () =>
+        validatePayload('render', {
+          ...final.payload,
+          renderProfile: { quality: 'invented', fps: 30 },
+        }),
+      /渲染参数/,
+    )
+    const legacy = {
+      ...final,
+      payload: { ...final.payload, renderProfile: undefined, sourceRoughcut: undefined },
+    }
+    assert.equal(compareFinalRender(project, legacy).sourceMatch, 'matched')
+    assert.equal(compareFinalRender(project, legacy).qualityChange, 'unknown')
+    const missing = { ...legacy, payload: { ...legacy.payload, manifestHash: 'd'.repeat(64) } }
+    assert.equal(compareFinalRender(project, missing).source, undefined)
+    assert.equal(compareFinalRender(project, missing).sameComposition, undefined)
+    const badSource = { ...final, payload: { ...final.payload, sourceRoughcut: 'missing' } }
+    assert.equal(compareFinalRender(project, badSource).source, undefined)
+    const sameFile = { ...final, payload: { ...final.payload, file: roughcut.payload.file } }
+    assert.equal(compareFinalRender(project, sameFile).sameFile, true)
+    assert.equal(compareFinalRender(project, sameFile).qualityChange, 'same-file')
+    const sameQuality = {
+      ...final,
+      payload: { ...final.payload, renderProfile: { quality: 'looks' as const, fps: 30 as const } },
+    }
+    assert.equal(compareFinalRender(project, sameQuality).qualityChange, 'unchanged')
+    const changed = {
+      ...final,
+      payload: { ...final.payload, manifestHash: 'f'.repeat(64), duration: 4.1 },
+    }
+    assert.equal(compareFinalRender(project, changed).sameComposition, false)
+    assert.ok(Math.abs(compareFinalRender(project, changed).durationDelta! - 0.1) < 0.0001)
+    const anotherAudio = { ...legacy, payload: { ...legacy.payload, sourceAudio: 'another-audio' } }
+    assert.equal(compareFinalRender(project, anotherAudio).source, undefined)
+  } finally {
+    db.close()
+  }
+})
 
 test('scene selection seeks to the first rendered frame and survives browser time precision', () => {
   const durations = [
@@ -923,6 +1018,55 @@ function visualFixture() {
   }
   return { ...fixtureData, state, render }
 }
+
+test('material fallback is explicit, scoped to unchanged content and never waives motion failures', () => {
+  const { db, state } = visualFixture()
+  try {
+    const original = stageValue(state, 'storyboard')!
+    const gap = '实物图片尚未取得；当前为已标注的原创示意图'
+    const technical = '缺少独立动画元素，选择器无法匹配'
+    const storyboard = validatePayload('storyboard', {
+      ...original,
+      scenes: original.scenes.map((scene) => ({
+        ...scene,
+        motion: { summary: '待补齐', effects: [], blockers: [gap, technical] },
+      })),
+    })
+    assert.equal(storyboardReviewBlockReason(storyboard), '因 2 处素材缺口、2 处动效缺口无法审核')
+    const accepted = validatePayload('storyboard', {
+      ...storyboard,
+      scenes: storyboard.scenes.map((scene) => ({
+        ...scene,
+        materialFallback: { acceptedAt: new Date().toISOString(), blockers: [gap] },
+      })),
+    })
+    assert.equal(storyboardMotionReadiness(accepted).blockers.length, 2)
+    assert.equal(storyboardReviewBlockReason(accepted), '因 2 处动效缺口无法审核')
+    assert.deepEqual(accepted.scenes[0].motion?.blockers, [gap, technical])
+    assert.deepEqual(retainMaterialFallback(accepted, accepted), accepted)
+    const changed = {
+      ...accepted,
+      scenes: accepted.scenes.map((scene) => ({ ...scene, html: '<p>新画面</p>' })),
+    }
+    assert.equal(retainMaterialFallback(accepted, changed).scenes[0].materialFallback, undefined)
+    assert.equal(retainMaterialFallback(storyboard, accepted).scenes[0].materialFallback, undefined)
+    assert.throws(
+      () =>
+        validatePayload('storyboard', {
+          ...accepted,
+          scenes: [
+            {
+              ...accepted.scenes[0],
+              materialFallback: { acceptedAt: new Date().toISOString(), blockers: [technical] },
+            },
+          ],
+        }),
+      /素材降级/,
+    )
+  } finally {
+    db.close()
+  }
+})
 
 test('reuses frozen storyboard frames when only the audio revision changes', () => {
   const { db, repository, state: initial, render } = visualFixture()

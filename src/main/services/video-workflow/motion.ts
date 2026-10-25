@@ -311,6 +311,16 @@ export async function prepareMotionScene(
         return rewriteValue(rule.cssText);
       };
       const styles = styleNodes.map(node => Array.from(node.sheet?.cssRules ?? []).map(serializeRule).join('\\n')).join('\\n');
+      const illustrationLabel = Array.from(document.body.querySelectorAll('*')).some(node => {
+        if (node.children.length || !/原创.{0,12}(示意|意象)/.test(node.innerText || '')) return false;
+        const bounds = node.getBoundingClientRect();
+        if (!bounds.width || !bounds.height || bounds.right <= 0 || bounds.bottom <= 0 || bounds.left >= 1920 || bounds.top >= 1080) return false;
+        for (let current = node; current; current = current.parentElement) {
+          const style = getComputedStyle(current);
+          if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0) return false;
+        }
+        return true;
+      });
       document.querySelectorAll('style,script,iframe,object,embed,base,meta,link,template,form,input,button,video,audio,foreignObject,animate,animateTransform,set,use').forEach(node => node.remove());
       for (const node of document.body.querySelectorAll('*')) {
         if (node.id) node.id = ids.get(node.id);
@@ -326,7 +336,7 @@ export async function prepareMotionScene(
       Array.from(document.body.querySelectorAll('*')).forEach((node,index) => node.setAttribute('data-hf-id', ${JSON.stringify(id)} + '-element-' + index));
       const selectors = targets.map(nodes => nodes.map(node => '[data-hf-id="' + node.getAttribute('data-hf-id') + '"]').join(', '));
       const counts = targets.map(nodes => nodes.length);
-      return { html: document.body.innerHTML, styles, counts, selectors, fontFamilies: localFontFamilies, bodyStyle: document.body.getAttribute('style') || '', bodyClass: document.body.className };
+      return { html: document.body.innerHTML, styles, counts, selectors, illustrationLabel, fontFamilies: localFontFamilies, bodyStyle: document.body.getAttribute('style') || '', bodyClass: document.body.className };
       } catch (error) { return { error: error.message }; }
     })()`,
       },
@@ -340,6 +350,7 @@ export async function prepareMotionScene(
           fontFamilies: string[]
           bodyStyle: string
           bodyClass: string
+          illustrationLabel: boolean
         }
     signal.throwIfAborted()
     if ('error' in result) throw new Error(result.error)

@@ -43,6 +43,7 @@ const changeNames: Record<string, string> = {
   html: 'HTML 画面',
   requirements: '创作要求',
   motion: 'MG 动效计划',
+  materialFallback: '原创示意图降级确认',
   text: '口播正文',
   pronunciation: '读音与停顿',
   scene: '分镜内容',
@@ -50,6 +51,7 @@ const changeNames: Record<string, string> = {
 }
 
 function taskName(job: WorkflowJob) {
+  if (job.operation?.action === 'accept-illustration') return '接受原创示意图降级'
   if (job.operation?.action === 'reuse-roughcut') return '取消修改计划并沿用粗剪'
   if (job.operation?.action === 'reuse-audio') return '沿用并审核分段配音'
   if (job.kind === 'motion-plan') return '生成元素动效修改计划'

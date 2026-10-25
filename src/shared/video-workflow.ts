@@ -43,6 +43,7 @@ export interface StoryScene {
   html?: string
   requirements?: string
   motion?: StoryboardSceneMotion
+  materialFallback?: { acceptedAt: string; blockers: string[] }
 }
 export interface StoryboardSceneMotion {
   summary: string
@@ -93,6 +94,8 @@ export interface RenderPayload {
   sourceStoryboard?: string
   sourceAudio?: string
   sourceNarration?: string
+  sourceRoughcut?: string
+  renderProfile?: { quality: 'looks' | 'delivery'; fps: 30 }
 }
 export interface MotionFrame {
   opacity?: number
@@ -178,7 +181,13 @@ export interface WorkflowRevision {
   note: string
 }
 export interface WorkflowOperation {
-  action: 'scene-edit' | 'scene-generate' | 'reuse-narration' | 'reuse-audio' | 'reuse-roughcut'
+  action:
+    | 'scene-edit'
+    | 'scene-generate'
+    | 'reuse-narration'
+    | 'reuse-audio'
+    | 'reuse-roughcut'
+    | 'accept-illustration'
   sceneId?: string
   sceneTitle?: string
   sceneNumber?: number
@@ -387,6 +396,9 @@ export function validatePayload<Stage extends VideoStage>(
           ? { requirements: text(scene.requirements, '分镜修改要求', 30000) }
           : {}),
         ...(scene.motion ? { motion: validateStoryboardSceneMotion(id, scene.motion) } : {}),
+        ...(scene.materialFallback
+          ? { materialFallback: validateMaterialFallback(scene.materialFallback, scene.motion) }
+          : {}),
       }
     })
     if (stage === 'narration') output = { scenes } as StagePayloads['narration']
@@ -461,6 +473,9 @@ export function validatePayload<Stage extends VideoStage>(
       ...(input.voice ? { voice: input.voice as WorkflowVoice } : {}),
     }
   } else if (stage === 'roughcut' || stage === 'render') {
+    const profile = input.renderProfile === undefined ? undefined : record(input.renderProfile)
+    if (profile && (!['looks', 'delivery'].includes(String(profile.quality)) || profile.fps !== 30))
+      throw new Error('无效渲染参数')
     if (
       !Array.isArray(input.compositionFiles) ||
       !input.compositionFiles.length ||
@@ -486,6 +501,12 @@ export function validatePayload<Stage extends VideoStage>(
       compositionNames: input.compositionNames as string[],
       manifestHash: text(input.manifestHash, '工程指纹', 64),
       checks: text(input.checks, '合成检查', 20000),
+      ...(profile
+        ? { renderProfile: { quality: profile.quality as 'looks' | 'delivery', fps: 30 as const } }
+        : {}),
+      ...(input.sourceRoughcut
+        ? { sourceRoughcut: text(input.sourceRoughcut, '来源粗剪', 80) }
+        : {}),
       ...(input.motion ? { motion: input.motion as MotionPlan } : {}),
       ...(input.sourceStoryboard
         ? { sourceStoryboard: text(input.sourceStoryboard, '来源分镜', 80) }
@@ -702,13 +723,85 @@ export function storyboardMotionReadiness(storyboard: StoryboardPayload) {
   return {
     total: storyboard.scenes.length,
     planned: included.filter(
-      (scene) => scene.motion && !scene.motion.blockers.length && scene.motion.effects.length,
+      (scene) => scene.motion && !sceneBlockers(scene).length && scene.motion.effects.length,
     ).length,
     unplanned: included.filter((scene) => !scene.motion).map((scene) => scene.id),
     blockers: included.flatMap((scene) =>
-      (scene.motion?.blockers ?? []).map((message) => ({ sceneId: scene.id, message })),
+      sceneBlockers(scene).map((message) => ({ sceneId: scene.id, message })),
     ),
   }
+}
+
+export function isMaterialBlocker(message: string) {
+  return (
+    /图片|照片|摄影|素材|封面|实物/.test(message) &&
+    !/选择器|selector|scale[XY]?|关键帧|动画|动效|元素|节点|转场/i.test(message)
+  )
+}
+
+function sceneBlockers(scene: StoryScene) {
+  return (scene.motion?.blockers ?? []).filter(
+    (message) => !isMaterialBlocker(message) || !scene.materialFallback?.blockers.includes(message),
+  )
+}
+
+function validateMaterialFallback(
+  value: unknown,
+  source: unknown,
+): NonNullable<StoryScene['materialFallback']> {
+  const fallback = record(value)
+  const blockers = record(source).blockers
+  if (
+    typeof fallback.acceptedAt !== 'string' ||
+    !Number.isFinite(Date.parse(fallback.acceptedAt)) ||
+    !Array.isArray(fallback.blockers) ||
+    !fallback.blockers.length ||
+    fallback.blockers.some(
+      (message) =>
+        typeof message !== 'string' ||
+        !isMaterialBlocker(message) ||
+        !Array.isArray(blockers) ||
+        !blockers.includes(message),
+    )
+  )
+    throw new Error('素材降级记录无效，仅能接受本镜已标注的素材缺口')
+  return { acceptedAt: fallback.acceptedAt, blockers: [...new Set(fallback.blockers)] as string[] }
+}
+
+export function retainMaterialFallback(
+  previous: StoryboardPayload | undefined,
+  next: StoryboardPayload,
+): StoryboardPayload {
+  return {
+    ...next,
+    scenes: next.scenes.map((scene) => {
+      const original = previous?.scenes.find((item) => item.id === scene.id)
+      const content = { ...scene }
+      delete content.materialFallback
+      const unchanged =
+        original &&
+        (['title', 'body', 'layout', 'html', 'requirements', 'motion'] as const).every(
+          (key) => JSON.stringify(original[key]) === JSON.stringify(scene[key]),
+        )
+      return unchanged && original.materialFallback
+        ? { ...content, materialFallback: original.materialFallback }
+        : content
+    }),
+  }
+}
+
+export function storyboardReviewBlockReason(storyboard: StoryboardPayload) {
+  const readiness = storyboardMotionReadiness(storyboard)
+  const materials = readiness.blockers.filter((issue) => isMaterialBlocker(issue.message)).length
+  const motion = readiness.blockers.length - materials
+  const reasons = [
+    materials && `${materials} 处素材缺口`,
+    motion && `${motion} 处动效缺口`,
+    storyboard.motionPolicy?.enabled &&
+      readiness.unplanned.length &&
+      `${readiness.unplanned.length} 镜缺少 MG 计划`,
+  ].filter(Boolean)
+  return reasons.length ? `因 ${reasons.join('、')}无法审核` : ''
 }
 
 export function splitNarration(value: string): string[] {

@@ -88,6 +88,9 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     (id: string, stage: VideoStage, payload: unknown, expected: number, request: string) =>
       getVideoWorkflow().save(id, stage, payload, expected, request),
   )
+  handle('workflow:acceptIllustration', (id: string, expected: number, request: string) =>
+    getVideoWorkflow().acceptIllustration(id, expected, request),
+  )
   handle(
     'workflow:approve',
     (

@@ -24,6 +24,8 @@ import {
   canReuseAudio,
   storyboardMotionReadiness,
   sceneMotionEnabled,
+  isMaterialBlocker,
+  retainMaterialFallback,
   type WorkflowRevision,
 } from '../../../shared/video-workflow'
 import type { VoiceoverService } from '../voiceover/voiceover-service'
@@ -136,12 +138,93 @@ export class VideoWorkflowService {
   ) {
     if (!['brief', 'copy', 'storyboard', 'narration', 'publish'].includes(stage))
       throw new Error('媒体步骤需通过生成或导入创建')
-    const validated = validatePayload(stage, payload)
+    let validated = validatePayload(stage, payload)
+    if (stage === 'storyboard')
+      validated = retainMaterialFallback(
+        stageValue(this.repository.get(projectId), 'storyboard'),
+        validated as StoryboardPayload,
+      )
     if (stage === 'storyboard')
       await verifyStoryboardMotion(validated as StoryboardPayload, new AbortController().signal)
     await this.files.verifyPayload(projectId, validated)
     await this.verifyInputs(projectId, stage)
     this.repository.save(projectId, stage, validated, expected, requestId)
+    return this.notify(projectId)
+  }
+  async acceptIllustration(projectId: string, expected: number, requestId: string) {
+    const project = this.repository.get(projectId)
+    const requestKey = `illustration:${requestId}`
+    const previous = this.repository.db
+      .prepare('SELECT project_id,fingerprint FROM video_workflow_requests WHERE request_id=?')
+      .get(requestKey) as { project_id: string; fingerprint: string } | undefined
+    if (previous) {
+      const revision = project.history.find(
+        (item) =>
+          item.stage === 'storyboard' &&
+          previous.fingerprint === fingerprint(['save', 'storyboard', item.payload]),
+      )
+      if (
+        previous.project_id !== projectId ||
+        !revision ||
+        !project.jobs.some(
+          (job) =>
+            job.requestId === `edit:${requestKey}` &&
+            job.expectedRevision === expected &&
+            job.operation?.action === 'accept-illustration',
+        )
+      )
+        throw new Error('请求 ID 已用于不同操作')
+      return this.notify(projectId)
+    }
+    if (project.revision !== expected) throw new Error('项目已更新，请刷新后重试')
+    if (project.archived) throw new Error('项目已归档，请先恢复')
+    if (project.jobs.some((job) => job.state === 'running'))
+      throw new Error('请等待当前任务结束再接受素材降级')
+    const storyboard = stageValue(project, 'storyboard')
+    if (!storyboard) throw new Error('尚未生成分镜')
+    const gaps = storyboardMotionReadiness(storyboard).blockers.filter((issue) =>
+      isMaterialBlocker(issue.message),
+    )
+    if (!gaps.length) throw new Error('当前没有可接受的素材缺口')
+    const sceneIds = new Set(gaps.map((issue) => issue.sceneId))
+    for (const scene of storyboard.scenes.filter((item) => sceneIds.has(item.id))) {
+      if (sceneMotionEnabled(storyboard, scene.id) && !scene.motion?.effects.length)
+        throw new Error(`请先补齐「${scene.title}」动效计划，素材降级不能替代 MG 动画`)
+      const prepared = await prepareMotionScene(
+        sceneHtml(scene, storyboard.template),
+        'illustration-check',
+        [],
+        new AbortController().signal,
+      )
+      if (!prepared.illustrationLabel)
+        throw new Error(`「${scene.title}」缺少可见的原创示意图或原创意象图标注，请先补上标注`)
+    }
+    const acceptedAt = new Date().toISOString()
+    const payload = {
+      ...storyboard,
+      scenes: storyboard.scenes.map((item) =>
+        sceneIds.has(item.id)
+          ? {
+              ...item,
+              materialFallback: {
+                acceptedAt,
+                blockers: item.motion!.blockers.filter(isMaterialBlocker),
+              },
+            }
+          : item,
+      ),
+    }
+    await verifyStoryboardMotion(payload, new AbortController().signal)
+    await this.files.verifyPayload(projectId, payload)
+    await this.verifyInputs(projectId, 'storyboard')
+    this.repository.save(
+      projectId,
+      'storyboard',
+      payload,
+      expected,
+      requestKey,
+      '用户明确接受当前所有素材缺口降级为已标注的原创示意图；保留现有画面、MG 动画及原素材缺口供追溯',
+    )
     return this.notify(projectId)
   }
   async approve(
@@ -615,7 +698,10 @@ export class VideoWorkflowService {
               controller.signal,
             )
             if (input.stage === 'storyboard') {
-              const generated = validatePayload('storyboard', payload)
+              const generated = retainMaterialFallback(
+                undefined,
+                validatePayload('storyboard', payload),
+              )
               if (input.sceneId) {
                 const existing = stageValue(project, 'storyboard')
                 if (

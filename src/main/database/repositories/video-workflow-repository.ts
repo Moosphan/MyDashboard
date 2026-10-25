@@ -44,13 +44,13 @@ function sceneChanges(
       !source || !result
         ? ['scene']
         : stage === 'storyboard'
-          ? ['title', 'body', 'layout', 'html', 'requirements', 'motion']
+          ? ['title', 'body', 'layout', 'html', 'requirements', 'motion', 'materialFallback']
           : ['text', 'pronunciation']
     for (const field of fields) {
       const value = (scene: typeof source) =>
         field === 'scene'
           ? JSON.stringify(scene ?? null)
-          : field === 'motion'
+          : field === 'motion' || field === 'materialFallback'
             ? JSON.stringify(
                 (scene as unknown as Record<string, unknown> | undefined)?.[field] ?? null,
               )
@@ -313,7 +313,11 @@ export class VideoWorkflowRepository {
         if (changes.length) {
           const sceneIds = [...new Set(changes.map((change) => change.sceneId))]
           const operation: WorkflowOperation = {
-            action: 'scene-edit',
+            action: changes.every(
+              (change) => change.field === 'materialFallback' && change.after !== 'null',
+            )
+              ? 'accept-illustration'
+              : 'scene-edit',
             ...(sceneIds.length === 1
               ? {
                   sceneId: sceneIds[0],

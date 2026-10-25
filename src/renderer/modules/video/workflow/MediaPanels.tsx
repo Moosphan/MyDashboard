@@ -28,6 +28,7 @@ import { ScenePreview } from './StoryboardEditor'
 import { AudioTrackPlayer } from './AudioTrackPlayer'
 import { BilibiliPublishingPanel } from './BilibiliPublishingPanel'
 import { RenderActions } from './RenderActions'
+import { FinalRenderComparison } from './FinalRenderComparison'
 import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
 
 export function AudioPanel({
@@ -538,7 +539,12 @@ export function RenderPanel({
           />
           <div className="workflow-toolbar">
             <span>{render.duration.toFixed(1)} 秒 · 1920 × 1080 · 30 fps</span>
-            <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
+            <div className="workflow-actions">
+              <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
+              {final && selectedVersion && (
+                <FinalRenderComparison project={project} revision={selectedVersion} />
+              )}
+            </div>
           </div>
           {storyboard && (
             <>
@@ -614,7 +620,7 @@ export function RenderPanel({
       )}
       <p className="workflow-muted">
         {final
-          ? '复用已审核粗剪的冻结 HyperFrames 工程，以交付质量渲染。'
+          ? '正式成片沿用已审核粗剪的画面、动画、配音和字幕，以交付质量重新编码。点击播放器规格旁的对比图标查看变化；内容修改请先生成并审核新版粗剪。'
           : render?.motion
             ? '保留 HTML 元素，用可定位时间的动效合成配音与字幕；修改计划确认后生成新版本。'
             : '此版本由静态截图合成。可提出元素动效修改，生成新版粗剪后重新审核。'}

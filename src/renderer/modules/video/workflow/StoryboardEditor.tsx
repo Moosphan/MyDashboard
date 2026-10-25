@@ -8,6 +8,7 @@ import {
   TEMPLATE_FAMILIES,
   storyboardMotionReadiness,
   sceneMotionEnabled,
+  isMaterialBlocker,
   type StoryboardPayload,
   type StoryScene,
   type WorkflowFile,
@@ -98,6 +99,8 @@ export function StoryboardEditor({
   onAiModify,
   onCreate,
   narration,
+  onAcceptIllustration,
+  unsaved,
 }: {
   projectId: string
   value: StoryboardPayload
@@ -107,10 +110,16 @@ export function StoryboardEditor({
   onAiModify: (sceneId: string, feedback: string) => Promise<boolean>
   onCreate: (settings: StoryboardPayload, sceneId?: string) => Promise<boolean>
   narration?: { scenes: { id: string; text: string }[] }
+  onAcceptIllustration: () => Promise<boolean>
+  unsaved: boolean
 }) {
   const [active, setActive] = useState(value.scenes[0]?.id ?? '')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [fallbackOpen, setFallbackOpen] = useState(false)
+  const [accepting, setAccepting] = useState(false)
+  const [fallbackError, setFallbackError] = useState('')
+  const fallbackButton = useRef<HTMLButtonElement>(null)
   const [candidate, setCandidate] = useState(value)
   const [sceneDraft, setSceneDraft] = useState<StoryScene | null>(null)
   const [aiFeedback, setAiFeedback] = useState('')
@@ -142,6 +151,11 @@ export function StoryboardEditor({
   const settingsButton = useRef<HTMLButtonElement>(null)
   const editButton = useRef<HTMLButtonElement>(null)
   const scene = value.scenes.find((item) => item.id === active) ?? value.scenes[0]
+  const materialScenes = value.scenes.filter((item) =>
+    storyboardMotionReadiness(value).blockers.some(
+      (issue) => issue.sceneId === item.id && isMaterialBlocker(issue.message),
+    ),
+  )
   const index = scene ? value.scenes.indexOf(scene) : 0
   const sampleScenes: StoryScene[] = [
     {
@@ -282,6 +296,42 @@ export function StoryboardEditor({
               {value.scenes.find((item) => item.id === issue.sceneId)?.title}：{issue.message}
             </p>
           ))}
+          {materialScenes.length > 0 && (
+            <div className="workflow-actions mt-2">
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={disabled || unsaved}
+                ref={fallbackButton}
+                data-accept-illustration
+                onClick={() => {
+                  setFallbackError('')
+                  setFallbackOpen(true)
+                }}
+              >
+                接受原创示意图降级
+              </Button>
+              {unsaved && <span className="workflow-muted">请先保存或放弃当前修改。</span>}
+            </div>
+          )}
+          {value.scenes
+            .filter((item) => item.materialFallback)
+            .map((item) => (
+              <details key={item.id} className="mt-2" data-illustration-accepted={item.id}>
+                <summary className="cursor-pointer">
+                  「{item.title}」已接受原创示意图 ·{' '}
+                  {new Date(item.materialFallback!.acceptedAt).toLocaleString()}
+                </summary>
+                <p className="workflow-muted">
+                  真实素材尚未补齐，保留原创示意图标注。修改本镜内容后需重新确认。
+                </p>
+                {item.materialFallback!.blockers.map((message) => (
+                  <p key={message} className="workflow-muted">
+                    原素材缺口：{message}
+                  </p>
+                ))}
+              </details>
+            ))}
           {scene?.motion && sceneMotionEnabled(value, scene.id) && (
             <details className="mt-2">
               <summary className="cursor-pointer">本镜 MG 计划：{scene.motion.summary}</summary>
@@ -296,6 +346,63 @@ export function StoryboardEditor({
           )}
         </div>
       )}
+      <WorkflowDialog
+        open={fallbackOpen}
+        onOpenChange={(open) => {
+          if (!accepting) setFallbackOpen(open)
+        }}
+        title="接受原创示意图降级"
+        description={`统一接受以下 ${materialScenes.length} 镜的素材降级，保留当前分镜和 MG 动画。`}
+        returnFocus={materialScenes.length ? fallbackButton : editButton}
+        footer={
+          <>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={accepting}
+              onClick={() => setFallbackOpen(false)}
+            >
+              取消
+            </Button>
+            <Button
+              size="sm"
+              disabled={accepting || disabled || unsaved}
+              data-confirm-illustration
+              onClick={async () => {
+                setAccepting(true)
+                setFallbackError('')
+                const accepted = await onAcceptIllustration()
+                setAccepting(false)
+                if (accepted) {
+                  setFallbackOpen(false)
+                } else
+                  setFallbackError(
+                    '未能接受降级，请查看页面错误信息；当前画面必须有可见的原创示意图标注。',
+                  )
+              }}
+            >
+              {accepting ? '正在保存…' : '接受降级并保存'}
+            </Button>
+          </>
+        }
+      >
+        {materialScenes.map((item) => (
+          <div key={item.id}>
+            <p>{item.title}</p>
+            {item.motion?.blockers.filter(isMaterialBlocker).map((message) => (
+              <p key={message} className="workflow-muted">
+                {message}
+              </p>
+            ))}
+          </div>
+        ))}
+        <p>保存为待审核版本，保留原素材缺口和原创标注，不表示已取得真实照片；动效缺口仍需补齐。</p>
+        {fallbackError && (
+          <p role="alert" className="workflow-error">
+            {fallbackError}
+          </p>
+        )}
+      </WorkflowDialog>
       <ScenePreview projectId={projectId} value={value} scene={scene} />
       <div className="workflow-toolbar workflow-muted">
         <span>

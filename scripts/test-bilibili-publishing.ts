@@ -243,6 +243,46 @@ test('rejects stale approvals, missing categories, implicit visibility and inval
   }
 })
 
+test('rejects submission settings that differ from the reviewed AI metadata', async () => {
+  const context = await fixture()
+  try {
+    const payload = structuredClone(
+      context.project.stages.publish!.payload,
+    ) as import('../src/shared/video-workflow').PublishPayload
+    payload.platforms.bilibili.submission = {
+      category: '17',
+      categoryName: '父分区 / 测试分区',
+      visibility: 'private',
+      copyright: 'original',
+      source: '',
+    }
+    let project = context.repository.save(
+      context.project.id,
+      'publish',
+      payload,
+      context.project.revision,
+      randomUUID(),
+    )
+    project = context.repository.approve(
+      project.id,
+      'publish',
+      project.stages.publish!.id,
+      project.revision,
+      randomUUID(),
+    )
+    const request = { ...context.request, expectedRevision: project.revision }
+    assert.throws(() => context.service.start(request), /已审核资料不一致/)
+    assert.equal(context.service.list(project.id).length, 0)
+    const record = await context.finish(
+      context.service.start({ ...request, visibility: 'private' }).id,
+    )
+    assert.equal(record.state, 'reviewing')
+    assert.equal(record.snapshot.metadata.submission?.visibility, 'private')
+  } finally {
+    await context.close()
+  }
+})
+
 test('stops before upload when account ownership or approved media changes', async () => {
   const context = await fixture()
   try {

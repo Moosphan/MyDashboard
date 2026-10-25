@@ -59,6 +59,7 @@
 ## 3. 例外记录
 
 `VIDEO-WORKFLOW-001` 正片差异说明（2026-10-25 用户授权及截图修订）：`FinalRenderComparison.tsx` 与 `MediaPanels.tsx` 复用现有 Button ghost/icon、WorkflowDialog、表格文字和主题。按用户反馈在播放器规格旁以图标按钮打开对比弹窗，移除正文整块提示；补充可访问名称、提示标题、焦点返回与表格定位容器，修复隐藏 caption 撑大页面的问题。使用 HeroUI 缺少的比较业务图标 `@heroicons/react@2.2.0` outline，不引入新的控件库或布局断点。存量 React 18 例外负责人为项目维护者，退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-final-comparison-verification.md`。
+`VIDEO-WORKFLOW-001` 正式成片定位与发布预览（2026-10-25）：`MediaPanels.tsx` 复用现有工作流按钮、受管文件 IPC、WorkflowDialog 和原生 video，增加成片文件夹定位与发布封面播放弹窗；保留信息顺序、播放器和审核布局，关闭弹窗卸载媒体并返回触发按钮。AI 发布资料沿用现有平台表单保存投稿分区、可见性和稿件类型，B 站服务端核验已审核设置与实际投稿参数。HeroUI 迁移完成前沿用 React 18/Radix 局部例外。验证见本次工作流单元、B 站发布和正式成片 Electron 检查。
 
 `VIDEO-WORKFLOW-001` 分镜素材降级（2026-10-24 用户授权）：`StoryboardEditor.tsx`、`StageWorkspace.tsx`、`ExecutionLog.tsx` 沿用本工作流现有 React 18 / Radix / Button 与主题例外。保留主栏、审核栏及操作位置；仅在既有缺口说明中增加一个批量降级按钮、确认弹窗和审核旁原因。接受仅创建待审核记录，不替换素材或改动 MG。负责人为项目维护者；退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-material-fallback-verification.md`。
 

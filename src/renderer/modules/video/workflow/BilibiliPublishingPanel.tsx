@@ -9,7 +9,7 @@ import {
   type BilibiliConnection,
   type BilibiliSubmission,
 } from '@shared/bilibili-publishing'
-import type { VideoProject } from '@shared/video-workflow'
+import type { PublicationSubmission, VideoProject } from '@shared/video-workflow'
 import { workflowCall } from './useWorkflow'
 import { WorkflowDialog } from './WorkflowDialog'
 
@@ -18,11 +18,15 @@ export function BilibiliPublishingPanel({
   approved,
   disabled,
   dirty,
+  submission,
+  onSubmissionChange,
 }: {
   project: VideoProject
   approved: boolean
   disabled: boolean
   dirty: boolean
+  submission?: PublicationSubmission
+  onSubmissionChange: (submission: PublicationSubmission) => void
 }) {
   const storageKey = `video-workflow-bilibili-settings:${project.id}`
   const [saved] = useState<Record<string, string>>(() => {
@@ -48,10 +52,19 @@ export function BilibiliPublishingPanel({
   })
   const [categories, setCategories] = useState<BilibiliCategory[]>([])
   const [records, setRecords] = useState<BilibiliSubmission[]>([])
-  const [category, setCategory] = useState(saved.category ?? ''),
-    [visibility, setVisibility] = useState(saved.visibility ?? ''),
-    [copyright, setCopyright] = useState(saved.copyright ?? ''),
-    [source, setSource] = useState(saved.source ?? '')
+  const category = submission?.category ?? saved.category ?? ''
+  const visibility = submission?.visibility ?? saved.visibility ?? ''
+  const copyright = submission?.copyright ?? saved.copyright ?? ''
+  const source = submission?.source ?? saved.source ?? ''
+  const updateSubmission = (changes: Partial<PublicationSubmission>) =>
+    onSubmissionChange({
+      category,
+      categoryName: submission?.categoryName ?? '',
+      visibility: visibility as PublicationSubmission['visibility'],
+      copyright: copyright as PublicationSubmission['copyright'],
+      source,
+      ...changes,
+    })
   const [error, setError] = useState(''),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState('')
@@ -213,26 +226,48 @@ export function BilibiliPublishingPanel({
               : '重新检测连接'}
         </Button>
       </div>
-      <fieldset
-        disabled={busy || active || disabled || connection.state !== 'connected'}
-        className="workflow-section min-w-0"
-      >
+      <fieldset disabled={busy || active || disabled} className="workflow-section min-w-0">
         <VoiceSelect
           label="B 站投稿分区"
           value={category}
-          onChange={setCategory}
+          onChange={(category) => {
+            const selected = categories.find((item) => item.id === category)
+            updateSubmission({
+              category,
+              categoryName: selected
+                ? `${categories.find((parent) => parent.id === selected.parentId)?.name ?? '分区'} / ${selected.name}`
+                : '',
+            })
+          }}
           placeholder={categories.length ? '请选择投稿子分区' : '连接后加载分区'}
-          options={categories
-            .filter((item) => item.parentId)
-            .map((item) => ({
-              value: item.id,
-              label: `${categories.find((parent) => parent.id === item.parentId)?.name ?? '分区'} / ${item.name}`,
-            }))}
+          options={[
+            ...(category && !categories.some((item) => item.id === category && item.parentId)
+              ? [
+                  {
+                    value: category,
+                    label: `${submission?.categoryName || category}（待连接核验）`,
+                  },
+                ]
+              : []),
+            ...categories
+              .filter((item) => item.parentId)
+              .map((item) => ({
+                value: item.id,
+                label: `${categories.find((parent) => parent.id === item.parentId)?.name ?? '分区'} / ${item.name}`,
+              })),
+          ]}
         />
+        {submission?.categoryName && !category && (
+          <p className="workflow-muted" role="status">
+            AI 分区建议：{submission.categoryName}。连接 B 站后请选择实际投稿子分区。
+          </p>
+        )}
         <VoiceSelect
           label="投稿可见性"
           value={visibility}
-          onChange={setVisibility}
+          onChange={(visibility) =>
+            updateSubmission({ visibility: visibility as 'public' | 'private' })
+          }
           options={[
             { value: 'public', label: '公开投稿' },
             { value: 'private', label: '仅自己可见' },
@@ -241,7 +276,9 @@ export function BilibiliPublishingPanel({
         <VoiceSelect
           label="稿件类型"
           value={copyright}
-          onChange={setCopyright}
+          onChange={(copyright) =>
+            updateSubmission({ copyright: copyright as 'original' | 'repost' })
+          }
           options={[
             { value: 'original', label: '自制' },
             { value: 'repost', label: '转载' },
@@ -252,10 +289,16 @@ export function BilibiliPublishingPanel({
             label="转载来源"
             value={source}
             maxLength={2000}
-            onChange={(event) => setSource(event.target.value)}
+            onChange={(event) => updateSubmission({ source: event.target.value })}
           />
         )}
+        {!copyright && source && (
+          <p className="workflow-muted" role="status">
+            类型待核实：{source}
+          </p>
+        )}
       </fieldset>
+      <p className="workflow-muted">投稿设置随发布资料保存，AI 建议可修改，修改后需重新审核。</p>
       <p className="workflow-muted">
         {dirty
           ? '请先保存并重新审核发布资料。'
@@ -274,6 +317,7 @@ export function BilibiliPublishingPanel({
           !approved ||
           connection.state !== 'connected' ||
           !category ||
+          !categories.some((item) => item.id === category && item.parentId) ||
           !visibility ||
           !copyright ||
           (copyright === 'repost' && !source.trim())

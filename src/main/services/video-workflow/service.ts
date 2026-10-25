@@ -53,6 +53,7 @@ import {
 import { publicationBase, publicationOptions, publicationPrompt } from './publish'
 import { copyFeedback, copyPrompt } from './copy'
 import { BilibiliPublishingService } from './bilibili'
+import type { BilibiliCategory } from '../../../shared/bilibili-publishing'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -531,20 +532,40 @@ export class VideoWorkflowService {
           this.repository.finishMotionPlan(job.id, plan)
           return
         } else if (publication) {
+          let categories: BilibiliCategory[] = []
+          if (publication.platform === 'bilibili') {
+            phase('读取 B 站投稿分区；不可用时保留分区建议供人工核对')
+            categories = await this.publishing.categories().catch(() => [])
+            controller.signal.throwIfAborted()
+          }
           phase(
-            `等待 ${input.executor === 'codex' ? 'Codex' : 'Claude Code'} 生成${publication.platform === 'bilibili' ? ' Bilibili ' : '抖音'}标题、简介和标签`,
+            `等待 ${input.executor === 'codex' ? 'Codex' : 'Claude Code'} 生成${publication.platform === 'bilibili' ? ' Bilibili ' : '抖音'}发布资料与投稿设置`,
           )
           const metadata = await runAgent(
             input.executor as 'codex' | 'claude',
             runtime,
             cwd,
-            publicationPrompt(project, publication),
+            publicationPrompt(project, publication, categories),
             controller.signal,
           )
-          phase('校验平台字数与标签，保存待审核版本')
-          payload = validatePayload('publish', {
+          phase('校验发布资料与投稿设置，保存待审核版本')
+          const publicationPayload = validatePayload('publish', {
             platforms: { ...publicationBase(project).platforms, [publication.platform]: metadata },
           })
+          payload = publicationPayload
+          const settings = publicationPayload.platforms[publication.platform].submission
+          if (!settings || !settings.categoryName || !settings.visibility)
+            throw new Error('AI 未完整生成投稿分区、可见性与类型设置，请重新生成')
+          if (!settings.copyright && !settings.source)
+            throw new Error('AI 未说明稿件类型或待核实的来源，请重新生成')
+          if (
+            settings?.category &&
+            !categories.some((category) => category.id === settings.category && category.parentId)
+          )
+            throw new Error('AI 返回的投稿分区未经核验，请重新生成或连接平台后选择实际子分区')
+          const selectedCategory = categories.find((category) => category.id === settings.category)
+          if (selectedCategory)
+            settings.categoryName = `${categories.find((parent) => parent.id === selectedCategory.parentId)?.name ?? '分区'} / ${selectedCategory.name}`
         } else if (input.stage === 'audio') {
           if (input.audioTrackId && previousAudio) {
             this.repository.updateAudioProgress(job.id, {

@@ -155,6 +155,14 @@ export interface PlatformMetadata {
   title: string
   description: string
   tags: string[]
+  submission?: PublicationSubmission
+}
+export interface PublicationSubmission {
+  category: string
+  categoryName: string
+  visibility: 'public' | 'private' | ''
+  copyright: 'original' | 'repost' | ''
+  source: string
 }
 export interface PublishPayload {
   platforms: Record<VideoPlatform, PlatformMetadata>
@@ -527,10 +535,45 @@ export function validatePayload<Stage extends VideoStage>(
         throw new Error('标签最多 10 个，每个最多 30 字')
       if (typeof item.description === 'string' && item.description.length > 2000)
         throw new Error('发布简介最多 2000 字符')
+      let submission: PublicationSubmission | undefined
+      if (item.submission !== undefined) {
+        const settings = record(item.submission)
+        if (
+          typeof settings.category !== 'string' ||
+          (settings.category !== '' && !/^\d{1,12}$/.test(settings.category)) ||
+          typeof settings.categoryName !== 'string' ||
+          settings.categoryName.length > 200
+        )
+          throw new Error('投稿分区格式无效')
+        if (
+          typeof settings.visibility !== 'string' ||
+          !['', 'public', 'private'].includes(settings.visibility)
+        )
+          throw new Error('投稿可见性无效')
+        if (
+          typeof settings.copyright !== 'string' ||
+          !['', 'original', 'repost'].includes(settings.copyright)
+        )
+          throw new Error('投稿类型无效')
+        if (
+          typeof settings.source !== 'string' ||
+          settings.source.length > 2000 ||
+          (settings.copyright === 'repost' && !settings.source.trim())
+        )
+          throw new Error('转载必须填写真实来源，最多 2000 字符')
+        submission = {
+          category: settings.category,
+          categoryName: settings.categoryName.trim(),
+          visibility: settings.visibility as PublicationSubmission['visibility'],
+          copyright: settings.copyright as PublicationSubmission['copyright'],
+          source: settings.source.trim(),
+        }
+      }
       return {
         title: text(item.title, '发布标题', platform === 'douyin' ? 30 : 80),
         description: typeof item.description === 'string' ? item.description : '',
         tags,
+        ...(submission ? { submission } : {}),
       }
     }
     output = { platforms: { bilibili: metadata('bilibili'), douyin: metadata('douyin') } }

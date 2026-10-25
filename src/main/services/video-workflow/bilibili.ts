@@ -134,7 +134,9 @@ export class BilibiliPublishingService {
           const data = readFileSync(qr)
           if (data.length <= 1024 * 1024)
             this.connectionState.qrCode = `data:image/png;base64,${data.toString('base64')}`
-        } catch {}
+        } catch {
+          // The QR file may be replaced while the login helper is writing it.
+        }
       }
     }, 300)
     const promise = Promise.resolve().then(async () => {
@@ -218,6 +220,14 @@ export class BilibiliPublishingService {
       metadata = stageValue(project, 'publish')!.platforms.bilibili
     if (!metadata.tags.some((tag) => tag.trim()))
       throw new Error('B 站投稿至少需要一个有效标签，请修改资料并重新审核')
+    if (
+      metadata.submission &&
+      (metadata.submission.category !== input.category ||
+        metadata.submission.visibility !== input.visibility ||
+        metadata.submission.copyright !== input.copyright ||
+        (input.copyright === 'repost' && metadata.submission.source !== input.source?.trim()))
+    )
+      throw new Error('投稿设置与已审核资料不一致，请保存并重新审核后投稿')
     const snapshot: BilibiliPublishSnapshot = structuredClone({
       renderRevisionId: project.stages.render!.id,
       publishRevisionId: project.stages.publish.id,

@@ -77,6 +77,14 @@ app.whenReady().then(async () => {
     assert.equal(result.success, true, result.error)
     return result.data
   }
+  const saveAndApprove = async () => {
+    await click('保存草稿')
+    await click('确认保存新版本')
+    await waitFor('!document.querySelector("[role=dialog]")', 'settings saved')
+    await click('审核通过此版本')
+    await click('确认审核通过')
+    await waitFor('!document.querySelector("[role=dialog]")', 'settings approved')
+  }
   try {
     for (let attempt = 0; attempt < 120; attempt++) {
       window = BrowserWindow.getAllWindows().find((item) =>
@@ -115,6 +123,20 @@ app.whenReady().then(async () => {
     await select('B 站投稿分区', '父分区 / 测试分区')
     await select('投稿可见性', '公开投稿')
     await select('稿件类型', '自制')
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[data-bilibili-publishing]").textContent.includes("请先保存并重新审核")',
+      ),
+    )
+    await saveAndApprove()
+    const savedProject = await call('get', project.id)
+    assert.deepEqual(savedProject.stages.publish.payload.platforms.bilibili.submission, {
+      category: '17',
+      categoryName: '父分区 / 测试分区',
+      visibility: 'public',
+      copyright: 'original',
+      source: '',
+    })
     await screenshot('bilibili-ready-light-1440.png')
     writeFileSync(join(root, 'mode'), 'slow')
     await evaluate(
@@ -176,6 +198,7 @@ app.whenReady().then(async () => {
     )
     writeFileSync(join(root, 'mode'), 'network')
     await select('投稿可见性', '仅自己可见')
+    await saveAndApprove()
     await click('一键发布到 B 站')
     await waitFor(
       'document.querySelector("[data-bilibili-submission=unknown]")',

@@ -2832,6 +2832,13 @@ test('AI publishing regenerates one platform from approved content and preserves
       title: 'AI 做视频，为什么要逐步审核？',
       description: '结合实际流程理解人工审核。',
       tags: ['AI视频', '内容创作'],
+      submission: {
+        category: '',
+        categoryName: '知识 / 科技',
+        visibility: 'public',
+        copyright: 'original',
+        source: '',
+      },
     }
     writeFileSync(response, JSON.stringify(metadata))
     const first = await generate()
@@ -2909,7 +2916,18 @@ test('AI publishing regenerates one platform from approved content and preserves
       title: 'Bilibili 标题'.repeat(4),
       description: '面向开发者的完整介绍',
       tags: ['开发者'],
+      submission: {
+        category: '17',
+        categoryName: '父分区 / 测试分区',
+        visibility: 'private',
+        copyright: 'original',
+        source: '',
+      },
     }
+    service.runtime.set({
+      nodePath: process.execPath,
+      catbusPath: join(import.meta.dirname, 'fixtures/catbus.mjs'),
+    })
     writeFileSync(response, JSON.stringify(bilibili))
     const biliJob = await service.generate({
       projectId: state.id,
@@ -2919,12 +2937,59 @@ test('AI publishing regenerates one platform from approved content and preserves
       requestId: randomUUID(),
       publication: { platform: 'bilibili' },
     })
-    assert.equal((await wait(biliJob.id)).state, 'succeeded')
+    assert.equal(
+      (await wait(biliJob.id)).state,
+      'succeeded',
+      repository.job(biliJob.id)?.error ?? '',
+    )
     assert.ok(readFileSync(capture, 'utf8').includes('80 字符'))
+    assert.ok(readFileSync(capture, 'utf8').includes('测试分区'))
+    for (const field of ['submission', 'visibility', 'copyright'])
+      assert.ok(readFileSync(capture, 'utf8').includes(field), field)
     assert.deepEqual(stageValue(repository.get(state.id), 'publish')!.platforms.bilibili, bilibili)
     assert.deepEqual(
       stageValue(repository.get(state.id), 'publish')!.platforms.douyin,
       retainedDouyin,
+    )
+    state = repository.get(state.id)
+    const accepted = state.stages.publish!.id
+    const invalidResults = [
+      { ...metadata, submission: undefined },
+      { ...bilibili, submission: { ...bilibili.submission, category: '999' } },
+    ]
+    for (const result of invalidResults) {
+      writeFileSync(response, JSON.stringify(result))
+      const job = await service.generate({
+        projectId: state.id,
+        stage: 'publish',
+        executor: 'codex',
+        expectedRevision: state.revision,
+        requestId: randomUUID(),
+        publication: { platform: 'bilibili' },
+      })
+      assert.equal((await wait(job.id)).state, 'failed')
+      assert.match(repository.job(job.id)!.error!, /投稿分区|未经核验/)
+      assert.equal(repository.get(state.id).stages.publish!.id, accepted)
+    }
+    service.runtime.set({ catbusPath: '' })
+    writeFileSync(response, JSON.stringify(metadata))
+    const offlineJob = await service.generate({
+      projectId: state.id,
+      stage: 'publish',
+      executor: 'codex',
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+      publication: { platform: 'bilibili' },
+    })
+    assert.equal(
+      (await wait(offlineJob.id)).state,
+      'succeeded',
+      repository.job(offlineJob.id)?.error ?? '',
+    )
+    assert.ok(readFileSync(capture, 'utf8').includes('category 必须留空'))
+    assert.equal(
+      stageValue(repository.get(state.id), 'publish')!.platforms.bilibili.submission!.category,
+      '',
     )
   } finally {
     await service.dispose()
@@ -3419,6 +3484,37 @@ test('editable reference and tag separators preserve input, then normalize at th
       .bilibili.tags,
     ['技术', '工作流'],
   )
+})
+
+test('publishing settings persist with the reviewed metadata and reject invalid visibility and attribution', () => {
+  const metadata = { title: '标题', description: '简介', tags: ['技术'] }
+  const submission = {
+    category: '17',
+    categoryName: '科技 / 软件应用',
+    visibility: 'private',
+    copyright: 'original',
+    source: '',
+  }
+  const payload = { platforms: { bilibili: { ...metadata, submission }, douyin: metadata } }
+  assert.deepEqual(validatePayload('publish', payload).platforms.bilibili.submission, submission)
+  assert.equal(validatePayload('publish', payload).platforms.douyin.submission, undefined)
+  for (const invalid of [
+    { visibility: 'friends' },
+    { copyright: 'unknown' },
+    { category: '../17' },
+    { copyright: 'repost', source: '' },
+  ]) {
+    assert.throws(
+      () =>
+        validatePayload('publish', {
+          platforms: {
+            bilibili: { ...metadata, submission: { ...submission, ...invalid } },
+            douyin: metadata,
+          },
+        }),
+      /投稿|分区|来源/,
+    )
+  }
 })
 
 test('template planning splits long paragraphs into distinct layouts without dropping text', () => {

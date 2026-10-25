@@ -2010,6 +2010,13 @@ app.whenReady().then(async () => {
                 title: '视频为什么需要逐步审核？',
                 description: '先文案，再分镜，最后确认成片。',
                 tags: ['视频创作', 'AI工作流'],
+                submission: {
+                  category: '',
+                  categoryName: '知识 / 科技',
+                  visibility: 'private',
+                  copyright: 'original',
+                  source: '',
+                },
               }
               writeFileSync(responsePath, JSON.stringify(response))
               writeFileSync(
@@ -2053,6 +2060,16 @@ app.whenReady().then(async () => {
               assert.equal(firstResult.stages.publish.status, 'review')
               assert.deepEqual(firstResult.stages.publish.payload.platforms.bilibili, savedBilibili)
               assert.deepEqual(firstResult.stages.publish.payload.platforms.douyin, response)
+              assert.ok(
+                await evaluate(
+                  'document.querySelector("button[aria-label=投稿可见性建议]").textContent.includes("仅自己可见")',
+                ),
+              )
+              assert.ok(
+                await evaluate(
+                  'document.querySelector("button[aria-label=稿件类型建议]").textContent.includes("自制")',
+                ),
+              )
               assert.ok(
                 await evaluate(
                   '[...document.querySelectorAll("button")].some(item=>item.textContent.includes("导出抖音发布包")&&item.disabled)',

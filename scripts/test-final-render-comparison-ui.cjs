@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require('electron')
+const { app, BrowserWindow, shell } = require('electron')
 const assert = require('node:assert/strict')
 const { mkdtempSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
@@ -7,6 +7,8 @@ const { execFileSync } = require('node:child_process')
 const { setTimeout: delay } = require('node:timers/promises')
 
 const root = mkdtempSync(join(tmpdir(), 'final-render-comparison-ui-'))
+const revealed = []
+shell.showItemInFolder = (path) => revealed.push(path)
 process.env.MYDASHBOARD_USER_DATA = root
 console.log('UI artifacts:', root)
 require('../out/main/index.js')
@@ -220,6 +222,13 @@ app.whenReady().then(async () => {
       '[...document.querySelectorAll("button")].find(item=>item.textContent.trim()==="继续创作").click()',
     )
     await waitFor('document.querySelector(".workflow-bottom")')
+    assert.ok(
+      await evaluate(`!!document.querySelector('[aria-label="打开视频所在文件夹"]')`),
+      'Final video must have a file location action',
+    )
+    await evaluate(`document.querySelector('[aria-label="打开视频所在文件夹"]').click()`)
+    for (let attempt = 0; attempt < 50 && !revealed.length; attempt++) await delay(100)
+    assert.equal(revealed[0], join(root, state.stages.render.payload.file.path))
     await checkPageBottom('page-bottom.png')
     await waitFor(`document.querySelector('[aria-label="查看相较粗剪的变化"]')`)
     assert.equal(await evaluate('document.querySelector("[data-final-render-comparison]")'), null)
@@ -324,7 +333,7 @@ app.whenReady().then(async () => {
     await checkPageBottom('page-bottom-high-contrast.png')
     window.webContents.debugger.detach()
     console.log(
-      'PASS: compact comparison dialog, source roughcut, legacy parameters, keyboard focus trap and return, review controls, themes, viewports, zoom and no bottom overflow with 16 scenes',
+      'PASS: compact comparison dialog, source roughcut, legacy parameters, final video file location, keyboard focus trap and return, themes, viewports, zoom and no bottom overflow with 16 scenes',
     )
     app.quit()
   } catch (error) {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { FolderOpenIcon, PlayCircleIcon } from '@heroicons/react/24/outline'
 import { Button } from '@/components/ui/button'
 import {
   VoiceInput,
@@ -21,6 +22,7 @@ import {
   type StoryboardPayload,
   type AudioPayload,
   type StagePayloads,
+  type PublicationSubmission,
 } from '@shared/video-workflow'
 import { ipcInvoke } from '@/lib/ipc'
 import { mediaUrl, workflowCall } from './useWorkflow'
@@ -29,6 +31,7 @@ import { AudioTrackPlayer } from './AudioTrackPlayer'
 import { BilibiliPublishingPanel } from './BilibiliPublishingPanel'
 import { RenderActions } from './RenderActions'
 import { FinalRenderComparison } from './FinalRenderComparison'
+import { WorkflowDialog } from './WorkflowDialog'
 import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
 
 export function AudioPanel({
@@ -542,7 +545,27 @@ export function RenderPanel({
             <div className="workflow-actions">
               <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
               {final && selectedVersion && (
-                <FinalRenderComparison project={project} revision={selectedVersion} />
+                <>
+                  <FinalRenderComparison project={project} revision={selectedVersion} />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    aria-label="打开视频所在文件夹"
+                    title="打开视频所在文件夹"
+                    onClick={() =>
+                      void run(() =>
+                        workflowCall(
+                          'showFile',
+                          project.id,
+                          (selectedVersion.payload as RenderPayload).file,
+                        ),
+                      )
+                    }
+                  >
+                    <FolderOpenIcon aria-hidden="true" className="size-5" />
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -660,6 +683,10 @@ export function PublishingPanel({
   run: (action: () => Promise<unknown>, message?: string) => void
 }) {
   const [urls, setUrls] = useState<Record<string, string>>({})
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewError, setPreviewError] = useState('')
+  const previewButton = useRef<HTMLButtonElement>(null)
+  const render = stageValue(project, 'render')
   return (
     <div className="workflow-section">
       <fieldset disabled={disabled} className="min-w-0">
@@ -674,20 +701,65 @@ export function PublishingPanel({
           compact
         />
       </fieldset>
-      {stageValue(project, 'render') && (
+      {render && (
         <div className="workflow-publish-asset">
-          <img
-            src={mediaUrl(project.id, stageValue(project, 'render')!.cover)}
-            alt="共用成片封面"
-          />
+          <div className="relative shrink-0">
+            <img src={mediaUrl(project.id, render.cover)} alt="共用成片封面" />
+            <div className="absolute inset-0 grid place-items-center">
+              <Button
+                ref={previewButton}
+                type="button"
+                size="icon"
+                variant="secondary"
+                aria-label="播放成片预览"
+                title="播放成片预览"
+                aria-haspopup="dialog"
+                aria-expanded={previewOpen}
+                onClick={() => {
+                  setPreviewError('')
+                  setPreviewOpen(true)
+                }}
+              >
+                <PlayCircleIcon aria-hidden="true" className="size-5" />
+              </Button>
+            </div>
+          </div>
           <div>
             <strong className="text-body-sm">共用成片 · 横版 1920×1080</strong>
-            <p className="workflow-muted mt-2">
-              {stageValue(project, 'render')!.duration.toFixed(1)} 秒 · Bilibili / 抖音
-            </p>
+            <p className="workflow-muted mt-2">{render.duration.toFixed(1)} 秒 · Bilibili / 抖音</p>
           </div>
         </div>
       )}
+      <WorkflowDialog
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+        title="成片预览"
+        description="播放当前发布资料共用的正式成片，关闭后停止播放。"
+        returnFocus={previewButton}
+      >
+        {previewOpen && render && (
+          <video
+            key={render.file.id}
+            className="workflow-media"
+            src={mediaUrl(project.id, render.file)}
+            poster={mediaUrl(project.id, render.cover)}
+            controls
+            autoPlay
+            preload="metadata"
+            aria-label="发布成片预览"
+            onError={() =>
+              setPreviewError(
+                '视频加载失败，请检查成片文件是否仍然存在，或返回正式成片页重新打开。',
+              )
+            }
+          />
+        )}
+        {previewError && (
+          <p className="workflow-error" role="alert">
+            {previewError}
+          </p>
+        )}
+      </WorkflowDialog>
       <p className="workflow-muted">
         两平台使用同一份横版成片。审核发布信息后，B 站可一键投稿，也可导出发布包后上传并回填链接。
       </p>
@@ -697,6 +769,16 @@ export function PublishingPanel({
             records = project.publications.filter((item) => item.platform === platform)
           const update = (changes: Partial<typeof metadata>) =>
             onChange({ platforms: { ...value.platforms, [platform]: { ...metadata, ...changes } } })
+          const submission: PublicationSubmission = {
+            category: '',
+            categoryName: '',
+            visibility: '',
+            copyright: '',
+            source: '',
+            ...metadata.submission,
+          }
+          const updateSubmission = (changes: Partial<PublicationSubmission>) =>
+            update({ submission: { ...submission, ...changes } })
           return (
             <div key={platform}>
               <div className="workflow-section">
@@ -744,7 +826,7 @@ export function PublishingPanel({
                 </details>
                 <p className="workflow-muted" role="status" data-publish-status>
                   {generating
-                    ? '正在生成当前平台的标题、简介与标签，进度见右侧执行记录；原资料在成功前保留。'
+                    ? '正在生成当前平台的标题、简介、标签及投稿设置，进度见右侧执行记录；原资料在成功前保留。'
                     : dirty
                       ? '请先保存或放弃未保存修改，再让 AI 生成新版本。'
                       : '每次仅更新当前平台，另一平台保持原值；可反复生成或手动编辑，生成后需重新审核。不自动获取实时热搜。'}
@@ -780,7 +862,59 @@ export function PublishingPanel({
                     approved={approved}
                     disabled={disabled}
                     dirty={dirty}
+                    submission={metadata.submission}
+                    onSubmissionChange={(submission) => update({ submission })}
                   />
+                )}
+                {platform === 'douyin' && (
+                  <fieldset
+                    disabled={disabled}
+                    className="workflow-section workflow-divider min-w-0"
+                  >
+                    <h4 className="text-body-sm font-semibold">投稿设置建议</h4>
+                    <VoiceInput
+                      label="内容分区建议"
+                      value={submission.categoryName}
+                      onChange={(event) => updateSubmission({ categoryName: event.target.value })}
+                    />
+                    <VoiceSelect
+                      label="投稿可见性建议"
+                      value={submission.visibility}
+                      options={[
+                        { value: 'public', label: '公开' },
+                        { value: 'private', label: '仅自己可见' },
+                      ]}
+                      onChange={(visibility) =>
+                        updateSubmission({ visibility: visibility as 'public' | 'private' })
+                      }
+                    />
+                    <VoiceSelect
+                      label="稿件类型建议"
+                      value={submission.copyright}
+                      options={[
+                        { value: 'original', label: '自制' },
+                        { value: 'repost', label: '转载' },
+                      ]}
+                      onChange={(copyright) =>
+                        updateSubmission({ copyright: copyright as 'original' | 'repost' })
+                      }
+                    />
+                    {submission.copyright === 'repost' && (
+                      <VoiceInput
+                        label="转载来源"
+                        value={submission.source}
+                        onChange={(event) => updateSubmission({ source: event.target.value })}
+                      />
+                    )}
+                    {!submission.copyright && submission.source && (
+                      <p className="workflow-muted" role="status">
+                        类型待核实：{submission.source}
+                      </p>
+                    )}
+                    <p className="workflow-muted">
+                      建议随发布资料保存与导出，实际发布时请核对平台设置。
+                    </p>
+                  </fieldset>
                 )}
                 <Button
                   size="sm"

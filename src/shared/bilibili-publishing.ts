@@ -74,6 +74,18 @@ export interface BilibiliConnection {
   qrCode: string | null
   error: string | null
 }
+export interface BilibiliAccount {
+  id: string
+  uid: string
+  name: string
+  updatedAt: string
+}
+export interface BilibiliAccountsState {
+  accounts: BilibiliAccount[]
+  selectedId: string | null
+  connection: BilibiliConnection
+  busy: boolean
+}
 export interface BilibiliCategory {
   id: string
   name: string

@@ -545,6 +545,26 @@
   object-fit: cover;
   border-radius: 8px;
 }
+.workflow-video-preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: inherit;
+}
+.workflow-video-preview-trigger {
+  color: rgb(255 255 255 / 0.94);
+  background: rgb(0 0 0 / 0.48);
+  border-radius: 50%;
+}
+.workflow-video-preview-trigger:hover,
+.workflow-video-preview-trigger:focus-visible {
+  color: #fff;
+  background: rgb(0 0 0 / 0.64);
+}
+.workflow-video-preview-trigger:focus-visible {
+  outline-color: #fff;
+}
 .workflow-reference-file {
   display: flex;
   justify-content: space-between;

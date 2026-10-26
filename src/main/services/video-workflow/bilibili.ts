@@ -5,28 +5,52 @@ import { join } from 'node:path'
 import {
   BILIBILI_ACTIVE,
   BILIBILI_STATE_LABELS,
+  type BilibiliAccountsState,
   type BilibiliConnection,
   type BilibiliPublishRequest,
   type BilibiliPublishSnapshot,
   type BilibiliSubmission,
 } from '../../../shared/bilibili-publishing'
-import { stageUnlocked, stageValue, type WorkflowRuntime } from '../../../shared/video-workflow'
+import {
+  stageUnlocked,
+  stageValue,
+  type VideoPlatform,
+  type WorkflowRuntime,
+} from '../../../shared/video-workflow'
+import { PUBLISHING_PLATFORMS, validPublishingUid } from '../../../shared/platform-publishing'
 import {
   fingerprint,
   VideoWorkflowRepository,
 } from '../../database/repositories/video-workflow-repository'
 import { WorkflowFiles } from './files'
-import { BilibiliCatbus, bilibiliVideoId, CatbusFailure } from './catbus'
+import {
+  CatbusPublishingClient,
+  publishingVideoId,
+  publishingVideoUrl,
+  CatbusFailure,
+} from './catbus'
+import { PublishingAccounts, publishingAccountHome } from './bilibili-accounts'
 
 type SubmissionRow = { record: string; request_fingerprint: string }
 const RETRYABLE = ['failed', 'needs_auth', 'cancelled']
 
-export class BilibiliPublishingService {
+export class PlatformPublishingService {
   private running = new Map<string, { controller: AbortController; promise: Promise<void> }>()
   private login?: { controller: AbortController; promise: Promise<void> }
   private checking?: Promise<BilibiliConnection>
   private readonly reads = new AbortController()
   private stopped = false
+  private accountReads = 0
+  private readonly boundAccounts: PublishingAccounts
+  private get table() {
+    return this.platform === 'bilibili' ? 'video_bilibili_submissions' : 'video_douyin_submissions'
+  }
+  private get label() {
+    return PUBLISHING_PLATFORMS[this.platform].label
+  }
+  private get defaultAccount() {
+    return PUBLISHING_PLATFORMS[this.platform].account
+  }
   private connectionState: BilibiliConnection = {
     state: 'disconnected',
     uid: null,
@@ -42,10 +66,12 @@ export class BilibiliPublishingService {
     private files: WorkflowFiles,
     private runtime: () => WorkflowRuntime,
     private changed: (projectId: string) => void,
+    private platform: VideoPlatform = 'bilibili',
   ) {
+    this.boundAccounts = new PublishingAccounts(root, platform)
     for (const row of this.db
       .prepare(
-        "SELECT record FROM video_bilibili_submissions WHERE state IN ('queued','uploading','submitting')",
+        `SELECT record FROM ${this.table} WHERE state IN ('queued','uploading','submitting')`,
       )
       .all() as SubmissionRow[]) {
       const record = JSON.parse(row.record) as BilibiliSubmission
@@ -58,8 +84,22 @@ export class BilibiliPublishingService {
       })
     }
   }
-  private client() {
-    return new BilibiliCatbus(this.root, { ...this.runtime() })
+  private client(id = this.boundAccounts.state().selectedId ?? this.defaultAccount) {
+    return new CatbusPublishingClient(this.root, { ...this.runtime() }, id, this.platform)
+  }
+  private clientForUid(uid: string) {
+    const { accounts } = this.boundAccounts.state()
+    const account = accounts.find((account) => account.uid === uid)
+    if (!account && this.boundAccounts.hasIndex())
+      throw new CatbusFailure('AUTH_REQUIRED', this.platform)
+    return this.client(account?.id ?? this.defaultAccount)
+  }
+  accounts(): BilibiliAccountsState {
+    return {
+      ...this.boundAccounts.state(),
+      connection: { ...this.connectionState },
+      busy: Boolean(this.busy()),
+    }
   }
   private get(projectId: string, id: string) {
     const record = this.list(projectId).find((item) => item.id === id)
@@ -70,9 +110,7 @@ export class BilibiliPublishingService {
     this.projects.get(projectId)
     return (
       this.db
-        .prepare(
-          'SELECT record FROM video_bilibili_submissions WHERE project_id=? ORDER BY rowid DESC',
-        )
+        .prepare(`SELECT record FROM ${this.table} WHERE project_id=? ORDER BY rowid DESC`)
         .all(projectId) as SubmissionRow[]
     ).map((row) => JSON.parse(row.record))
   }
@@ -80,7 +118,7 @@ export class BilibiliPublishingService {
     const next = { ...record, ...changes, updatedAt: new Date().toISOString() }
     if (changes.state && !changes.phase) next.phase = BILIBILI_STATE_LABELS[changes.state]
     this.db
-      .prepare('UPDATE video_bilibili_submissions SET state=?,record=? WHERE id=?')
+      .prepare(`UPDATE ${this.table} SET state=?,record=? WHERE id=?`)
       .run(next.state, JSON.stringify(next), record.id)
     this.changed(record.projectId)
     return next
@@ -89,9 +127,10 @@ export class BilibiliPublishingService {
     return (
       this.login ||
       this.checking ||
+      this.accountReads ||
       this.db
         .prepare(
-          "SELECT id FROM video_bilibili_submissions WHERE state IN ('queued','uploading','submitting') LIMIT 1",
+          `SELECT id FROM ${this.table} WHERE state IN ('queued','uploading','submitting') LIMIT 1`,
         )
         .get()
     )
@@ -100,10 +139,24 @@ export class BilibiliPublishingService {
     if (this.stopped) throw new Error('发布服务正在退出')
     if (!refresh || this.login) return { ...this.connectionState }
     if (this.checking) return this.checking
+    const { selectedId } = this.boundAccounts.state()
+    if (!selectedId && this.boundAccounts.hasIndex()) {
+      this.connectionState = {
+        state: 'disconnected',
+        uid: null,
+        name: null,
+        qrCode: null,
+        error: null,
+      }
+      return { ...this.connectionState }
+    }
     this.connectionState = { ...this.connectionState, state: 'checking', error: null }
     this.checking = (async () => {
       try {
         const account = await this.client().account(this.reads.signal)
+        if (selectedId && this.boundAccounts.get(selectedId).uid !== account.uid)
+          throw new Error('登录账号与绑定 UID 不一致，请重新扫码原账号')
+        this.boundAccounts.remember(selectedId ?? this.defaultAccount, account)
         this.connectionState = { state: 'connected', ...account, qrCode: null, error: null }
       } catch (error) {
         this.connectionState = {
@@ -120,12 +173,15 @@ export class BilibiliPublishingService {
     })()
     return this.checking
   }
-  connect() {
+  connect(accountId?: string) {
     if (this.stopped) throw new Error('发布服务正在退出')
-    if (this.busy()) throw new Error('请等待当前 B 站操作结束')
-    const client = this.client(),
+    if (this.busy()) throw new Error(`请等待当前${this.label}操作结束`)
+    const expected = accountId === undefined ? undefined : this.boundAccounts.get(accountId)
+    const previous = { ...this.connectionState }
+    const temporaryId = `account-${randomUUID()}`
+    const client = this.client(temporaryId),
       controller = new AbortController()
-    const qr = join(client.home, 'cache', 'bilibili', 'qrcode.png')
+    const qr = join(client.home, 'cache', this.platform, 'qrcode.png')
     rmSync(qr, { force: true })
     this.connectionState = { state: 'connecting', uid: null, name: null, qrCode: null, error: null }
     const timer = setInterval(() => {
@@ -142,14 +198,18 @@ export class BilibiliPublishingService {
     const promise = Promise.resolve().then(async () => {
       try {
         const account = await client.login(controller.signal)
+        if (expected && account.uid !== expected.uid)
+          throw new Error('扫码账号与待重新登录账号的 UID 不一致，已保留原绑定')
+        if (controller.signal.aborted) throw new CatbusFailure('CANCELLED', this.platform)
+        this.boundAccounts.remember(temporaryId, account)
         this.connectionState = { state: 'connected', ...account, qrCode: null, error: null }
       } catch (error) {
+        rmSync(client.home, { recursive: true, force: true })
         this.connectionState = {
-          state: 'error',
-          uid: null,
-          name: null,
+          ...previous,
+          state: previous.uid ? previous.state : 'disconnected',
           qrCode: null,
-          error: (error as Error).message,
+          error: controller.signal.aborted ? null : (error as Error).message,
         }
       } finally {
         clearInterval(timer)
@@ -161,13 +221,59 @@ export class BilibiliPublishingService {
     this.login = { controller, promise }
     return { ...this.connectionState }
   }
-  async disconnect() {
+  async cancelLogin() {
     if (this.login) {
       this.login.controller.abort()
       await this.login.promise
     }
-    if (this.busy()) throw new Error('请等待 B 站投稿结束后再断开账号')
-    rmSync(join(this.root, 'config', 'publishing', 'catbus'), { recursive: true, force: true })
+    return { ...this.connectionState }
+  }
+  async selectAccount(id: string) {
+    if (this.stopped) throw new Error('发布服务正在退出')
+    if (this.busy()) throw new Error(`请等待当前${this.label}操作结束后切换账号`)
+    const selected = this.boundAccounts.get(id)
+    const promise = (async () => {
+      const account = await this.client(id).account(this.reads.signal)
+      if (account.uid !== selected.uid)
+        throw new Error('登录账号与绑定 UID 不一致，请重新扫码原账号')
+      this.boundAccounts.remember(id, account)
+      this.connectionState = { state: 'connected', ...account, qrCode: null, error: null }
+      return { ...this.connectionState }
+    })()
+    this.checking = promise
+    try {
+      return await promise
+    } finally {
+      this.checking = undefined
+      this.changed('')
+    }
+  }
+  async removeAccount(id: string) {
+    if (this.stopped) throw new Error('发布服务正在退出')
+    if (this.busy()) throw new Error(`请等待当前${this.label}操作结束后解除绑定`)
+    const selected = this.boundAccounts.state().selectedId === id
+    this.boundAccounts.remove(id)
+    if (selected)
+      this.connectionState = {
+        state: 'disconnected',
+        uid: null,
+        name: null,
+        qrCode: null,
+        error: null,
+      }
+    this.changed('')
+    return this.accounts()
+  }
+  async disconnect() {
+    await this.cancelLogin()
+    if (this.busy()) throw new Error(`请等待${this.label}投稿结束后再断开账号`)
+    const selected = this.boundAccounts.state().selectedId
+    if (selected) await this.removeAccount(selected)
+    else
+      rmSync(publishingAccountHome(this.root, this.defaultAccount, this.platform), {
+        recursive: true,
+        force: true,
+      })
     this.connectionState = {
       state: 'disconnected',
       uid: null,
@@ -192,18 +298,19 @@ export class BilibiliPublishingService {
       throw new Error('缺少有效投稿请求 ID')
     const requestFingerprint = fingerprint(input)
     const previous = this.db
-      .prepare(
-        'SELECT record,request_fingerprint FROM video_bilibili_submissions WHERE request_id=?',
-      )
+      .prepare(`SELECT record,request_fingerprint FROM ${this.table} WHERE request_id=?`)
       .get(input.requestId) as SubmissionRow | undefined
     if (previous) {
       if (previous.request_fingerprint !== requestFingerprint)
         throw new Error('请求 ID 已用于不同投稿')
       return JSON.parse(previous.record)
     }
-    if (typeof input.accountUid !== 'string' || !/^\d+$/.test(input.accountUid))
-      throw new Error('请先连接并确认 B 站账号')
-    if (typeof input.category !== 'string' || !/^\d+$/.test(input.category))
+    if (!validPublishingUid(this.platform, input.accountUid))
+      throw new Error(`请先连接并确认${this.label}账号`)
+    if (
+      this.platform === 'bilibili' &&
+      (typeof input.category !== 'string' || !/^\d+$/.test(input.category))
+    )
       throw new Error('请选择有效投稿分区')
     if (!['public', 'private'].includes(input.visibility)) throw new Error('请明确选择投稿可见性')
     if (!['original', 'repost'].includes(input.copyright)) throw new Error('请选择自制或转载')
@@ -217,12 +324,12 @@ export class BilibiliPublishingService {
     if (project.stages.publish?.status !== 'approved' || !stageUnlocked(project, 'publish'))
       throw new Error('请先审核通过正式成片与发布资料')
     const render = stageValue(project, 'render')!,
-      metadata = stageValue(project, 'publish')!.platforms.bilibili
-    if (!metadata.tags.some((tag) => tag.trim()))
+      metadata = stageValue(project, 'publish')!.platforms[this.platform]
+    if (this.platform === 'bilibili' && !metadata.tags.some((tag) => tag.trim()))
       throw new Error('B 站投稿至少需要一个有效标签，请修改资料并重新审核')
     if (
       metadata.submission &&
-      (metadata.submission.category !== input.category ||
+      ((this.platform === 'bilibili' && metadata.submission.category !== input.category) ||
         metadata.submission.visibility !== input.visibility ||
         metadata.submission.copyright !== input.copyright ||
         (input.copyright === 'repost' && metadata.submission.source !== input.source?.trim()))
@@ -235,7 +342,7 @@ export class BilibiliPublishingService {
       cover: render.cover,
       metadata,
       accountUid: input.accountUid,
-      category: input.category,
+      category: this.platform === 'bilibili' ? input.category : '',
       visibility: input.visibility,
       copyright: input.copyright,
       source: input.copyright === 'repost' ? input.source!.trim() : '',
@@ -243,9 +350,7 @@ export class BilibiliPublishingService {
     const intent = fingerprint([project.id, snapshot])
     const existing = (
       this.db
-        .prepare(
-          'SELECT record FROM video_bilibili_submissions WHERE intent_key=? ORDER BY rowid DESC',
-        )
+        .prepare(`SELECT record FROM ${this.table} WHERE intent_key=? ORDER BY rowid DESC`)
         .all(intent) as SubmissionRow[]
     )
       .map((row) => JSON.parse(row.record) as BilibiliSubmission)
@@ -258,14 +363,17 @@ export class BilibiliPublishingService {
         record.snapshot.video.sha256 === snapshot.video.sha256,
     )
     if (unresolved) throw new Error('此成片有待核查的投稿，请先核查平台状态或确认未投稿后再尝试')
-    if (this.busy()) throw new Error('已有 B 站任务在执行，请等待完成')
+    if (this.busy()) throw new Error(`已有${this.label}任务在执行，请等待完成`)
     const now = new Date().toISOString()
     const record: BilibiliSubmission = {
       id: randomUUID(),
       projectId: project.id,
       requestId: input.requestId,
       state: 'queued',
-      phase: '核对账号、分区与已审核文件',
+      phase:
+        this.platform === 'bilibili'
+          ? '核对账号、分区与已审核文件'
+          : '核对账号、可见性与已审核文件',
       snapshot,
       externalId: null,
       url: null,
@@ -277,7 +385,7 @@ export class BilibiliPublishingService {
       cliVersion: '0.2.1',
     }
     this.db
-      .prepare('INSERT INTO video_bilibili_submissions VALUES(?,?,?,?,?,?,?)')
+      .prepare(`INSERT INTO ${this.table} VALUES(?,?,?,?,?,?,?)`)
       .run(
         record.id,
         project.id,
@@ -298,16 +406,25 @@ export class BilibiliPublishingService {
   private async execute(record: BilibiliSubmission, signal: AbortSignal) {
     let started = false
     try {
-      const client = this.client()
-      const account = await client.account(signal)
-      if (account.uid !== record.snapshot.accountUid) throw new CatbusFailure('AUTH_EXPIRED')
-      const categories = await client.categories(signal)
+      const selected = this.boundAccounts.state().selectedId
       if (
-        !categories.some(
-          (category) => category.id === record.snapshot.category && category.parentId,
-        )
+        this.boundAccounts.hasIndex() &&
+        (!selected || this.boundAccounts.get(selected).uid !== record.snapshot.accountUid)
       )
-        throw new Error('所选分区不可投稿，请重新选择子分区')
+        throw new CatbusFailure('AUTH_EXPIRED', this.platform)
+      const client = this.clientForUid(record.snapshot.accountUid)
+      const account = await client.account(signal)
+      if (account.uid !== record.snapshot.accountUid)
+        throw new CatbusFailure('AUTH_EXPIRED', this.platform)
+      if (this.platform === 'bilibili') {
+        const categories = await client.categories(signal)
+        if (
+          !categories.some(
+            (category) => category.id === record.snapshot.category && category.parentId,
+          )
+        )
+          throw new Error('所选分区不可投稿，请重新选择子分区')
+      }
       const video = await this.files.verify(record.projectId, record.snapshot.video),
         cover = await this.files.verify(record.projectId, record.snapshot.cover)
       const current = this.projects.get(record.projectId)
@@ -318,7 +435,7 @@ export class BilibiliPublishingService {
         !stageUnlocked(current, 'publish')
       )
         throw new Error('准备期间审核版本已变化，请重新确认后发布')
-      if (signal.aborted) throw new CatbusFailure('CANCELLED')
+      if (signal.aborted) throw new CatbusFailure('CANCELLED', this.platform)
       started = true
       record = this.update(record, { state: 'uploading' })
       const result = await client.publish(record.snapshot, video, cover, signal, (phase) => {
@@ -354,18 +471,34 @@ export class BilibiliPublishingService {
     return this.get(projectId, id)
   }
   async refresh(projectId: string, id: string, suppliedId?: string) {
+    if (this.stopped) throw new Error('发布服务正在退出')
+    if (this.login || this.checking)
+      throw new Error(`请等待当前${this.label}账号操作结束后核查投稿`)
+    this.accountReads++
+    try {
+      return await this.refreshRecord(projectId, id, suppliedId)
+    } finally {
+      this.accountReads--
+    }
+  }
+  private async refreshRecord(projectId: string, id: string, suppliedId?: string) {
     const record = this.get(projectId, id)
     if (suppliedId !== undefined && (typeof suppliedId !== 'string' || suppliedId.length > 500))
-      throw new Error('请填写有效 BV 号或作品链接')
+      throw new Error(`请填写有效${PUBLISHING_PLATFORMS[this.platform].item}或作品链接`)
     if (BILIBILI_ACTIVE.includes(record.state)) throw new Error('请等待当前投稿结束')
-    const externalId = record.externalId ?? (suppliedId ? bilibiliVideoId(suppliedId) : null)
-    if (!externalId) throw new Error('请先在创作中心核查，并填写对应 BV 号')
-    const client = this.client(),
+    const externalId =
+      record.externalId ?? (suppliedId ? publishingVideoId(this.platform, suppliedId) : null)
+    if (!externalId)
+      throw new Error(`请先在创作中心核查，并填写对应${PUBLISHING_PLATFORMS[this.platform].item}`)
+    const client = this.clientForUid(record.snapshot.accountUid),
       account = await client.account(this.reads.signal)
     if (account.uid !== record.snapshot.accountUid)
       throw new Error('当前账号与投稿账号不一致，请重新连接原账号')
     const item = await client.find(externalId, this.reads.signal)
-    if (!item) throw new Error('最近 200 条投稿中尚未找到此 BV 号，已保留原记录，请稍后核查')
+    if (!item)
+      throw new Error(
+        `最近 200 条投稿中尚未找到此${PUBLISHING_PLATFORMS[this.platform].item}，已保留原记录，请稍后核查`,
+      )
     if (
       item.uid !== record.snapshot.accountUid ||
       (suppliedId && item.title !== record.snapshot.metadata.title)
@@ -373,19 +506,21 @@ export class BilibiliPublishingService {
       throw new Error('此稿件的账号或标题与本次投稿不符，未绑定记录')
     const state =
       item.status === 'published'
-        ? record.snapshot.visibility === 'private'
+        ? this.platform === 'bilibili' && record.snapshot.visibility === 'private'
           ? 'private'
           : 'published'
-        : item.status === 'rejected'
-          ? 'rejected'
-          : item.status === 'reviewing'
-            ? 'reviewing'
-            : null
+        : item.status === 'private'
+          ? 'private'
+          : item.status === 'rejected'
+            ? 'rejected'
+            : item.status === 'reviewing'
+              ? 'reviewing'
+              : null
     if (!state) throw new Error('平台状态暂无法确认，已保留原记录')
     return this.update(record, {
       state,
       externalId,
-      url: `https://www.bilibili.com/video/${externalId}`,
+      url: publishingVideoUrl(this.platform, externalId),
       error: null,
       verifiedAt: new Date().toISOString(),
     })
@@ -411,3 +546,5 @@ export class BilibiliPublishingService {
     ])
   }
 }
+
+export { PlatformPublishingService as BilibiliPublishingService }

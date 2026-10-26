@@ -1,4 +1,4 @@
-import { Suspense, useMemo } from 'react'
+import { Suspense, useEffect, useMemo } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import MainLayout from './layouts/MainLayout'
 import { ToastProvider } from '@/components/ui/toast'
@@ -18,6 +18,25 @@ function Loading() {
 }
 
 export default function App() {
+  useEffect(() => {
+    const root = document.documentElement
+    const handlePointer = () => {
+      root.dataset.inputModality = 'pointer'
+    }
+    const handleKeyboard = (event: KeyboardEvent) => {
+      if (!event.metaKey && !event.ctrlKey && !event.altKey) {
+        root.dataset.inputModality = 'keyboard'
+      }
+    }
+    document.addEventListener('pointerdown', handlePointer, true)
+    document.addEventListener('keydown', handleKeyboard, true)
+    return () => {
+      document.removeEventListener('pointerdown', handlePointer, true)
+      document.removeEventListener('keydown', handleKeyboard, true)
+      delete root.dataset.inputModality
+    }
+  }, [])
+
   const enabledIds = useMemo(() => getEnabledModuleIds(), [])
   const routes = useMemo(() => moduleRegistry.getRoutes(enabledIds), [enabledIds])
 

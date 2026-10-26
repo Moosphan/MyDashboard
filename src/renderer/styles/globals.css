@@ -2,6 +2,10 @@
 @tailwind components;
 @tailwind utilities;
 
+:root[data-input-modality='pointer'] :is(button, [role='button']):focus-visible {
+  outline: none;
+}
+
 @font-face {
   font-family: 'Material Symbols Outlined';
   font-style: normal;

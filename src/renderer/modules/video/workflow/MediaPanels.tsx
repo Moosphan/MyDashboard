@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { FolderOpenIcon, PlayCircleIcon } from '@heroicons/react/24/outline'
+import { FolderOpenIcon } from '@heroicons/react/24/outline'
 import { Button } from '@/components/ui/button'
 import {
   VoiceInput,
@@ -22,16 +22,16 @@ import {
   type StoryboardPayload,
   type AudioPayload,
   type StagePayloads,
-  type PublicationSubmission,
 } from '@shared/video-workflow'
 import { ipcInvoke } from '@/lib/ipc'
 import { mediaUrl, workflowCall } from './useWorkflow'
 import { ScenePreview } from './StoryboardEditor'
 import { AudioTrackPlayer } from './AudioTrackPlayer'
-import { BilibiliPublishingPanel } from './BilibiliPublishingPanel'
+import { PlatformPublishingPanel } from './BilibiliPublishingPanel'
 import { RenderActions } from './RenderActions'
 import { FinalRenderComparison } from './FinalRenderComparison'
 import { WorkflowDialog } from './WorkflowDialog'
+import { VideoPreviewButton } from './VideoPreviewButton'
 import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
 
 export function AudioPanel({
@@ -705,24 +705,14 @@ export function PublishingPanel({
         <div className="workflow-publish-asset">
           <div className="relative shrink-0">
             <img src={mediaUrl(project.id, render.cover)} alt="共用成片封面" />
-            <div className="absolute inset-0 grid place-items-center">
-              <Button
-                ref={previewButton}
-                type="button"
-                size="icon"
-                variant="secondary"
-                aria-label="播放成片预览"
-                title="播放成片预览"
-                aria-haspopup="dialog"
-                aria-expanded={previewOpen}
-                onClick={() => {
-                  setPreviewError('')
-                  setPreviewOpen(true)
-                }}
-              >
-                <PlayCircleIcon aria-hidden="true" className="size-5" />
-              </Button>
-            </div>
+            <VideoPreviewButton
+              ref={previewButton}
+              open={previewOpen}
+              onClick={() => {
+                setPreviewError('')
+                setPreviewOpen(true)
+              }}
+            />
           </div>
           <div>
             <strong className="text-body-sm">共用成片 · 横版 1920×1080</strong>
@@ -761,7 +751,7 @@ export function PublishingPanel({
         )}
       </WorkflowDialog>
       <p className="workflow-muted">
-        两平台使用同一份横版成片。审核发布信息后，B 站可一键投稿，也可导出发布包后上传并回填链接。
+        两平台使用同一份横版成片。审核发布信息后，均可一键投稿，也可导出发布包后上传并回填链接。
       </p>
       <div className="workflow-section">
         {[platform].map((platform) => {
@@ -769,16 +759,6 @@ export function PublishingPanel({
             records = project.publications.filter((item) => item.platform === platform)
           const update = (changes: Partial<typeof metadata>) =>
             onChange({ platforms: { ...value.platforms, [platform]: { ...metadata, ...changes } } })
-          const submission: PublicationSubmission = {
-            category: '',
-            categoryName: '',
-            visibility: '',
-            copyright: '',
-            source: '',
-            ...metadata.submission,
-          }
-          const updateSubmission = (changes: Partial<PublicationSubmission>) =>
-            update({ submission: { ...submission, ...changes } })
           return (
             <div key={platform}>
               <div className="workflow-section">
@@ -855,67 +835,16 @@ export function PublishingPanel({
                     })
                   }
                 />
-                {platform === 'bilibili' && (
-                  <BilibiliPublishingPanel
-                    key={project.id}
-                    project={project}
-                    approved={approved}
-                    disabled={disabled}
-                    dirty={dirty}
-                    submission={metadata.submission}
-                    onSubmissionChange={(submission) => update({ submission })}
-                  />
-                )}
-                {platform === 'douyin' && (
-                  <fieldset
-                    disabled={disabled}
-                    className="workflow-section workflow-divider min-w-0"
-                  >
-                    <h4 className="text-body-sm font-semibold">投稿设置建议</h4>
-                    <VoiceInput
-                      label="内容分区建议"
-                      value={submission.categoryName}
-                      onChange={(event) => updateSubmission({ categoryName: event.target.value })}
-                    />
-                    <VoiceSelect
-                      label="投稿可见性建议"
-                      value={submission.visibility}
-                      options={[
-                        { value: 'public', label: '公开' },
-                        { value: 'private', label: '仅自己可见' },
-                      ]}
-                      onChange={(visibility) =>
-                        updateSubmission({ visibility: visibility as 'public' | 'private' })
-                      }
-                    />
-                    <VoiceSelect
-                      label="稿件类型建议"
-                      value={submission.copyright}
-                      options={[
-                        { value: 'original', label: '自制' },
-                        { value: 'repost', label: '转载' },
-                      ]}
-                      onChange={(copyright) =>
-                        updateSubmission({ copyright: copyright as 'original' | 'repost' })
-                      }
-                    />
-                    {submission.copyright === 'repost' && (
-                      <VoiceInput
-                        label="转载来源"
-                        value={submission.source}
-                        onChange={(event) => updateSubmission({ source: event.target.value })}
-                      />
-                    )}
-                    {!submission.copyright && submission.source && (
-                      <p className="workflow-muted" role="status">
-                        类型待核实：{submission.source}
-                      </p>
-                    )}
-                    <p className="workflow-muted">
-                      建议随发布资料保存与导出，实际发布时请核对平台设置。
-                    </p>
-                  </fieldset>
-                )}
+                <PlatformPublishingPanel
+                  key={`${project.id}:${platform}`}
+                  platform={platform}
+                  project={project}
+                  approved={approved}
+                  disabled={disabled}
+                  dirty={dirty}
+                  submission={metadata.submission}
+                  onSubmissionChange={(submission) => update({ submission })}
+                />
                 <Button
                   size="sm"
                   variant="secondary"

@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { runMigrations } from '../src/main/database/migrations'
@@ -15,7 +16,23 @@ async function seed() {
   const repository = new VideoWorkflowRepository(db)
   const files = new WorkflowFiles(root, repository)
   let project = repository.create('B 站自动发布验证')
-  const file = await files.write(project.id, 'fixture-video', '.mp4')
+  const videoPath = join(root, 'preview.mp4')
+  execFileSync('ffmpeg', [
+    '-hide_banner',
+    '-loglevel',
+    'error',
+    '-f',
+    'lavfi',
+    '-i',
+    'color=c=0x2c2640:s=640x360:d=2',
+    '-c:v',
+    'libx264',
+    '-pix_fmt',
+    'yuv420p',
+    videoPath,
+  ])
+  const file = await files.write(project.id, readFileSync(videoPath), '.mp4')
+  rmSync(videoPath)
   const cover = await files.write(
     project.id,
     Buffer.from(

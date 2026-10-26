@@ -2,12 +2,13 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node
 import { dirname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
-  BILIBILI_ACCOUNT,
   type BilibiliCategory,
   type BilibiliPublishSnapshot,
 } from '../../../shared/bilibili-publishing'
-import type { WorkflowRuntime } from '../../../shared/video-workflow'
+import type { VideoPlatform, WorkflowRuntime } from '../../../shared/video-workflow'
+import { PUBLISHING_PLATFORMS, validPublishingUid } from '../../../shared/platform-publishing'
 import { catbusProcess } from './catbus-process'
+import { publishingAccountHome } from './bilibili-accounts'
 
 const MESSAGES: Record<string, string> = {
   AUTH_REQUIRED: '请先扫码连接 B 站账号',
@@ -24,8 +25,16 @@ const MESSAGES: Record<string, string> = {
   INVALID_RESPONSE: 'CLI 未返回有效回执，请核查平台投稿结果',
 }
 export class CatbusFailure extends Error {
-  constructor(readonly code: string) {
-    super(MESSAGES[code] ?? 'Catbus 操作失败，请检查运行环境和平台状态')
+  constructor(
+    readonly code: string,
+    platform: VideoPlatform = 'bilibili',
+  ) {
+    super(
+      (MESSAGES[code] ?? 'Catbus 操作失败，请检查运行环境和平台状态').replaceAll(
+        'B 站',
+        PUBLISHING_PLATFORMS[platform].label,
+      ),
+    )
   }
 }
 export function supportedCatbusNode(version: string) {
@@ -59,14 +68,43 @@ export function bilibiliVideoId(value: string) {
   } catch {}
   throw new Error('请填写有效 BV 号或 B 站 HTTPS 作品链接')
 }
-export class BilibiliCatbus {
+export function publishingVideoId(platform: VideoPlatform, value: string) {
+  if (platform === 'bilibili') return bilibiliVideoId(value)
+  if (/^\d{10,30}$/.test(value)) return value
+  try {
+    const url = new URL(value)
+    if (
+      url.protocol === 'https:' &&
+      ['www.douyin.com', 'douyin.com'].includes(url.hostname) &&
+      !url.username &&
+      !url.password &&
+      !url.port
+    ) {
+      const match = url.pathname.match(/^\/video\/(\d{10,30})\/?$/)
+      if (match) return match[1]
+    }
+  } catch {}
+  throw new Error('请填写有效抖音作品 ID 或 HTTPS 视频链接')
+}
+
+export function publishingVideoUrl(platform: VideoPlatform, value: string) {
+  return `https://www.${platform}.com/video/${publishingVideoId(platform, value)}`
+}
+
+export class CatbusPublishingClient {
   readonly home: string
   private checked?: Promise<void>
   constructor(
     root: string,
     private runtime: WorkflowRuntime,
+    accountId: string | undefined = undefined,
+    private platform: VideoPlatform = 'bilibili',
   ) {
-    this.home = join(root, 'config', 'publishing', 'catbus')
+    this.home = publishingAccountHome(
+      root,
+      accountId ?? PUBLISHING_PLATFORMS[platform].account,
+      platform,
+    )
     mkdirSync(this.home, { recursive: true, mode: 0o700 })
   }
   private async run(args: string[], signal?: AbortSignal, progress?: (text: string) => void) {
@@ -78,7 +116,7 @@ export class BilibiliCatbus {
       !isAbsolute(this.runtime.nodePath) ||
       !existsSync(this.runtime.nodePath)
     )
-      throw new CatbusFailure('PROCESS')
+      throw new CatbusFailure('PROCESS', this.platform)
     let entry = realpathSync(configured)
     if (/\.cmd$/i.test(entry))
       entry = join(dirname(entry), 'node_modules', 'catbus-cli', 'dist', 'cli', 'main.js')
@@ -86,7 +124,7 @@ export class BilibiliCatbus {
     try {
       result = await catbusProcess(this.runtime.nodePath, entry, args, this.home, signal, progress)
     } catch (error) {
-      throw new CatbusFailure((error as Error).message)
+      throw new CatbusFailure((error as Error).message, this.platform)
     }
     let envelope: Record<string, unknown>
     try {
@@ -99,12 +137,13 @@ export class BilibiliCatbus {
         typeof object(envelope.error).code === 'string'
           ? String(object(envelope.error).code)
           : 'INVALID_RESPONSE',
+        this.platform,
       )
     if (
-      args[0] === 'bilibili' &&
-      (envelope.platform !== 'bilibili' ||
+      args[0] === this.platform &&
+      (envelope.platform !== this.platform ||
         envelope.endpoint !== 'web' ||
-        envelope.account !== BILIBILI_ACCOUNT ||
+        envelope.account !== PUBLISHING_PLATFORMS[this.platform].account ||
         envelope.resource !== args[1] ||
         envelope.action !== args[2])
     )
@@ -130,24 +169,39 @@ export class BilibiliCatbus {
   ) {
     await this.check(signal)
     return this.run(
-      ['bilibili', resource, action, '-a', BILIBILI_ACCOUNT, '-e', 'web', '-o', 'json', ...args],
+      [
+        this.platform,
+        resource,
+        action,
+        '-a',
+        PUBLISHING_PLATFORMS[this.platform].account,
+        '-e',
+        'web',
+        '-o',
+        'json',
+        ...args,
+      ],
       signal,
       progress,
     )
   }
   async account(signal?: AbortSignal) {
     const data = object(await this.command('auth', 'status', [], signal))
-    if (data.logged_in !== true) throw new CatbusFailure('AUTH_REQUIRED')
+    if (data.logged_in !== true) throw new CatbusFailure('AUTH_REQUIRED', this.platform)
     const user = object(data.user)
-    if (typeof user.id !== 'string' || !/^\d+$/.test(user.id) || typeof user.name !== 'string')
+    if (
+      !validPublishingUid(this.platform, user.id) ||
+      (typeof user.name !== 'string' && user.name !== null)
+    )
       throw new CatbusFailure('INVALID_RESPONSE')
-    return { uid: user.id, name: user.name }
+    return { uid: user.id, name: user.name ?? `${PUBLISHING_PLATFORMS[this.platform].label}用户` }
   }
   async login(signal: AbortSignal) {
     await this.command('auth', 'login', ['--method', 'qrcode'], signal)
     return this.account(signal)
   }
   async categories(signal?: AbortSignal): Promise<BilibiliCategory[]> {
+    if (this.platform !== 'bilibili') return []
     const data = await this.command('item', 'categories', [], signal)
     if (!Array.isArray(data)) throw new CatbusFailure('INVALID_RESPONSE')
     return data.map((value) => {
@@ -189,11 +243,12 @@ export class BilibiliCatbus {
             '--text',
             `@${description}`,
             ...snapshot.metadata.tags.flatMap((tag) => ['--tag', tag]),
-            '--category',
-            snapshot.category,
+            ...(this.platform === 'bilibili' ? ['--category', snapshot.category] : []),
             '--visibility',
             snapshot.visibility,
-            ...(snapshot.copyright === 'repost' ? ['--source', snapshot.source] : []),
+            ...(this.platform === 'bilibili' && snapshot.copyright === 'repost'
+              ? ['--source', snapshot.source]
+              : []),
           ],
           signal,
           progress,
@@ -207,12 +262,12 @@ export class BilibiliCatbus {
         throw new CatbusFailure('INVALID_RESPONSE')
       let id: string
       try {
-        id = bilibiliVideoId(data.id)
-        if (bilibiliVideoId(data.url) !== id) throw new Error('mismatch')
+        id = publishingVideoId(this.platform, data.id)
+        if (publishingVideoId(this.platform, data.url) !== id) throw new Error('mismatch')
       } catch {
         throw new CatbusFailure('INVALID_RESPONSE')
       }
-      return { id, url: `https://www.bilibili.com/video/${id}` }
+      return { id, url: publishingVideoUrl(this.platform, id) }
     } finally {
       rmSync(description, { force: true })
     }
@@ -225,3 +280,5 @@ export class BilibiliCatbus {
     return { id, title: found.title, status: found.status, uid: object(found.author).id }
   }
 }
+
+export { CatbusPublishingClient as BilibiliCatbus }

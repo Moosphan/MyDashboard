@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { VoiceInput } from '../components/voiceover/VoiceControls'
 import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
@@ -9,11 +9,14 @@ import {
   type BilibiliConnection,
   type BilibiliSubmission,
 } from '@shared/bilibili-publishing'
-import type { PublicationSubmission, VideoProject } from '@shared/video-workflow'
+import type { PublicationSubmission, VideoPlatform, VideoProject } from '@shared/video-workflow'
+import { PUBLISHING_PLATFORMS } from '@shared/platform-publishing'
 import { workflowCall } from './useWorkflow'
 import { WorkflowDialog } from './WorkflowDialog'
+import { PlatformAccountsDialog } from './BilibiliAccountsDialog'
 
-export function BilibiliPublishingPanel({
+export function PlatformPublishingPanel({
+  platform = 'bilibili',
   project,
   approved,
   disabled,
@@ -21,6 +24,7 @@ export function BilibiliPublishingPanel({
   submission,
   onSubmissionChange,
 }: {
+  platform?: VideoPlatform
   project: VideoProject
   approved: boolean
   disabled: boolean
@@ -28,7 +32,13 @@ export function BilibiliPublishingPanel({
   submission?: PublicationSubmission
   onSubmissionChange: (submission: PublicationSubmission) => void
 }) {
-  const storageKey = `video-workflow-bilibili-settings:${project.id}`
+  const { label, app, identity, item } = PUBLISHING_PLATFORMS[platform]
+  const call = useCallback(
+    <Result,>(action: string, ...args: unknown[]) =>
+      workflowCall<Result>(`${platform}${action}`, ...args),
+    [platform],
+  )
+  const storageKey = `video-workflow-${platform}-settings:${project.id}`
   const [saved] = useState<Record<string, string>>(() => {
     try {
       const value = JSON.parse(localStorage.getItem(storageKey) ?? '{}')
@@ -81,16 +91,19 @@ export function BilibiliPublishingPanel({
       setError('投稿设置无法保存在本机；请在重新打开发布页后核对设置。')
     }
   }, [storageKey, category, visibility, copyright, source])
-  const refresh = async (check = false) => {
-    const [account, submissions] = await Promise.all([
-      workflowCall<BilibiliConnection>('bilibiliConnection', check),
-      workflowCall<BilibiliSubmission[]>('bilibiliSubmissions', project.id),
-    ])
-    if (alive.current) {
-      setConnection(account)
-      setRecords(submissions)
-    }
-  }
+  const refresh = useCallback(
+    async (check = false) => {
+      const [account, submissions] = await Promise.all([
+        call<BilibiliConnection>('Connection', check),
+        call<BilibiliSubmission[]>('Submissions', project.id),
+      ])
+      if (alive.current) {
+        setConnection(account)
+        setRecords(submissions)
+      }
+    },
+    [project.id, call],
+  )
   useEffect(() => {
     alive.current = true
     void refresh(true).catch((failure) => {
@@ -103,21 +116,21 @@ export function BilibiliPublishingPanel({
       alive.current = false
       remove()
     }
-  }, [project.id])
+  }, [refresh])
   useEffect(() => {
     if (connection.state !== 'connecting') return
     const timer = setInterval(() => {
       void refresh().catch(() => {})
     }, 700)
     return () => clearInterval(timer)
-  }, [connection.state, project.id])
+  }, [connection.state, refresh])
   useEffect(() => {
-    if (connection.state !== 'connected') {
+    if (connection.state !== 'connected' || platform !== 'bilibili') {
       setCategories([])
       return
     }
     let current = true
-    void workflowCall<BilibiliCategory[]>('bilibiliCategories')
+    void call<BilibiliCategory[]>('Categories')
       .then((value) => {
         if (current) setCategories(value)
       })
@@ -127,7 +140,7 @@ export function BilibiliPublishingPanel({
     return () => {
       current = false
     }
-  }, [connection.state, connection.uid])
+  }, [connection.state, connection.uid, platform, call])
   const perform = async (action: () => Promise<unknown>, message = '') => {
     if (lock.current) return
     lock.current = true
@@ -148,7 +161,7 @@ export function BilibiliPublishingPanel({
   const publish = () =>
     perform(
       () =>
-        workflowCall('bilibiliPublish', {
+        call('Publish', {
           projectId: project.id,
           expectedRevision: project.revision,
           requestId: crypto.randomUUID(),
@@ -163,104 +176,81 @@ export function BilibiliPublishingPanel({
   return (
     <section
       className="workflow-section workflow-divider"
-      aria-label="B站自动发布"
-      data-bilibili-publishing
+      aria-label={platform === 'bilibili' ? 'B站自动发布' : '抖音自动发布'}
+      data-bilibili-publishing={platform === 'bilibili' ? '' : undefined}
+      data-douyin-publishing={platform === 'douyin' ? '' : undefined}
     >
-      <h4 className="text-body-sm font-semibold">B 站一键发布</h4>
+      <h4 className="text-body-sm font-semibold">{label}一键发布</h4>
       <p className="workflow-muted">
         连接账号并选择投稿设置后，可直接上传当前已审核成片，无需导出后手动上传。
       </p>
       <p role="status" className="workflow-muted" aria-live="polite">
         {connection.state === 'connected'
-          ? `已连接：${connection.name} · UID ${connection.uid}`
+          ? `已连接：${connection.name} · ${identity} ${connection.uid}`
           : connection.state === 'connecting'
-            ? '请使用哔哩哔哩 App 扫码，并在手机上确认。'
+            ? `请使用${app} App 扫码，并在手机上确认。`
             : connection.state === 'checking'
-              ? '正在检查 B 站连接…'
-              : '尚未连接 B 站账号'}
+              ? `正在检查${label}连接…`
+              : `尚未连接${label}账号`}
       </p>
       {connection.error && (
         <p className="workflow-error" role="alert">
           {connection.error}。可在工作流执行环境配置 Catbus 0.2.1 与兼容的 Node。
         </p>
       )}
-      {connection.qrCode && (
-        <img src={connection.qrCode} width={200} height={200} alt="使用哔哩哔哩 App 扫码连接账号" />
-      )}
-      <div className="workflow-toolbar">
-        <Button
-          size="sm"
-          variant="secondary"
-          disabled={
-            busy || active || connection.state === 'connecting' || connection.state === 'checking'
-          }
-          onClick={() =>
-            void perform(async () =>
-              setConnection(await workflowCall<BilibiliConnection>('bilibiliConnect')),
-            )
-          }
-        >
-          {connection.state === 'connected' ? '重新扫码连接' : '扫码连接 B 站'}
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={busy || active || connection.state === 'checking'}
-          onClick={() =>
-            void perform(async () =>
-              setConnection(
-                await workflowCall<BilibiliConnection>(
-                  connection.state === 'connecting' || connection.state === 'connected'
-                    ? 'bilibiliDisconnect'
-                    : 'bilibiliConnection',
-                  true,
-                ),
-              ),
-            )
-          }
-        >
-          {connection.state === 'connecting'
-            ? '取消扫码'
-            : connection.state === 'connected'
-              ? '断开本地连接'
-              : '重新检测连接'}
-        </Button>
+      <div className="workflow-actions">
+        <PlatformAccountsDialog
+          platform={platform}
+          connection={connection}
+          disabled={busy || active}
+          onChanged={() => refresh()}
+        />
       </div>
       <fieldset disabled={busy || active || disabled} className="workflow-section min-w-0">
-        <VoiceSelect
-          label="B 站投稿分区"
-          value={category}
-          onChange={(category) => {
-            const selected = categories.find((item) => item.id === category)
-            updateSubmission({
-              category,
-              categoryName: selected
-                ? `${categories.find((parent) => parent.id === selected.parentId)?.name ?? '分区'} / ${selected.name}`
-                : '',
-            })
-          }}
-          placeholder={categories.length ? '请选择投稿子分区' : '连接后加载分区'}
-          options={[
-            ...(category && !categories.some((item) => item.id === category && item.parentId)
-              ? [
-                  {
-                    value: category,
-                    label: `${submission?.categoryName || category}（待连接核验）`,
-                  },
-                ]
-              : []),
-            ...categories
-              .filter((item) => item.parentId)
-              .map((item) => ({
-                value: item.id,
-                label: `${categories.find((parent) => parent.id === item.parentId)?.name ?? '分区'} / ${item.name}`,
-              })),
-          ]}
-        />
-        {submission?.categoryName && !category && (
-          <p className="workflow-muted" role="status">
-            AI 分区建议：{submission.categoryName}。连接 B 站后请选择实际投稿子分区。
-          </p>
+        {platform === 'bilibili' ? (
+          <>
+            <VoiceSelect
+              label="B 站投稿分区"
+              value={category}
+              onChange={(category) => {
+                const selected = categories.find((item) => item.id === category)
+                updateSubmission({
+                  category,
+                  categoryName: selected
+                    ? `${categories.find((parent) => parent.id === selected.parentId)?.name ?? '分区'} / ${selected.name}`
+                    : '',
+                })
+              }}
+              placeholder={categories.length ? '请选择投稿子分区' : '连接后加载分区'}
+              options={[
+                ...(category && !categories.some((item) => item.id === category && item.parentId)
+                  ? [
+                      {
+                        value: category,
+                        label: `${submission?.categoryName || category}（待连接核验）`,
+                      },
+                    ]
+                  : []),
+                ...categories
+                  .filter((item) => item.parentId)
+                  .map((item) => ({
+                    value: item.id,
+                    label: `${categories.find((parent) => parent.id === item.parentId)?.name ?? '分区'} / ${item.name}`,
+                  })),
+              ]}
+            />
+            {submission?.categoryName && !category && (
+              <p className="workflow-muted" role="status">
+                AI 分区建议：{submission.categoryName}。连接 B 站后请选择实际投稿子分区。
+              </p>
+            )}
+          </>
+        ) : (
+          <VoiceInput
+            label="内容分区建议"
+            value={submission?.categoryName ?? ''}
+            onChange={(event) => updateSubmission({ categoryName: event.target.value })}
+          />
         )}
         <VoiceSelect
           label="投稿可见性"
@@ -299,12 +289,17 @@ export function BilibiliPublishingPanel({
         )}
       </fieldset>
       <p className="workflow-muted">投稿设置随发布资料保存，AI 建议可修改，修改后需重新审核。</p>
+      {platform === 'douyin' && (
+        <p className="workflow-muted">
+          自动投稿提交视频、封面、标题、简介、话题和可见性。分区、稿件类型与来源仅作为资料记录和导出建议，需要平台声明时请到抖音创作中心核对。
+        </p>
+      )}
       <p className="workflow-muted">
         {dirty
           ? '请先保存并重新审核发布资料。'
           : !approved
             ? '正式成片与发布资料审核通过后才能投稿。'
-            : '将上传当前审核版本；平台提交成功后仍需等待 B 站审核。'}
+            : `将上传当前审核版本；平台提交成功后仍需等待${label}审核。`}
       </p>
       <Button
         ref={publishButton}
@@ -316,15 +311,15 @@ export function BilibiliPublishingPanel({
           dirty ||
           !approved ||
           connection.state !== 'connected' ||
-          !category ||
-          !categories.some((item) => item.id === category && item.parentId) ||
+          (platform === 'bilibili' &&
+            (!category || !categories.some((item) => item.id === category && item.parentId))) ||
           !visibility ||
           !copyright ||
           (copyright === 'repost' && !source.trim())
         }
         onClick={() => void publish()}
       >
-        {active ? '正在上传与提交…' : '一键发布到 B 站'}
+        {active ? '正在上传与提交…' : `一键发布到 ${label}`}
       </Button>
       {error && (
         <p className="workflow-error" role="alert">
@@ -340,15 +335,17 @@ export function BilibiliPublishingPanel({
         <div
           key={record.id}
           className="workflow-divider workflow-section"
-          data-bilibili-submission={record.state}
+          data-bilibili-submission={platform === 'bilibili' ? record.state : undefined}
+          data-douyin-submission={platform === 'douyin' ? record.state : undefined}
         >
           <div>
             <strong className="text-body-sm">{BILIBILI_STATE_LABELS[record.state]}</strong>
             <p className="workflow-muted" role="status">
               {record.phase}
             </p>
-            <p className="workflow-muted">
-              {new Date(record.createdAt).toLocaleString()} · UID {record.snapshot.accountUid} ·{' '}
+            <p className="workflow-muted break-words">
+              {new Date(record.createdAt).toLocaleString()} · {identity}{' '}
+              {record.snapshot.accountUid} ·{' '}
               {record.snapshot.visibility === 'public' ? '公开' : '私密'}
             </p>
             <p className="workflow-muted">{record.snapshot.metadata.title}</p>
@@ -358,9 +355,7 @@ export function BilibiliPublishingPanel({
             <Button
               size="sm"
               variant="secondary"
-              onClick={() =>
-                void perform(() => workflowCall('bilibiliOpen', project.id, record.id))
-              }
+              onClick={() => void perform(() => call('Open', project.id, record.id))}
             >
               打开作品 {record.externalId}
             </Button>
@@ -370,9 +365,7 @@ export function BilibiliPublishingPanel({
               size="sm"
               variant="secondary"
               disabled={busy}
-              onClick={() =>
-                void perform(() => workflowCall('bilibiliCancel', project.id, record.id))
-              }
+              onClick={() => void perform(() => call('Cancel', project.id, record.id))}
             >
               停止本地投稿任务
             </Button>
@@ -380,7 +373,7 @@ export function BilibiliPublishingPanel({
             <>
               {['unknown', 'risk_control'].includes(record.state) && !record.externalId && (
                 <VoiceInput
-                  label="已提交的 BV 号或作品链接（用于核查）"
+                  label={`已提交的 ${item}或作品链接（用于核查）`}
                   value={bvs[record.id] ?? ''}
                   onChange={(event) =>
                     setBvs((current) => ({ ...current, [record.id]: event.target.value }))
@@ -391,10 +384,15 @@ export function BilibiliPublishingPanel({
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={busy || active || connection.state !== 'connected'}
+                  disabled={
+                    busy ||
+                    active ||
+                    connection.state === 'connecting' ||
+                    connection.state === 'checking'
+                  }
                   onClick={() =>
                     void perform(
-                      () => workflowCall('bilibiliRefresh', project.id, record.id, bvs[record.id]),
+                      () => call('Refresh', project.id, record.id, bvs[record.id]),
                       '已核查平台稿件状态',
                     )
                   }
@@ -405,8 +403,8 @@ export function BilibiliPublishingPanel({
               {['unknown', 'risk_control'].includes(record.state) && (
                 <>
                   <p className="workflow-muted">
-                    先检查 B 站创作中心。若稿件已存在，请填写 BV
-                    号核查；提交结果未确认时不会重复投稿。
+                    先检查{label}创作中心。若稿件已存在，请填写{item}
+                    核查；提交结果未确认时不会重复投稿。
                   </p>
                   <Button
                     size="sm"
@@ -428,7 +426,7 @@ export function BilibiliPublishingPanel({
           if (!open) setConfirmation(null)
         }}
         title="确认平台没有此稿件"
-        description="只有已在 B 站创作中心核查、确认这次投稿没有创建稿件时才能继续。确认后可手动发起新尝试；误判可能产生重复投稿。"
+        description={`只有已在${label}创作中心核查、确认这次投稿没有创建稿件时才能继续。确认后可手动发起新尝试；误判可能产生重复投稿。`}
         returnFocus={publishButton}
         footer={
           <>
@@ -440,7 +438,7 @@ export function BilibiliPublishingPanel({
               onClick={() =>
                 void perform(async () => {
                   if (!confirmation) return
-                  await workflowCall('bilibiliConfirmNotSubmitted', project.id, confirmation.id)
+                  await call('ConfirmNotSubmitted', project.id, confirmation.id)
                   setConfirmation(null)
                 })
               }
@@ -455,3 +453,5 @@ export function BilibiliPublishingPanel({
     </section>
   )
 }
+
+export { PlatformPublishingPanel as BilibiliPublishingPanel }

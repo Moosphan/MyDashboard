@@ -21,7 +21,7 @@ import { BilibiliCatbus, supportedCatbusNode } from '../src/main/services/video-
 import { BilibiliPublishingService } from '../src/main/services/video-workflow/bilibili'
 import type { BilibiliPublishRequest } from '../src/shared/bilibili-publishing'
 
-async function fixture() {
+async function fixture(platform: 'bilibili' | 'douyin' = 'bilibili') {
   const root = mkdtempSync(join(tmpdir(), 'bilibili-publishing-'))
   const db = new Database(':memory:')
   runMigrations(db)
@@ -106,7 +106,7 @@ async function fixture() {
     ffmpegPath: '',
     ffprobePath: '',
   }
-  const client = new BilibiliCatbus(root, runtime)
+  const client = new BilibiliCatbus(root, runtime, undefined, platform)
   const service = new BilibiliPublishingService(
     root,
     db,
@@ -114,13 +114,14 @@ async function fixture() {
     files,
     () => runtime,
     () => {},
+    platform,
   )
   const request: BilibiliPublishRequest = {
     projectId: project.id,
     expectedRevision: project.revision,
     requestId: randomUUID(),
-    accountUid: '123',
-    category: '17',
+    accountUid: platform === 'douyin' ? 'MS4wLjABAAAA_test_123' : '123',
+    category: platform === 'douyin' ? '' : '17',
     visibility: 'public',
     copyright: 'original',
   }
@@ -153,11 +154,370 @@ async function fixture() {
   }
 }
 
+test('douyin publishes its approved metadata with sec_uid and only supported platform parameters', async () => {
+  const context = await fixture('douyin')
+  try {
+    assert.equal((await context.service.connection(true)).uid, context.request.accountUid)
+    const record = await context.finish(context.service.start(context.request).id)
+    assert.equal(record.state, 'reviewing')
+    assert.equal(record.snapshot.metadata.title, '另一平台')
+    assert.equal(record.externalId, '7531234567890123456')
+    assert.equal(record.url, 'https://www.douyin.com/video/7531234567890123456')
+    const args = JSON.parse(readFileSync(join(context.root, 'calls'), 'utf8').trim())
+    assert.equal(args[0], 'douyin')
+    assert.equal(args[args.indexOf('-a') + 1], 'mydashboard-douyin')
+    assert.equal(args.includes('--category'), false)
+    assert.equal(args.includes('--source'), false)
+    assert.equal(context.service.start(context.request).id, record.id)
+    writeFileSync(join(context.root, 'mode'), 'private')
+    assert.equal((await context.service.refresh(context.project.id, record.id)).state, 'private')
+    assert.equal(context.repository.get(context.project.id).stages.publish!.status, 'approved')
+  } finally {
+    await context.close()
+  }
+})
+
+test('douyin reports actual public visibility instead of assuming a requested private setting applied', async () => {
+  const context = await fixture('douyin')
+  try {
+    const record = await context.finish(
+      context.service.start({ ...context.request, visibility: 'private' }).id,
+    )
+    assert.equal((await context.service.refresh(context.project.id, record.id)).state, 'published')
+  } finally {
+    await context.close()
+  }
+})
+
+test('douyin and bilibili use independent submission tables and idempotency keys', async () => {
+  const context = await fixture('douyin')
+  const bili = new BilibiliPublishingService(
+    context.root,
+    context.db,
+    context.repository,
+    context.files,
+    () => context.runtime,
+    () => {},
+  )
+  try {
+    const dyRecord = context.service.start(context.request)
+    const biliRecord = bili.start({ ...context.request, accountUid: '123', category: '17' })
+    assert.notEqual(dyRecord.id, biliRecord.id)
+    assert.equal(bili.list(context.project.id).length, 1)
+    assert.equal(context.service.list(context.project.id).length, 1)
+    assert.equal((await context.finish(dyRecord.id)).state, 'reviewing')
+    for (
+      let attempt = 0;
+      attempt < 200 &&
+      ['queued', 'uploading', 'submitting'].includes(bili.list(context.project.id)[0].state);
+      attempt++
+    )
+      await delay(20)
+    assert.equal(bili.list(context.project.id)[0].state, 'reviewing')
+  } finally {
+    await bili.dispose()
+    await context.close()
+  }
+})
+
+test('douyin and bilibili retain independent accounts and restart selection', async () => {
+  const context = await fixture('douyin')
+  const bili = new BilibiliPublishingService(
+    context.root,
+    context.db,
+    context.repository,
+    context.files,
+    () => context.runtime,
+    () => {},
+  )
+  let restarted: BilibiliPublishingService | undefined
+  try {
+    assert.equal((await context.service.connection(true)).uid, context.request.accountUid)
+    assert.equal((await bili.connection(true)).uid, '123')
+    const original = context.service.accounts().accounts[0]
+    writeFileSync(join(context.root, 'login-user'), 'MS4wLjABAAAA_second_456')
+    context.service.connect()
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if ((await context.service.connection()).state !== 'connecting') break
+      await delay(20)
+    }
+    assert.equal(context.service.accounts().accounts.length, 2)
+    await context.service.selectAccount(original.id)
+    assert.equal(bili.accounts().accounts.length, 1)
+    await context.service.dispose()
+    restarted = new BilibiliPublishingService(
+      context.root,
+      context.db,
+      context.repository,
+      context.files,
+      () => context.runtime,
+      () => {},
+      'douyin',
+    )
+    assert.equal((await restarted.connection(true)).uid, original.uid)
+    await restarted.removeAccount(original.id)
+    assert.equal((await restarted.connection(true)).state, 'disconnected')
+    assert.equal((await bili.connection(true)).uid, '123')
+  } finally {
+    await restarted?.dispose()
+    await bili.dispose()
+    await context.close()
+  }
+})
+
+test('douyin rejects stale approvals, mismatched settings and modified files before upload', async () => {
+  const context = await fixture('douyin')
+  try {
+    assert.throws(() => context.service.start({ ...context.request, expectedRevision: 0 }), /更新/)
+    const payload = context.repository.get(context.project.id).stages.publish!.payload as {
+      platforms: Record<string, unknown>
+    }
+    const saved = context.repository.save(
+      context.project.id,
+      'publish',
+      {
+        ...payload,
+        platforms: {
+          ...payload.platforms,
+          douyin: {
+            title: '另一平台',
+            description: '',
+            tags: [],
+            submission: {
+              category: '',
+              categoryName: '科技',
+              visibility: 'private',
+              copyright: 'original',
+              source: '',
+            },
+          },
+        },
+      },
+      context.project.revision,
+      randomUUID(),
+    )
+    assert.throws(
+      () => context.service.start({ ...context.request, expectedRevision: saved.revision }),
+      /审核/,
+    )
+    const approved = context.repository.approve(
+      saved.id,
+      'publish',
+      saved.stages.publish!.id,
+      saved.revision,
+      randomUUID(),
+    )
+    assert.throws(
+      () => context.service.start({ ...context.request, expectedRevision: approved.revision }),
+      /不一致/,
+    )
+    writeFileSync(context.files.path(context.file), 'changed')
+    const record = await context.finish(
+      context.service.start({
+        ...context.request,
+        expectedRevision: approved.revision,
+        visibility: 'private',
+      }).id,
+    )
+    assert.equal(record.state, 'failed')
+    assert.equal(existsSync(join(context.root, 'calls')), false)
+  } finally {
+    await context.close()
+  }
+})
+
+test('douyin preserves unknown uploads and validates exact item ownership before reconciliation', async () => {
+  const context = await fixture('douyin')
+  try {
+    writeFileSync(join(context.root, 'mode'), 'network')
+    const record = await context.finish(context.service.start(context.request).id)
+    assert.equal(record.state, 'unknown')
+    assert.doesNotMatch(record.error!, /SECRET/)
+    assert.equal(
+      context.service.start({ ...context.request, requestId: randomUUID() }).id,
+      record.id,
+    )
+    writeFileSync(join(context.root, 'mode'), 'wrong-owner')
+    await assert.rejects(
+      context.service.refresh(context.project.id, record.id, '7531234567890123456'),
+      /不符/,
+    )
+    await assert.rejects(
+      context.service.refresh(
+        context.project.id,
+        record.id,
+        'https://www.douyin.com.evil.test/video/7531234567890123456',
+      ),
+      /有效/,
+    )
+    writeFileSync(join(context.root, 'mode'), '')
+    assert.equal(
+      (
+        await context.service.refresh(
+          context.project.id,
+          record.id,
+          'https://www.douyin.com/video/7531234567890123456',
+        )
+      ).state,
+      'published',
+    )
+  } finally {
+    await context.close()
+  }
+})
+
+test('douyin requires the original account before uploading and identifies the correct platform', async () => {
+  const context = await fixture('douyin')
+  try {
+    writeFileSync(join(context.root, 'mode'), 'wrong-account')
+    const record = await context.finish(context.service.start(context.request).id)
+    assert.equal(record.state, 'needs_auth')
+    assert.match(record.error!, /抖音/)
+    assert.equal(existsSync(join(context.root, 'calls')), false)
+  } finally {
+    await context.close()
+  }
+})
+
+test('douyin rejects a response belonging to another platform and cancels login without losing bindings', async () => {
+  const context = await fixture('douyin')
+  try {
+    writeFileSync(join(context.root, 'mode'), 'wrong-platform')
+    assert.equal((await context.service.connection(true)).state, 'error')
+    writeFileSync(join(context.root, 'mode'), '')
+    assert.equal((await context.service.connection(true)).uid, context.request.accountUid)
+    const previous = context.service.accounts()
+    context.service.connect()
+    await context.service.cancelLogin()
+    assert.equal((await context.service.connection()).uid, context.request.accountUid)
+    assert.deepEqual(context.service.accounts().accounts, previous.accounts)
+  } finally {
+    await context.close()
+  }
+})
+
 test('requires the exact supported Node engine versions', () => {
   for (const version of ['22.22.2', '22.23.0', '24.15.0', '26.0.0', '27.0.0'])
     assert.equal(supportedCatbusNode(version), true)
   for (const version of ['20.19.0', '22.22.1', '23.0.0', '24.13.0', '25.0.0', 'invalid'])
     assert.equal(supportedCatbusNode(version), false)
+})
+
+test('binds isolated accounts, restores selection and checks old submissions with their original account', async () => {
+  const context = await fixture()
+  let restarted: BilibiliPublishingService | undefined
+  try {
+    assert.equal((await context.service.connection(true)).uid, '123')
+    const original = context.service.accounts().accounts[0]
+    assert.equal(original.uid, '123')
+    writeFileSync(join(context.root, 'login-user'), '456')
+    context.service.connect()
+    for (
+      let attempt = 0;
+      attempt < 200 && (await context.service.connection()).state === 'connecting';
+      attempt++
+    )
+      await delay(20)
+    const second = context.service.accounts()
+    assert.equal(second.accounts.length, 2)
+    assert.equal(second.connection.uid, '456')
+    assert.notEqual(second.selectedId, original.id)
+    const record = await context.finish(
+      context.service.start({ ...context.request, accountUid: '456' }).id,
+    )
+    assert.equal(record.state, 'reviewing')
+    await context.service.selectAccount(original.id)
+    assert.equal((await context.service.connection()).uid, '123')
+    const reviewed = await context.service.refresh(context.project.id, record.id)
+    assert.equal(reviewed.state, 'published')
+    assert.equal(reviewed.snapshot.accountUid, '456')
+    assert.equal((await context.service.connection()).uid, '123')
+    await context.service.dispose()
+    restarted = new BilibiliPublishingService(
+      context.root,
+      context.db,
+      context.repository,
+      context.files,
+      () => context.runtime,
+      () => {},
+    )
+    assert.equal((await restarted.connection(true)).uid, '123')
+    assert.equal(restarted.accounts().accounts.length, 2)
+    await restarted.removeAccount(second.selectedId!)
+    assert.equal(restarted.accounts().accounts.length, 1)
+    assert.equal((await restarted.connection()).uid, '123')
+    await assert.rejects(restarted.refresh(context.project.id, record.id), /连接|绑定/)
+    assert.equal(context.repository.get(context.project.id).stages.publish!.status, 'approved')
+    await assert.rejects(restarted.selectAccount('../../outside'), /账号/)
+  } finally {
+    await restarted?.dispose()
+    await context.close()
+  }
+})
+
+test('cancelling or scanning the wrong account preserves the previously bound credentials', async () => {
+  const context = await fixture()
+  try {
+    await context.service.connection(true)
+    const original = context.service.accounts().accounts[0]
+    context.service.connect()
+    await context.service.cancelLogin()
+    assert.equal((await context.service.connection()).uid, '123')
+    assert.equal(context.service.accounts().accounts.length, 1)
+    writeFileSync(join(context.root, 'login-user'), '456')
+    context.service.connect(original.id)
+    for (
+      let attempt = 0;
+      attempt < 200 && (await context.service.connection()).state === 'connecting';
+      attempt++
+    )
+      await delay(20)
+    assert.match((await context.service.connection()).error!, /不一致/)
+    assert.equal(context.service.accounts().accounts.length, 1)
+    assert.equal((await context.service.connection(true)).uid, '123')
+    writeFileSync(join(context.root, 'login-user'), '123')
+    context.service.connect()
+    for (
+      let attempt = 0;
+      attempt < 200 && (await context.service.connection()).state === 'connecting';
+      attempt++
+    )
+      await delay(20)
+    assert.equal(
+      context.service.accounts().accounts.length,
+      1,
+      'Rebinding the same UID must not create duplicates',
+    )
+    assert.equal((await context.service.connection()).uid, '123')
+    const record = await context.finish(context.service.start(context.request).id)
+    assert.equal(record.state, 'reviewing')
+  } finally {
+    await context.close()
+  }
+})
+
+test('blocks account mutations during login and upload and never uploads with a different selected UID', async () => {
+  const context = await fixture()
+  try {
+    await context.service.connection(true)
+    const original = context.service.accounts().accounts[0]
+    context.service.connect()
+    await assert.rejects(context.service.selectAccount(original.id), /等待/)
+    await assert.rejects(context.service.removeAccount(original.id), /等待/)
+    await assert.rejects(context.service.refresh(context.project.id, 'any-record'), /等待/)
+    assert.throws(() => context.service.start(context.request), /等待|执行/)
+    await context.service.cancelLogin()
+    const record = context.service.start(context.request)
+    await assert.rejects(context.service.removeAccount(original.id), /等待/)
+    await context.finish(record.id)
+    const mismatch = await context.finish(
+      context.service.start({ ...context.request, accountUid: '456', requestId: randomUUID() }).id,
+    )
+    assert.equal(mismatch.state, 'needs_auth')
+    assert.equal(readFileSync(join(context.root, 'calls'), 'utf8').trim().split('\n').length, 1)
+  } finally {
+    await context.close()
+  }
 })
 
 test('submits frozen approved files and returns a reviewing receipt without changing stage history', async () => {

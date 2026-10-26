@@ -18,7 +18,7 @@ const sizes = {
   sm: 'px-3 py-1.5 text-label-sm',
   md: 'px-md py-sm text-label-md',
   lg: 'px-6 py-3 text-label-md',
-  icon: 'w-10 h-10 flex items-center justify-center',
+  icon: 'w-10 h-10 flex items-center justify-center rounded-full',
 } as const
 
 type Variant = keyof typeof variants
@@ -38,7 +38,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       <Comp
         ref={ref}
         className={cn(
-          'font-label-md inline-flex items-center justify-center gap-xs outline-none focus:ring-2 focus:ring-primary/20 disabled:opacity-50 disabled:cursor-not-allowed',
+          'font-label-md inline-flex items-center justify-center gap-xs outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50 disabled:cursor-not-allowed',
           variants[variant],
           sizes[size],
           className,

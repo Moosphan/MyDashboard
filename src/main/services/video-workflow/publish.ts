@@ -43,7 +43,9 @@ export function publicationPrompt(
 ${
   platform === 'bilibili' && categories.some((category) => category.parentId)
     ? `可投稿分区列表（只从有 parentId 的子分区中选择，不得猜测 ID）：${JSON.stringify(categories)}`
-    : '当前没有已核验的该平台分区列表：category 必须留空，仅通过 categoryName 提出分区建议，用户连接平台后核对实际分区。不得编造 ID。'
+    : platform === 'douyin'
+      ? '抖音投稿接口不接收分区和版权声明字段：category 必须留空，categoryName、copyright 和 source 仅作为资料记录与导出建议，不代表已向平台提交声明；可见性仍实际提交。不得编造分区 ID。'
+      : '当前没有已核验的该平台分区列表：category 必须留空，仅通过 categoryName 提出分区建议，用户连接平台后核对实际分区。不得编造 ID。'
 }
 标题最多 ${platform === 'bilibili' ? 80 : 30} 字符；简介最多 2000 字符；标签最多 10 个，每个最多 30 字符，使用不带 # 的独立标签，不堆砌无关话题。
 ${platform === 'bilibili' ? 'Bilibili：标题突出具体问题、知识价值或技术看点；简介交代内容和适合观众，便于搜索。' : '抖音：标题简短直接，以具体问题、反差或有依据的看点切入；简介精炼，话题紧扣内容。'}

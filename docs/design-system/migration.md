@@ -21,6 +21,8 @@
 
 新增功能必须遵守 2.0，不能扩大 LEGACY-UI-001。主题、外观或页面结构例外必须说明具体文件、理由、负责人、退出时间及证据。
 
+`LEGACY-UI-001` 焦点缺陷收敛（2026-10-26 用户授权）：`src/renderer/components/ui/button.tsx` 将存量共享按钮的 `:focus` 半透明方框改为 `:focus-visible` 单一主题色轮廓，纯图标尺寸默认圆形，显式调用方形状优先。`App.tsx` / `globals.css` 集中识别指针与键盘操作，仅在指针模式抑制按钮轮廓，处理 macOS 脚本聚焦继承。覆盖工作流预览/账号/审核、工具箱等复用入口，不扩展控件库或布局；保留自动聚焦、焦点限制、焦点返回及输入框编辑提示。负责人为 renderer 维护者，迁移到 HeroUI 3.2.6 时由上游公开焦点行为替代。验证记录见 [弹窗焦点验证](dialog-focus-verification.md)。
+
 ---
 
 # 历史台账（旧自建 v3.2，不再生效）
@@ -58,8 +60,12 @@
 
 ## 3. 例外记录
 
+`VIDEO-WORKFLOW-001` 同日后续修订（2026-10-26 用户授权）：播放按钮按用户新要求改为半透明黑色圆底与浅色 PlayIcon，40px 目标尺寸沿用现有按钮；业务媒体覆盖层局部使用圆形外观，不影响其他 Button。`BilibiliAccountsDialog.tsx`、`BilibiliPublishingPanel.tsx` 导出按平台复用的账号弹窗与投稿面板，抖音新增扫码、多账号和视频直接投稿；保留原桌面布局、发布审核、导出和回填。历史 B 站导出名和 IPC 仍兼容，不改变凭据路径。沿用现有 Button / Voice 控件 / WorkflowDialog、项目主题与 React 18 / Radix 例外，不引入新库。负责人为项目维护者，退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移；覆盖此前“无圆底、抖音仅手工”的本次实现边界。验证见 [抖音发布验证](video-workflow-douyin-publishing-verification.md)。
+
 `VIDEO-WORKFLOW-001` 正片差异说明（2026-10-25 用户授权及截图修订）：`FinalRenderComparison.tsx` 与 `MediaPanels.tsx` 复用现有 Button ghost/icon、WorkflowDialog、表格文字和主题。按用户反馈在播放器规格旁以图标按钮打开对比弹窗，移除正文整块提示；补充可访问名称、提示标题、焦点返回与表格定位容器，修复隐藏 caption 撑大页面的问题。使用 HeroUI 缺少的比较业务图标 `@heroicons/react@2.2.0` outline，不引入新的控件库或布局断点。存量 React 18 例外负责人为项目维护者，退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-final-comparison-verification.md`。
 `VIDEO-WORKFLOW-001` 正式成片定位与发布预览（2026-10-25）：`MediaPanels.tsx` 复用现有工作流按钮、受管文件 IPC、WorkflowDialog 和原生 video，增加成片文件夹定位与发布封面播放弹窗；保留信息顺序、播放器和审核布局，关闭弹窗卸载媒体并返回触发按钮。AI 发布资料沿用现有平台表单保存投稿分区、可见性和稿件类型，B 站服务端核验已审核设置与实际投稿参数。HeroUI 迁移完成前沿用 React 18/Radix 局部例外。验证见本次工作流单元、B 站发布和正式成片 Electron 检查。
+
+`VIDEO-WORKFLOW-001` 发布播放与多账号（2026-10-26 用户授权）：`VideoPreviewButton.tsx` 封装专用透明媒体覆盖入口，使用 Heroicons 2.2.0 outline 的 PlayIcon，单一三角、半透明白色和深色细描边，取消前一稿双圆环与厚阴影，封面不铺背景蒙层。`BilibiliAccountsDialog.tsx` 复用现有 Button / WorkflowDialog，整合绑定、切换、重新登录与解除确认，主页面只保留原账号摘要及管理入口；保留封面尺寸、表单顺序、主栏/审核栏与断点。沿用 React 18 / Radix 生产例外及现有主题；不引入控件库或依赖。责任为项目维护者，退出里程碑仍为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-multi-account-verification.md`。
 
 `VIDEO-WORKFLOW-001` 分镜素材降级（2026-10-24 用户授权）：`StoryboardEditor.tsx`、`StageWorkspace.tsx`、`ExecutionLog.tsx` 沿用本工作流现有 React 18 / Radix / Button 与主题例外。保留主栏、审核栏及操作位置；仅在既有缺口说明中增加一个批量降级按钮、确认弹窗和审核旁原因。接受仅创建待审核记录，不替换素材或改动 MG。负责人为项目维护者；退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证见 `video-workflow-material-fallback-verification.md`。
 

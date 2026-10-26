@@ -6,7 +6,7 @@ import { VideoWorkflowService, type WorkflowGeneration } from '../services/video
 import type { VideoStage, VideoPlatform, WorkflowFile } from '../../shared/video-workflow'
 import { workflowMediaResponse } from '../services/video-workflow/media'
 import type { BilibiliPublishRequest } from '../../shared/bilibili-publishing'
-import { bilibiliVideoId } from '../services/video-workflow/catbus'
+import { publishingVideoUrl } from '../services/video-workflow/catbus'
 
 let service: VideoWorkflowService | undefined
 let getWindow: () => BrowserWindow | null = () => null
@@ -199,34 +199,40 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
   handle('workflow:receipt', (projectId: string, id: string, url: string) =>
     getVideoWorkflow().repository.receipt(projectId, id, url),
   )
-  handle('workflow:bilibiliConnection', (refresh: boolean) =>
-    getVideoWorkflow().publishing.connection(refresh === true),
-  )
-  handle('workflow:bilibiliConnect', () => getVideoWorkflow().publishing.connect())
-  handle('workflow:bilibiliDisconnect', () => getVideoWorkflow().publishing.disconnect())
-  handle('workflow:bilibiliCategories', () => getVideoWorkflow().publishing.categories())
-  handle('workflow:bilibiliSubmissions', (projectId: string) =>
-    getVideoWorkflow().publishing.list(projectId),
-  )
-  handle('workflow:bilibiliPublish', (input: BilibiliPublishRequest) =>
-    getVideoWorkflow().publishing.start(input),
-  )
-  handle('workflow:bilibiliCancel', (projectId: string, id: string) =>
-    getVideoWorkflow().publishing.cancel(projectId, id),
-  )
-  handle('workflow:bilibiliRefresh', (projectId: string, id: string, bv?: string) =>
-    getVideoWorkflow().publishing.refresh(projectId, id, bv),
-  )
-  handle('workflow:bilibiliConfirmNotSubmitted', (projectId: string, id: string) =>
-    getVideoWorkflow().publishing.confirmNotSubmitted(projectId, id),
-  )
-  handle('workflow:bilibiliOpen', async (projectId: string, id: string) => {
-    const record = getVideoWorkflow()
-      .publishing.list(projectId)
-      .find((item) => item.id === id)
-    if (!record?.externalId) throw new Error('投稿记录尚未返回作品链接')
-    await shell.openExternal(`https://www.bilibili.com/video/${bilibiliVideoId(record.externalId)}`)
-  })
+  for (const platform of ['bilibili', 'douyin'] as const) {
+    const publishing = () =>
+      platform === 'bilibili' ? getVideoWorkflow().publishing : getVideoWorkflow().douyinPublishing
+    handle(`workflow:${platform}Connection`, (refresh: boolean) =>
+      publishing().connection(refresh === true),
+    )
+    handle(`workflow:${platform}Connect`, (accountId?: string) => publishing().connect(accountId))
+    handle(`workflow:${platform}Accounts`, () => publishing().accounts())
+    handle(`workflow:${platform}SelectAccount`, (id: string) => publishing().selectAccount(id))
+    handle(`workflow:${platform}RemoveAccount`, (id: string) => publishing().removeAccount(id))
+    handle(`workflow:${platform}CancelLogin`, () => publishing().cancelLogin())
+    handle(`workflow:${platform}Disconnect`, () => publishing().disconnect())
+    handle(`workflow:${platform}Categories`, () => publishing().categories())
+    handle(`workflow:${platform}Submissions`, (projectId: string) => publishing().list(projectId))
+    handle(`workflow:${platform}Publish`, (input: BilibiliPublishRequest) =>
+      publishing().start(input),
+    )
+    handle(`workflow:${platform}Cancel`, (projectId: string, id: string) =>
+      publishing().cancel(projectId, id),
+    )
+    handle(`workflow:${platform}Refresh`, (projectId: string, id: string, itemId?: string) =>
+      publishing().refresh(projectId, id, itemId),
+    )
+    handle(`workflow:${platform}ConfirmNotSubmitted`, (projectId: string, id: string) =>
+      publishing().confirmNotSubmitted(projectId, id),
+    )
+    handle(`workflow:${platform}Open`, async (projectId: string, id: string) => {
+      const record = publishing()
+        .list(projectId)
+        .find((item) => item.id === id)
+      if (!record?.externalId) throw new Error('投稿记录尚未返回作品链接')
+      await shell.openExternal(publishingVideoUrl(platform, record.externalId))
+    })
+  }
   handle('workflow:revealExport', (projectId: string, publicationId: string) => {
     const record = getVideoWorkflow()
       .repository.get(projectId)

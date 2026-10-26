@@ -52,7 +52,7 @@ import {
 } from './motion'
 import { publicationBase, publicationOptions, publicationPrompt } from './publish'
 import { copyFeedback, copyPrompt } from './copy'
-import { BilibiliPublishingService } from './bilibili'
+import { PlatformPublishingService } from './bilibili'
 import type { BilibiliCategory } from '../../../shared/bilibili-publishing'
 
 export interface WorkflowGeneration {
@@ -85,7 +85,8 @@ export class VideoWorkflowService {
   readonly repository: VideoWorkflowRepository
   readonly files: WorkflowFiles
   readonly runtime: WorkflowRuntimeManager
-  readonly publishing: BilibiliPublishingService
+  readonly publishing: PlatformPublishingService
+  readonly douyinPublishing: PlatformPublishingService
   private running = new Map<string, { controller: AbortController; promise: Promise<void> }>()
   private stopped = false
   constructor(
@@ -98,13 +99,22 @@ export class VideoWorkflowService {
     this.repository.recover()
     this.files = new WorkflowFiles(root, this.repository)
     this.runtime = new WorkflowRuntimeManager(root)
-    this.publishing = new BilibiliPublishingService(
+    this.publishing = new PlatformPublishingService(
       root,
       db,
       this.repository,
       this.files,
       () => this.runtime.get(),
       changed,
+    )
+    this.douyinPublishing = new PlatformPublishingService(
+      root,
+      db,
+      this.repository,
+      this.files,
+      () => this.runtime.get(),
+      changed,
+      'douyin',
     )
   }
   private notify(id: string) {
@@ -865,7 +875,7 @@ export class VideoWorkflowService {
   }
   async dispose() {
     this.stopped = true
-    await this.publishing.dispose()
+    await Promise.all([this.publishing.dispose(), this.douyinPublishing.dispose()])
     for (const item of this.running.values()) item.controller.abort()
     await Promise.allSettled([...this.running.values()].map((item) => item.promise))
     this.repository.recover()

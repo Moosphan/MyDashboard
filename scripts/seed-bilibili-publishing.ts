@@ -32,15 +32,25 @@ async function seed() {
     videoPath,
   ])
   const file = await files.write(project.id, readFileSync(videoPath), '.mp4')
-  rmSync(videoPath)
   const cover = await files.write(
     project.id,
-    Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
-      'base64',
-    ),
+    execFileSync('ffmpeg', [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      videoPath,
+      '-frames:v',
+      '1',
+      '-f',
+      'image2pipe',
+      '-c:v',
+      'png',
+      'pipe:1',
+    ]),
     '.png',
   )
+  rmSync(videoPath)
   const subtitles = await files.write(
     project.id,
     '1\n00:00:00,000 --> 00:00:01,000\n口播\n',
@@ -93,11 +103,40 @@ async function seed() {
   }
   writeFileSync(join(root, 'seed-project.json'), JSON.stringify(project))
   mkdirSync(join(root, 'config'), { recursive: true })
+  const coverAgent = join(root, 'cover-agent')
+  const { chmodSync } = await import('node:fs')
+  writeFileSync(
+    coverAgent,
+    `#!${process.argv[3]}\nimport(${JSON.stringify(join(import.meta.dirname, 'fixtures/cover-agent.mjs'))})\n`,
+  )
+  chmodSync(coverAgent, 0o755)
+  writeFileSync(
+    join(root, 'cover-source.png'),
+    execFileSync('ffmpeg', [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'color=c=0x2c2640:s=1600x1200',
+      '-frames:v',
+      '1',
+      '-f',
+      'image2pipe',
+      '-c:v',
+      'png',
+      'pipe:1',
+    ]),
+  )
   writeFileSync(
     join(root, 'config/video-workflow.json'),
     JSON.stringify({
       nodePath: process.argv[3],
       catbusPath: join(import.meta.dirname, 'fixtures/catbus.mjs'),
+      codexPath: coverAgent,
+      bunPath: process.argv[3],
+      image2Path: join(import.meta.dirname, 'fixtures/cover-agent.mjs'),
     }),
   )
   writeFileSync(join(root, 'mode'), 'signed-out')

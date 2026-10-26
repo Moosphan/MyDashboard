@@ -22,6 +22,7 @@ import {
   type StoryboardPayload,
   type AudioPayload,
   type StagePayloads,
+  type CoverGeneration,
 } from '@shared/video-workflow'
 import { ipcInvoke } from '@/lib/ipc'
 import { mediaUrl, workflowCall } from './useWorkflow'
@@ -32,6 +33,7 @@ import { RenderActions } from './RenderActions'
 import { FinalRenderComparison } from './FinalRenderComparison'
 import { WorkflowDialog } from './WorkflowDialog'
 import { VideoPreviewButton } from './VideoPreviewButton'
+import { PublicationCoverPanel } from './PublicationCoverPanel'
 import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
 
 export function AudioPanel({
@@ -662,6 +664,8 @@ export function PublishingPanel({
   generating,
   dirty,
   onGenerate,
+  onCoverGenerate,
+  coverGenerating,
   value,
   onChange,
   approved,
@@ -677,6 +681,8 @@ export function PublishingPanel({
   generating: boolean
   dirty: boolean
   onGenerate: () => void
+  onCoverGenerate: (options: CoverGeneration) => Promise<boolean>
+  coverGenerating: boolean
   value: PublishPayload
   onChange: (payload: PublishPayload) => void
   approved: boolean
@@ -753,6 +759,21 @@ export function PublishingPanel({
       <p className="workflow-muted">
         两平台使用同一份横版成片。审核发布信息后，均可一键投稿，也可导出发布包后上传并回填链接。
       </p>
+      {platform === 'bilibili' && (
+        <PublicationCoverPanel
+          project={project}
+          value={value.platforms.bilibili}
+          disabled={disabled}
+          canGenerate={canGenerate}
+          generating={coverGenerating}
+          onGenerate={onCoverGenerate}
+          onChange={(cover) =>
+            onChange({
+              platforms: { ...value.platforms, bilibili: { ...value.platforms.bilibili, cover } },
+            })
+          }
+        />
+      )}
       <div className="workflow-section">
         {[platform].map((platform) => {
           const metadata = value.platforms[platform],

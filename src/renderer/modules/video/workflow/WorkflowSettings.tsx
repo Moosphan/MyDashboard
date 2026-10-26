@@ -39,6 +39,8 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
     hyperframesPath: 'HyperFrames 0.8.181（可执行文件或 bin/hyperframes.mjs）',
     ffmpegPath: 'FFmpeg',
     ffprobePath: 'FFprobe',
+    bunPath: 'Bun（Image2 图片生成运行时）',
+    image2Path: 'Image2（baoyu-imagine/scripts/main.ts）',
   }
   return (
     <Dialog.Root
@@ -81,6 +83,10 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
                   placeholder="/absolute/path/to/executable"
                 />
               ))}
+            <p className="workflow-muted">
+              Image2 使用 gpt-image-2，复用本机 baoyu-imagine 的 API 配置和密钥，可能产生图片 API
+              费用。 未配置时可使用 AI 代码生成封面，无需图片 API。
+            </p>
             {error && (
               <p role="alert" className="workflow-error">
                 {error}

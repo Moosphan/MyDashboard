@@ -59,6 +59,138 @@ import {
   renderSceneAtTime,
 } from '../src/renderer/modules/video/workflow/render-timeline'
 import { compareFinalRender } from '../src/shared/video-render-comparison'
+import {
+  assertCoverSource,
+  coverOptions,
+  coverPrompt,
+  image2Failure,
+} from '../src/main/services/video-workflow/covers'
+
+test('image2 failures preserve actionable diagnostics and redact credentials', () => {
+  const timeout = image2Failure(new Error('执行超时，请检查 CLI 登录、网络或本地模型'))
+  assert.match(timeout.message, /超时.*15 分钟/)
+  assert.match(timeout.message, /原封面已保留/)
+  const upstream = image2Failure(
+    new Error(
+      'OpenAI edits API error: HTTP 503 upstream unavailable\nAuthorization: Bearer private-token\nOPENAI_API_KEY=another-secret\nsk-exampleSensitiveCredential12345',
+    ),
+  )
+  assert.match(upstream.message, /HTTP 503 upstream unavailable/)
+  for (const secret of ['private-token', 'another-secret', 'sk-exampleSensitiveCredential12345'])
+    assert.ok(!upstream.message.includes(secret))
+  assert.ok(image2Failure(new Error('x'.repeat(20000))).message.length < 5000)
+  assert.match(
+    image2Failure(new Error('Failed to download generated image: connection reset')).message,
+    /图片已生成，但下载失败/,
+  )
+})
+
+test('cover requests bind to final render and include video style, content and feedback', () => {
+  const { db, state, render } = visualFixture()
+  try {
+    state.stages.render = {
+      ...state.stages.audio!,
+      stage: 'render',
+      id: 'final-cover-source',
+      payload: render,
+    }
+    assert.deepEqual(coverOptions({ method: 'code', feedback: ' 放大标题 ' }), {
+      method: 'code',
+      feedback: '放大标题',
+    })
+    assert.throws(() => coverOptions(undefined), /请选择/)
+    assert.throws(() => coverOptions({ method: 'image2', feedback: 'x'.repeat(5001) }), /5000/)
+    const code = coverPrompt(state, { method: 'code', feedback: '保持紫色图解，标题更醒目' })
+    for (const text of [
+      '两镜新内容',
+      'font-family',
+      '第一镜',
+      'feedHtml',
+      'landscapeHtml',
+      '保持紫色图解，标题更醒目',
+      '内容要饱满',
+    ])
+      assert.ok(code.includes(text), text)
+    const image = coverPrompt(state, { method: 'image2' })
+    assert.ok(image.includes('y=150–1050') && image.includes('不能放关键文字'))
+    const cover = {
+      file: render.file,
+      feedFile: render.file,
+      sourceRenderId: 'old-render',
+      method: 'code' as const,
+      createdAt: new Date().toISOString(),
+      feedback: '',
+      width: 1600 as const,
+      height: 900 as const,
+      feedWidth: 1600 as const,
+      feedHeight: 1200 as const,
+    }
+    state.stages.publish = {
+      ...state.stages.audio!,
+      stage: 'publish',
+      payload: {
+        platforms: {
+          bilibili: { title: '标题', description: '', tags: [], cover },
+          douyin: { title: '标题', description: '', tags: [] },
+        },
+      },
+    }
+    assert.throws(() => assertCoverSource(state), /成片已变化/)
+    cover.sourceRenderId = 'final-cover-source'
+    assert.doesNotThrow(() => assertCoverSource(state))
+  } finally {
+    db.close()
+  }
+})
+
+test('publication preserves dual-ratio cover metadata and rejects invalid cover contracts', () => {
+  const file = {
+    id: randomUUID(),
+    path: `media/video-workflow/${randomUUID()}/${randomUUID()}.png`,
+    sha256: 'a'.repeat(64),
+    size: 1000,
+    mime: 'image/png',
+  }
+  const cover = {
+    file,
+    feedFile: { ...file, id: randomUUID() },
+    sourceRenderId: 'final-render',
+    method: 'code',
+    createdAt: '2026-10-26T00:00:00.000Z',
+    feedback: '放大标题',
+    width: 1600,
+    height: 900,
+    feedWidth: 1600,
+    feedHeight: 1200,
+  }
+  const payload = {
+    platforms: {
+      bilibili: { title: 'B站标题', description: '', tags: ['测试'], cover },
+      douyin: { title: '抖音标题', description: '', tags: [] },
+    },
+  }
+  assert.deepEqual(validatePayload('publish', payload).platforms.bilibili.cover, cover)
+  for (const changes of [
+    { width: 1601 },
+    { feedHeight: 900 },
+    { method: 'fake' },
+    { sourceRenderId: '' },
+    { createdAt: 'invalid' },
+    { feedback: 'x'.repeat(5001) },
+    { file: { ...file, mime: 'text/html' } },
+    { file: { ...file, size: 4 * 1024 * 1024 + 1 } },
+  ])
+    assert.throws(
+      () =>
+        validatePayload('publish', {
+          platforms: {
+            ...payload.platforms,
+            bilibili: { ...payload.platforms.bilibili, cover: { ...cover, ...changes } },
+          },
+        }),
+      /封面/,
+    )
+})
 
 test('final render comparison binds to its frozen source instead of the newest roughcut', () => {
   const { db, state, render } = visualFixture()
@@ -3377,6 +3509,32 @@ test('process signal termination preserves stderr diagnostics', async () => {
     (error: Error) => {
       assert.match(error.message, /SIGTERM/)
       assert.match(error.message, /agent diagnostic/)
+      return true
+    },
+  )
+})
+
+test('process timeout retains the last download stage and streams stderr progress', async () => {
+  let progress = ''
+  await assert.rejects(
+    workflowCommand(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('Image generated; downloading image file.');setInterval(()=>{},1000)",
+      ],
+      {
+        cwd: tmpdir(),
+        timeout: 300,
+        onStderr: (text) => {
+          progress += text
+        },
+      },
+    ),
+    (error: Error) => {
+      assert.match(error.message, /超时/)
+      assert.match(error.message, /downloading image file/)
+      assert.match(progress, /downloading image file/)
       return true
     },
   )

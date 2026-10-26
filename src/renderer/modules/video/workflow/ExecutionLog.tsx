@@ -23,6 +23,7 @@ const resultLabels: Record<WorkflowJob['state'], string> = {
 }
 
 function executorName(job: WorkflowJob) {
+  if (job.executor === 'image2') return 'GPT Image 2'
   if (job.operation?.action === 'reuse-roughcut') return '沿用已生成视频'
   if (job.operation?.action === 'reuse-audio') return '沿用已保存配音'
   if (job.operation?.action === 'reuse-narration') return '沿用已保存口播'
@@ -51,6 +52,7 @@ const changeNames: Record<string, string> = {
 }
 
 function taskName(job: WorkflowJob) {
+  if (job.operation?.action === 'generate-cover') return '生成 B 站双比例封面'
   if (job.operation?.action === 'accept-illustration') return '接受原创示意图降级'
   if (job.operation?.action === 'reuse-roughcut') return '取消修改计划并沿用粗剪'
   if (job.operation?.action === 'reuse-audio') return '沿用并审核分段配音'

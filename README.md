@@ -180,6 +180,8 @@ pnpm install
 pnpm dev
 ```
 
+Renderer changes update through HMR. After changing main-process or preload code, save active drafts and restart Electron to load the new backend. For a launchd development session, run `pnpm dev:launchd` again to stop the old instance and start a fresh one.
+
 ### Build
 
 Create production bundles:

@@ -42,6 +42,14 @@ export class WorkflowRuntimeManager {
       hyperframesPath: findExecutable('hyperframes'),
       ffmpegPath: findExecutable('ffmpeg'),
       ffprobePath: findExecutable('ffprobe'),
+      bunPath:
+        findExecutable('bun') ||
+        (existsSync(join(homedir(), '.bun/bin/bun')) ? join(homedir(), '.bun/bin/bun') : ''),
+      image2Path:
+        [
+          join(homedir(), '.codex/skills/baoyu-imagine/scripts/main.ts'),
+          join(homedir(), '.agents/skills/baoyu-imagine/scripts/main.ts'),
+        ].find((path) => existsSync(path)) ?? '',
     }
     if (!existsSync(this.path)) return defaults
     try {

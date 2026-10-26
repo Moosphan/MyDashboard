@@ -539,6 +539,61 @@
   gap: 16px;
   align-items: center;
 }
+.workflow-publication-cover {
+  border-top: 1px solid rgb(var(--color-outline-variant) / 0.3);
+  padding-top: 16px;
+}
+.workflow-cover-content {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.workflow-cover-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.workflow-cover-thumbnail {
+  width: clamp(120px, 28%, 200px);
+  max-width: 100%;
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+.workflow-cover-image {
+  position: relative;
+}
+.workflow-cover-thumbnail img {
+  display: block;
+  width: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+  background: rgb(var(--color-surface-container));
+}
+.workflow-cover-image-actions {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+}
+.workflow-cover-image-actions button {
+  color: white;
+  background: rgb(0 0 0 / 0.48);
+}
+.workflow-cover-preview-frame {
+  max-width: 100%;
+  margin: 16px auto 0;
+  overflow: hidden;
+}
+.workflow-cover-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .workflow-publish-asset img {
   width: 160px;
   aspect-ratio: 16 / 9;

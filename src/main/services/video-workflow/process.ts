@@ -10,6 +10,7 @@ export function workflowCommand(
     input?: string
     timeout?: number
     onOutput?: (text: string) => void
+    onStderr?: (text: string) => void
     nodePath?: string
   },
 ): Promise<string> {
@@ -73,6 +74,7 @@ export function workflowCommand(
     })
     child.stderr.on('data', (data) => {
       errors = (errors + data.toString()).slice(-8000)
+      options.onStderr?.(data.toString())
     })
     child.stdin.on('error', () => {})
     child.stdin.end(options.input ?? '')
@@ -84,7 +86,12 @@ export function workflowCommand(
       clearTimeout(timer)
       clearTimeout(force)
       options.signal?.removeEventListener('abort', abort)
-      if (failure) reject(failure)
+      if (failure)
+        reject(
+          new Error(
+            `${failure.message}${errors && !options.signal?.aborted ? `\n${errors.trim()}` : ''}`,
+          ),
+        )
       else if (signal || code !== 0) {
         const reason = signal ? `CLI 被 ${signal} 信号终止` : `CLI 退出码 ${code ?? '未知'}`
         const guidance =

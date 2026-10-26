@@ -82,6 +82,12 @@
 
 ### VIDEO-WORKFLOW-001：视频创作工作流（2026-10-22）
 
+封面紧凑布局与预览纠偏（2026-10-26 用户最新截图授权）：`PublicationCoverPanel.tsx`、`workflow.css` 将方式/短说明合并一行，缩略图与意见并排（预览宽 120–200px 随可用宽度调整，空间不足换行），覆盖前一稿通栏布局。修复原截帧被强制置于 4:3 框产生的补边，标记来源/像素，并始终允许预览切换；原截帧 4:3 仅裁切预览并明示不改投稿文件。缩略图及弹窗各用现有 Button ghost/icon 增加文件定位，复用受管 `showFile` IPC、错误反馈和 Heroicons 2.2.0 outline 的 FolderOpenIcon。沿用既有主题与控件例外，不改变审核和底部动作；责任及迁移退出里程碑同本条。验证见封面验证文档最新修订。
+
+封面建议输入框排版修订（2026-10-26 用户截图授权）：`PublicationCoverPanel.tsx` 将修改建议移出预览右侧栏，独立置于预览与生成方式行下方，铺满主栏宽度并对齐标题左缘，消除左侧留白；复用原 VoiceTextArea、主题、间距及禁用/输入状态，不新增样式或控件。负责人及 HeroUI 迁移退出里程碑沿用本例外。验证见封面验证文档的排版修订记录。
+
+封面生成增量（2026-10-26 用户授权）：`PublicationCoverPanel.tsx`、`MediaPanels.tsx`、`StageWorkspace.tsx`、`WorkflowSettings.tsx`、`ExecutionLog.tsx` 与 `workflow.css` 沿用本条已批准 React 18 / Radix / Button / Voice 字段 / WorkflowDialog 和项目主题。新封面区复用既有主栏，保留原共用视频缩略图尺寸、审核和底部操作位置；业务缩略图使用 200px 宽，放大入口为既有 40px icon Button，HeroUI 缺少的放大业务图标用 Heroicons 2.2.0 outline。支持两种生成方式、修改意见、历史预览/选用、明暗主题和键盘，不引入新控件库、主题或断点。负责人为项目维护者，退出里程碑为 Video 工作流 HeroUI 3.2.6 迁移。验证及平台能力边界见 [封面验证](video-workflow-publication-cover-verification.md)。
+
 - B 站一键发布（2026-10-24 用户授权）：`BilibiliPublishingPanel.tsx`、`MediaPanels.tsx`、`WorkflowSettings.tsx` 复用当前 Button、VoiceInput/VoiceSelect、Radix WorkflowDialog、主题及既有信息顺序，加入账号扫码、显式投稿设置、投稿记录与核查。无新增 UI 依赖、样式、图标或主布局变更；保留原审核/手工导出/抖音。负责人为项目维护者，退出里程碑沿用工作流 HeroUI 生产迁移。验证见 [B 站发布验证](video-workflow-bilibili-publishing-verification.md)。
 
 - 粗剪动画修改与分镜定位（2026-10-24 用户授权）：`MediaPanels.tsx` 使用统一的实测分镜时间轴与视频帧定位，修复跳回上一镜；`RenderActions.tsx` 沿用原说明位置解释可修改的动画范围及预览来源。继续使用已批准的 React 18/Radix、原生播放器、主题与分栏，不新增控件、样式、图标或依赖。负责人和 HeroUI 迁移退出里程碑沿用本例外。验证见 [粗剪动画修改与分镜定位验证](video-workflow-motion-seek-verification.md)。
@@ -132,6 +138,8 @@
 - 主题：正确的on-\*配对，文字4.5:1、功能边界3:1；检查状态层叠加后的实际颜色。
 - 业务：模型切换、音色导入与转写、任务生成/取消、试听/导出、订阅增改删、会话与数据刷新。
 - 截图：组件工作台、代表页面、全部受影响的高风险弹窗；记录版本与密度。
+
+`VIDEO-WORKFLOW-001` 封面生成弹窗修订（2026-10-26 用户授权）：`PublicationCoverPanel.tsx` 将生成方式、费用说明和修改建议收进既有 `WorkflowDialog`，主区仅保留缩略图、状态、规格与历史选用，复用 Button / Voice 控件和既有主题。打开或取消不启动任务，关闭保留建议，启动失败可重试，成功后关闭；两个弹窗均有焦点返回。紧凑摘要限定在主栏内，保留右栏、审核和底部布局。沿用本例外的负责人及 HeroUI 迁移退出里程碑，验证见 [封面验证](video-workflow-publication-cover-verification.md)。
 
 ## 5. 后续CI建议
 

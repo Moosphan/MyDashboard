@@ -756,7 +756,23 @@ export function StageWorkspace({
                       setPublishFeedback((current) => ({ ...current, [publishPlatform]: value }))
                     }
                     canGenerate={unlocked && !busy && !running && !draft.dirty && !draft.conflict}
-                    generating={running?.stage === 'publish'}
+                    generating={
+                      running?.stage === 'publish' && running.operation?.action !== 'generate-cover'
+                    }
+                    coverGenerating={running?.operation?.action === 'generate-cover'}
+                    onCoverGenerate={(cover) => {
+                      return run(async () => {
+                        await workflowCall('generate', {
+                          projectId: project.id,
+                          stage: 'publish',
+                          expectedRevision: project.revision,
+                          requestId: crypto.randomUUID(),
+                          executor,
+                          cover,
+                        })
+                        await refresh()
+                      }, '封面任务已启动，进度见执行记录')
+                    }}
                     dirty={draft.dirty}
                     onGenerate={() => void generate()}
                     value={draft.payload as StagePayloads['publish']}

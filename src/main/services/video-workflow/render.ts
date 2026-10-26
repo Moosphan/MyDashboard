@@ -77,6 +77,7 @@ export async function captureStoryboard(
   html: string,
   signal: AbortSignal,
   label = '',
+  viewport = { width: 1920, height: 1080 },
 ): Promise<Buffer> {
   let lastError: Error | undefined
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -89,8 +90,8 @@ export async function captureStoryboard(
     )
     const window = new BrowserWindow({
       show: false,
-      width: 1920,
-      height: 1080,
+      width: viewport.width,
+      height: viewport.height,
       useContentSize: true,
       webPreferences: {
         session: isolated,
@@ -116,9 +117,9 @@ export async function captureStoryboard(
       )
       signal.throwIfAborted()
       await delay(attempt ? 120 : 50, undefined, { signal })
-      const image = await window.webContents.capturePage({ x: 0, y: 0, width: 1920, height: 1080 })
+      const image = await window.webContents.capturePage({ x: 0, y: 0, ...viewport })
       if (image.isEmpty()) throw new Error('截图画面为空')
-      return image.resize({ width: 1920, height: 1080 }).toPNG()
+      return image.resize(viewport).toPNG()
     } catch (error) {
       if (signal.aborted) throw error
       lastError = error as Error

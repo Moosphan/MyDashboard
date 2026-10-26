@@ -30,6 +30,7 @@ import {
   CatbusFailure,
 } from './catbus'
 import { PublishingAccounts, publishingAccountHome } from './bilibili-accounts'
+import { assertCoverSource, verifyCoverImages } from './covers'
 
 type SubmissionRow = { record: string; request_fingerprint: string }
 const RETRYABLE = ['failed', 'needs_auth', 'cancelled']
@@ -320,6 +321,7 @@ export class PlatformPublishingService {
     )
       throw new Error('转载必须填写来源，最多 2000 字符')
     const project = this.projects.get(input.projectId)
+    assertCoverSource(project)
     if (project.revision !== input.expectedRevision) throw new Error('项目已更新，请刷新后重试')
     if (project.stages.publish?.status !== 'approved' || !stageUnlocked(project, 'publish'))
       throw new Error('请先审核通过正式成片与发布资料')
@@ -339,7 +341,7 @@ export class PlatformPublishingService {
       renderRevisionId: project.stages.render!.id,
       publishRevisionId: project.stages.publish.id,
       video: render.file,
-      cover: render.cover,
+      cover: metadata.cover?.file ?? render.cover,
       metadata,
       accountUid: input.accountUid,
       category: this.platform === 'bilibili' ? input.category : '',
@@ -428,6 +430,7 @@ export class PlatformPublishingService {
       const video = await this.files.verify(record.projectId, record.snapshot.video),
         cover = await this.files.verify(record.projectId, record.snapshot.cover)
       const current = this.projects.get(record.projectId)
+      await verifyCoverImages(current, this.files)
       if (
         current.stages.render?.id !== record.snapshot.renderRevisionId ||
         current.stages.publish?.id !== record.snapshot.publishRevisionId ||

@@ -20,6 +20,7 @@ import {
   type WorkflowFile,
   validateMotionPlan,
   type PublicationGeneration,
+  type CoverGeneration,
   audioSourceRevisions,
   canReuseAudio,
   storyboardMotionReadiness,
@@ -54,6 +55,7 @@ import { publicationBase, publicationOptions, publicationPrompt } from './publis
 import { copyFeedback, copyPrompt } from './copy'
 import { PlatformPublishingService } from './bilibili'
 import type { BilibiliCategory } from '../../../shared/bilibili-publishing'
+import { coverOptions, generatePublicationCover, verifyCoverImages } from './covers'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -68,6 +70,7 @@ export interface WorkflowGeneration {
   storyboardModification?: { feedback: string; sceneId: string }
   motionPlanJobId?: string
   publication?: PublicationGeneration
+  cover?: CoverGeneration
   copyFeedback?: string
   audioTrackId?: string
   reuseNarration?: boolean
@@ -139,6 +142,7 @@ export class VideoWorkflowService {
     for (const dependency of VIDEO_STAGES.slice(0, index + (includeCurrent ? 1 : 0)))
       if (project.stages[dependency])
         await this.files.verifyPayload(projectId, project.stages[dependency]!.payload)
+    if (stage === 'publish' && includeCurrent) await verifyCoverImages(project, this.files)
   }
   async save(
     projectId: string,
@@ -158,6 +162,19 @@ export class VideoWorkflowService {
     if (stage === 'storyboard')
       await verifyStoryboardMotion(validated as StoryboardPayload, new AbortController().signal)
     await this.files.verifyPayload(projectId, validated)
+    if (stage === 'publish') {
+      const project = this.repository.get(projectId)
+      await verifyCoverImages(
+        {
+          ...project,
+          stages: {
+            ...project.stages,
+            publish: { ...project.stages.publish!, payload: validated },
+          },
+        },
+        this.files,
+      )
+    }
     await this.verifyInputs(projectId, stage)
     this.repository.save(projectId, stage, validated, expected, requestId)
     return this.notify(projectId)
@@ -391,7 +408,15 @@ export class VideoWorkflowService {
     )
       throw new Error('存在待确认的动效计划，请点击确认计划，生成粗剪')
     const publication =
-      input.stage === 'publish' ? publicationOptions(input.publication) : undefined
+      input.stage === 'publish' && !input.cover ? publicationOptions(input.publication) : undefined
+    const cover = input.cover ? coverOptions(input.cover) : undefined
+    if (cover && (input.stage !== 'publish' || input.publication || imports))
+      throw new Error('封面生成仅用于平台发布阶段，请单独提交')
+    if (cover?.method === 'image2') {
+      const runtime = this.runtime.get()
+      if (!runtime.image2Path || !runtime.bunPath)
+        throw new Error('请在执行环境配置 Image2 脚本和 Bun 路径，再生成封面')
+    }
     const feedback = input.stage === 'copy' ? copyFeedback(input.copyFeedback) : undefined
     await this.verifyInputs(project.id, input.stage, Boolean(input.audioTrackId), motionProject)
     if ((input.modification || input.motionPlanJobId) && input.stage !== 'roughcut')
@@ -460,20 +485,27 @@ export class VideoWorkflowService {
       input.stage,
       input.expectedRevision,
       input.requestId,
-      imports ? 'manual-audio' : input.executor,
+      imports ? 'manual-audio' : cover?.method === 'image2' ? 'image2' : input.executor,
       fingerprint({ ...input, imports }),
-      input.reuseNarration
-        ? { action: 'reuse-narration', sourceVersion: project.stages.narration?.version }
-        : input.sceneId
-          ? {
-              action: 'scene-generate',
-              sceneId: input.sceneId,
-              sceneTitle: storyboard?.scenes.find((scene) => scene.id === input.sceneId)?.title,
-              sceneNumber: storyboard!.scenes.findIndex((scene) => scene.id === input.sceneId) + 1,
-              feedback: input.storyboardModification?.feedback,
-              sourceVersion: project.stages[input.stage]?.version,
-            }
-          : undefined,
+      cover
+        ? {
+            action: 'generate-cover',
+            feedback: cover.feedback,
+            sourceVersion: project.stages.publish?.version,
+          }
+        : input.reuseNarration
+          ? { action: 'reuse-narration', sourceVersion: project.stages.narration?.version }
+          : input.sceneId
+            ? {
+                action: 'scene-generate',
+                sceneId: input.sceneId,
+                sceneTitle: storyboard?.scenes.find((scene) => scene.id === input.sceneId)?.title,
+                sceneNumber:
+                  storyboard!.scenes.findIndex((scene) => scene.id === input.sceneId) + 1,
+                feedback: input.storyboardModification?.feedback,
+                sourceVersion: project.stages[input.stage]?.version,
+              }
+            : undefined,
     )
     if (job.state !== 'running' || this.running.has(job.id)) return job
     if (input.modification) this.repository.markMotionJob(job.id)
@@ -541,6 +573,25 @@ export class VideoWorkflowService {
           controller.signal.throwIfAborted()
           this.repository.finishMotionPlan(job.id, plan)
           return
+        } else if (cover) {
+          const generated = await generatePublicationCover({
+            project,
+            options: cover,
+            executor: input.executor as 'codex' | 'claude',
+            runtime,
+            cwd,
+            files: this.files,
+            signal: controller.signal,
+            phase,
+          })
+          controller.signal.throwIfAborted()
+          const base = publicationBase(project)
+          payload = validatePayload('publish', {
+            platforms: {
+              ...base.platforms,
+              bilibili: { ...base.platforms.bilibili, cover: generated },
+            },
+          })
         } else if (publication) {
           let categories: BilibiliCategory[] = []
           if (publication.platform === 'bilibili') {
@@ -560,7 +611,13 @@ export class VideoWorkflowService {
           )
           phase('校验发布资料与投稿设置，保存待审核版本')
           const publicationPayload = validatePayload('publish', {
-            platforms: { ...publicationBase(project).platforms, [publication.platform]: metadata },
+            platforms: {
+              ...publicationBase(project).platforms,
+              [publication.platform]: {
+                ...(metadata as Record<string, unknown>),
+                cover: publicationBase(project).platforms[publication.platform].cover,
+              },
+            },
           })
           payload = publicationPayload
           const settings = publicationPayload.platforms[publication.platform].submission
@@ -1048,10 +1105,15 @@ export class VideoWorkflowService {
     try {
       for (const [name, file] of [
         ['video.mp4', render.file],
-        ['cover.png', render.cover],
+        ['cover.png', metadata.cover?.file ?? render.cover],
         ['subtitles.srt', audio.subtitles],
       ] as const)
         copyFileSync(await this.files.verify(projectId, file), join(directory, name))
+      if (metadata.cover)
+        copyFileSync(
+          await this.files.verify(projectId, metadata.cover.feedFile),
+          join(directory, 'cover-4x3.png'),
+        )
       writeFileSync(join(directory, 'metadata.json'), JSON.stringify(metadata, null, 2))
       writeFileSync(
         join(directory, 'manifest.json'),
@@ -1071,7 +1133,11 @@ export class VideoWorkflowService {
       )
       writeFileSync(
         join(directory, 'README.txt'),
-        '请手动上传 video.mp4，并使用 cover.png、metadata.json 和 subtitles.srt。上传成功后，将发布链接回填到 MyDashboard。导出发布包不代表平台发布成功。',
+        '请手动上传 video.mp4，并使用 cover.png、metadata.json 和 subtitles.srt。' +
+          (metadata.cover
+            ? '\ncover.png 为 1600×900（16:9）个人空间封面；cover-4x3.png 为 1600×1200（4:3）首页推荐封面，请在创作中心分别设置。\n'
+            : '') +
+          '上传成功后，将发布链接回填到 MyDashboard。导出发布包不代表平台发布成功。',
       )
       this.repository.publication(
         projectId,

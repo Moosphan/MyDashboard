@@ -151,11 +151,29 @@ export interface PublicationGeneration {
   platform: VideoPlatform
   feedback?: string
 }
+export interface PublicationCover {
+  file: WorkflowFile
+  feedFile: WorkflowFile
+  designFile?: WorkflowFile
+  sourceRenderId: string
+  method: 'code' | 'image2'
+  createdAt: string
+  feedback: string
+  width: 1600
+  height: 900
+  feedWidth: 1600
+  feedHeight: 1200
+}
+export interface CoverGeneration {
+  method: PublicationCover['method']
+  feedback?: string
+}
 export interface PlatformMetadata {
   title: string
   description: string
   tags: string[]
   submission?: PublicationSubmission
+  cover?: PublicationCover
 }
 export interface PublicationSubmission {
   category: string
@@ -196,6 +214,7 @@ export interface WorkflowOperation {
     | 'reuse-audio'
     | 'reuse-roughcut'
     | 'accept-illustration'
+    | 'generate-cover'
   sceneId?: string
   sceneTitle?: string
   sceneNumber?: number
@@ -251,6 +270,8 @@ export interface WorkflowRuntime {
   hyperframesPath: string
   ffmpegPath: string
   ffprobePath: string
+  image2Path?: string
+  bunPath?: string
 }
 export function stageValue<Stage extends VideoStage>(
   project: VideoProject,
@@ -574,11 +595,53 @@ export function validatePayload<Stage extends VideoStage>(
         description: typeof item.description === 'string' ? item.description : '',
         tags,
         ...(submission ? { submission } : {}),
+        ...(item.cover !== undefined ? { cover: validatePublicationCover(item.cover) } : {}),
       }
     }
     output = { platforms: { bilibili: metadata('bilibili'), douyin: metadata('douyin') } }
   }
   return output as StagePayloads[Stage]
+}
+
+export function validatePublicationCover(value: unknown): PublicationCover {
+  const input = record(value)
+  if (
+    !['code', 'image2'].includes(String(input.method)) ||
+    input.width !== 1600 ||
+    input.height !== 900 ||
+    input.feedWidth !== 1600 ||
+    input.feedHeight !== 1200 ||
+    typeof input.sourceRenderId !== 'string' ||
+    !input.sourceRenderId.trim() ||
+    input.sourceRenderId.length > 80 ||
+    typeof input.createdAt !== 'string' ||
+    !Number.isFinite(Date.parse(input.createdAt)) ||
+    typeof input.feedback !== 'string' ||
+    input.feedback.length > 5000
+  )
+    throw new Error('封面参数无效，请重新生成')
+  const checkedFile = (value: unknown) => {
+    const checked = file(value)
+    if (checked.mime !== 'image/png' || checked.size > 4 * 1024 * 1024)
+      throw new Error('封面必须是 4 MiB 以内的 PNG 图片')
+    return checked
+  }
+  const designFile = input.designFile === undefined ? undefined : file(input.designFile)
+  if (designFile && (designFile.mime !== 'application/json' || designFile.size > 1024 * 1024))
+    throw new Error('封面设计源文件无效')
+  return {
+    file: checkedFile(input.file),
+    feedFile: checkedFile(input.feedFile),
+    ...(designFile ? { designFile } : {}),
+    sourceRenderId: input.sourceRenderId,
+    method: input.method as PublicationCover['method'],
+    createdAt: input.createdAt,
+    feedback: input.feedback,
+    width: 1600,
+    height: 900,
+    feedWidth: 1600,
+    feedHeight: 1200,
+  }
 }
 
 export function validateMotionPlan(

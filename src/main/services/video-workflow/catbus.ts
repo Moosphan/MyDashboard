@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { pathToFileURL } from 'node:url'
 import {
   type BilibiliCategory,
   type BilibiliPublishSnapshot,
@@ -9,6 +10,7 @@ import type { VideoPlatform, WorkflowRuntime } from '../../../shared/video-workf
 import { PUBLISHING_PLATFORMS, validPublishingUid } from '../../../shared/platform-publishing'
 import { catbusProcess } from './catbus-process'
 import { publishingAccountHome } from './bilibili-accounts'
+import { douyinTopicPreload } from './douyin-topics'
 
 const MESSAGES: Record<string, string> = {
   AUTH_REQUIRED: '请先扫码连接 B 站账号',
@@ -23,6 +25,8 @@ const MESSAGES: Record<string, string> = {
   CANCELLED: '操作已停止；已提交的稿件不会被自动撤回',
   OUTPUT_LIMIT: 'CLI 输出异常，操作已停止',
   INVALID_RESPONSE: 'CLI 未返回有效回执，请核查平台投稿结果',
+  TOPIC_INVALID: '抖音话题名称不能包含空格、# 或 @，请修改标签并重新审核',
+  TOPIC_UNSUPPORTED: '当前 Catbus 文件不兼容抖音话题适配，已停止投稿，请配置原版 Catbus 0.2.1',
 }
 export class CatbusFailure extends Error {
   constructor(
@@ -107,7 +111,12 @@ export class CatbusPublishingClient {
     )
     mkdirSync(this.home, { recursive: true, mode: 0o700 })
   }
-  private async run(args: string[], signal?: AbortSignal, progress?: (text: string) => void) {
+  private async run(
+    args: string[],
+    signal?: AbortSignal,
+    progress?: (text: string) => void,
+    metadata?: BilibiliPublishSnapshot['metadata'],
+  ) {
     const configured = this.runtime.catbusPath
     if (
       !configured ||
@@ -121,10 +130,26 @@ export class CatbusPublishingClient {
     if (/\.cmd$/i.test(entry))
       entry = join(dirname(entry), 'node_modules', 'catbus-cli', 'dist', 'cli', 'main.js')
     let result: { code: number | null; stdout: string }
+    let preload: string | undefined
     try {
-      result = await catbusProcess(this.runtime.nodePath, entry, args, this.home, signal, progress)
+      if (metadata && this.platform === 'douyin' && metadata.tags.length) {
+        const source = douyinTopicPreload(entry, metadata)
+        preload = join(this.home, `topics-${randomUUID()}.mjs`)
+        writeFileSync(preload, source, { mode: 0o600 })
+      }
+      result = await catbusProcess(
+        this.runtime.nodePath,
+        entry,
+        args,
+        this.home,
+        signal,
+        progress,
+        preload ? pathToFileURL(preload).href : undefined,
+      )
     } catch (error) {
       throw new CatbusFailure((error as Error).message, this.platform)
+    } finally {
+      if (preload) rmSync(preload, { force: true })
     }
     let envelope: Record<string, unknown>
     try {
@@ -166,6 +191,7 @@ export class CatbusPublishingClient {
     args: string[] = [],
     signal?: AbortSignal,
     progress?: (text: string) => void,
+    metadata?: BilibiliPublishSnapshot['metadata'],
   ) {
     await this.check(signal)
     return this.run(
@@ -183,6 +209,7 @@ export class CatbusPublishingClient {
       ],
       signal,
       progress,
+      metadata,
     )
   }
   async account(signal?: AbortSignal) {
@@ -252,6 +279,7 @@ export class CatbusPublishingClient {
           ],
           signal,
           progress,
+          snapshot.metadata,
         ),
       )
       if (

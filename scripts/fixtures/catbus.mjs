@@ -65,6 +65,21 @@ else if (action === 'publish') {
   fs.appendFileSync(path.join(root, 'calls'), JSON.stringify(args) + '\n')
   const description = fs.readFileSync(args[args.indexOf('--text') + 1].slice(1), 'utf8')
   fs.writeFileSync(path.join(root, 'description'), description)
+  const creator = new URL('../platforms/douyin/web/creator.js', import.meta.url)
+  if (platform === 'douyin' && fs.existsSync(creator)) {
+    const { videoItem } = await import(creator.href)
+    const tags = args.flatMap((arg, index) => (arg === '--tag' ? [args[index + 1]] : []))
+    const options = {
+      title: args[args.indexOf('--title') + 1],
+      desc: [description, ...tags.map((tag) => '#' + tag.replace(/^#/, ''))]
+        .filter(Boolean)
+        .join(' '),
+    }
+    fs.writeFileSync(
+      path.join(root, 'publish-body'),
+      JSON.stringify(videoItem({}, '', options, '').item.common),
+    )
+  }
   if (mode === 'slow') await new Promise((resolve) => setTimeout(resolve, 900))
   if (['network', 'risk'].includes(mode)) {
     console.log(

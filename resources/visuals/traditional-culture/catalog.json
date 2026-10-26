@@ -1,0 +1,132 @@
+{
+  "version": 1,
+  "dimensions": {
+    "width": 1000,
+    "height": 800
+  },
+  "background": "transparent",
+  "palettes": {
+    "ochre": {
+      "name": "淡赭设色",
+      "ink": "#4b4033",
+      "fine": "#766047",
+      "wash": "#a58250",
+      "accent": "#8b4936",
+      "pale": "#d8bf94"
+    },
+    "ink": {
+      "name": "焦墨线描",
+      "ink": "#443e34",
+      "fine": "#6b6253",
+      "wash": "#887b65",
+      "accent": "#51483a",
+      "pale": "#d3c5a7"
+    },
+    "cinnabar": {
+      "name": "朱砂古印",
+      "ink": "#6c382c",
+      "fine": "#945a43",
+      "wash": "#ad7550",
+      "accent": "#8e3d2c",
+      "pale": "#d9b58b"
+    }
+  },
+  "assets": [
+    {
+      "id": "pagoda",
+      "name": "古塔 · 层檐听风",
+      "category": "建筑",
+      "summary": "层檐、铃铎、塔身、台基独立分组",
+      "placement": "卷首右侧 / 章节标识",
+      "files": {
+        "ochre": "ochre/pagoda.svg",
+        "ink": "ink/pagoda.svg",
+        "cinnabar": "cinnabar/pagoda.svg"
+      }
+    },
+    {
+      "id": "temple",
+      "name": "寺院 · 一檐清境",
+      "category": "建筑",
+      "summary": "重檐主殿、两侧配殿、香炉与石阶",
+      "placement": "建筑解读 / 页底主视觉",
+      "files": {
+        "ochre": "ochre/temple.svg",
+        "ink": "ink/temple.svg",
+        "cinnabar": "cinnabar/temple.svg"
+      }
+    },
+    {
+      "id": "palace",
+      "name": "宫阙 · 重檐有序",
+      "category": "建筑",
+      "summary": "重檐屋顶、斗栱、柱列与台基栏杆",
+      "placement": "王朝主题 / 通栏插画",
+      "files": {
+        "ochre": "ochre/palace.svg",
+        "ink": "ink/palace.svg",
+        "cinnabar": "cinnabar/palace.svg"
+      }
+    },
+    {
+      "id": "mountains",
+      "name": "山川 · 千岩叠翠",
+      "category": "山水",
+      "summary": "远、中、近三层山脊与留白云带",
+      "placement": "页底压景 / 章节过渡",
+      "files": {
+        "ochre": "ochre/mountains.svg",
+        "ink": "ink/mountains.svg",
+        "cinnabar": "cinnabar/mountains.svg"
+      }
+    },
+    {
+      "id": "bridge",
+      "name": "石桥 · 一水相逢",
+      "category": "园林",
+      "summary": "拱券、砌石、栏杆与水纹独立分组",
+      "placement": "交流主题 / 横向点景",
+      "files": {
+        "ochre": "ochre/bridge.svg",
+        "ink": "ink/bridge.svg",
+        "cinnabar": "cinnabar/bridge.svg"
+      }
+    },
+    {
+      "id": "moon-gate",
+      "name": "月洞 · 借景入画",
+      "category": "园林",
+      "summary": "月洞门、砖墙、竹叶与铺地",
+      "placement": "引文侧景 / 传统园林",
+      "files": {
+        "ochre": "ochre/moon-gate.svg",
+        "ink": "ink/moon-gate.svg",
+        "cinnabar": "cinnabar/moon-gate.svg"
+      }
+    },
+    {
+      "id": "pine",
+      "name": "古松 · 松风入卷",
+      "category": "植物",
+      "summary": "枝干、皴线与六簇针叶",
+      "placement": "页角装饰 / 题跋陪衬",
+      "files": {
+        "ochre": "ochre/pine.svg",
+        "ink": "ink/pine.svg",
+        "cinnabar": "cinnabar/pine.svg"
+      }
+    },
+    {
+      "id": "clouds",
+      "name": "祥云 · 云起东方",
+      "category": "纹样",
+      "summary": "三组如意云与日轮，低密度装饰",
+      "placement": "标题陪衬 / 留白收束",
+      "files": {
+        "ochre": "ochre/clouds.svg",
+        "ink": "ink/clouds.svg",
+        "cinnabar": "cinnabar/clouds.svg"
+      }
+    }
+  ]
+}

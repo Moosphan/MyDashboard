@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { FolderOpenIcon } from '@heroicons/react/24/outline'
 import { Button } from '@/components/ui/button'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   VoiceInput,
   VoiceTextArea,
   VoiceSlider,
@@ -19,6 +26,8 @@ import {
   type PublishPayload,
   type VideoPlatform,
   type RenderPayload,
+  type RenderMusic,
+  type MusicSearchResult,
   type StoryboardPayload,
   type AudioPayload,
   type StagePayloads,
@@ -411,6 +420,443 @@ export function AudioPanel({
     </div>
   )
 }
+
+function MusicPanel({
+  project,
+  render,
+  disabled,
+  onApply,
+}: {
+  project: VideoProject
+  render: RenderPayload
+  disabled: boolean
+  onApply: (music?: RenderMusic) => Promise<boolean>
+}) {
+  const [music, setMusic] = useState<RenderMusic | undefined>(render.music)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<MusicSearchResult[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [sourceDuration, setSourceDuration] = useState<number | undefined>()
+  const [open, setOpen] = useState(false)
+  const [imported, setImported] = useState<RenderMusic[]>([])
+  const manageButton = useRef<HTMLButtonElement>(null)
+  const renderFileId = useRef(render.file.id)
+  const choices = new Map<string, RenderMusic>()
+  for (const revision of project.history) {
+    if (revision.stage !== 'render') continue
+    const previous = (revision.payload as RenderPayload).music
+    if (previous) choices.set(previous.file.id, previous)
+  }
+  if (render.music) choices.set(render.music.file.id, render.music)
+  for (const item of imported) choices.set(item.file.id, item)
+  if (music) choices.set(music.file.id, music)
+  const changed = JSON.stringify(music) !== JSON.stringify(render.music)
+  useEffect(() => {
+    if (renderFileId.current === render.file.id) return
+    renderFileId.current = render.file.id
+    setMusic(render.music)
+    setOpen(false)
+    setSourceDuration(undefined)
+    setResults([])
+    setError('')
+  }, [render.file.id, render.music])
+  const update = (changes: Partial<RenderMusic>) => {
+    if (!music) return
+    const selected = { ...music, ...changes }
+    setMusic(selected)
+    setImported((current) => [
+      ...current.filter((item) => item.file.id !== selected.file.id),
+      selected,
+    ])
+  }
+  const openLibrary = async (url: string) => {
+    try {
+      await window.electronAPI.openExternal(url)
+    } catch (failure) {
+      setError(`无法打开曲库：${(failure as Error).message}`)
+    }
+  }
+  const chooseLocal = async () => {
+    const targetRender = render.file.id
+    setBusy(true)
+    setError('')
+    try {
+      const asset = await workflowCall<{
+        file: RenderMusic['file']
+        title: string
+        source: 'local'
+      } | null>('importMusic', project.id)
+      if (asset) {
+        const selected: RenderMusic = {
+          file: asset.file,
+          title: asset.title,
+          source: 'local',
+          start: 0,
+          duration: render.duration,
+          volume: 0.25,
+          playbackRate: 1,
+        }
+        setImported((current) => [...current, selected])
+        if (renderFileId.current === targetRender) {
+          setMusic(selected)
+          setSourceDuration(undefined)
+        }
+      }
+    } catch (failure) {
+      if (renderFileId.current === targetRender) setError((failure as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const search = async () => {
+    const targetRender = render.file.id
+    setBusy(true)
+    setError('')
+    try {
+      const found = await workflowCall<MusicSearchResult[]>('searchMusic', query)
+      if (renderFileId.current === targetRender) setResults(found)
+    } catch (failure) {
+      if (renderFileId.current === targetRender) setError((failure as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const applyOnline = async (result: MusicSearchResult) => {
+    const targetRender = render.file.id
+    setBusy(true)
+    setError('')
+    try {
+      const asset = await workflowCall<{
+        file: RenderMusic['file']
+        title: string
+        sourceUrl: string
+        license: string
+        author: string
+      }>('downloadMusic', project.id, result)
+      const selected: RenderMusic = {
+        file: asset.file,
+        title: asset.title,
+        source: 'openverse',
+        sourceUrl: asset.sourceUrl,
+        license: asset.license,
+        author: asset.author,
+        start: 0,
+        duration: Math.min(render.duration, result.duration ?? render.duration),
+        volume: 0.25,
+        playbackRate: 1,
+      }
+      setImported((current) => [...current, selected])
+      if (renderFileId.current === targetRender) {
+        setMusic(selected)
+        setSourceDuration(undefined)
+      }
+    } catch (failure) {
+      if (renderFileId.current === targetRender) setError((failure as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const apply = async () => {
+    if (disabled || busy || !changed) return
+    setBusy(true)
+    setError('')
+    try {
+      if (await onApply(music)) setOpen(false)
+      else setError('配乐未能应用，已保留选择和参数。请查看执行记录后重试。')
+    } catch (failure) {
+      setError((failure as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <section className="workflow-divider workflow-section" data-music-summary aria-label="成片配乐">
+      <div className="workflow-toolbar">
+        <div className="min-w-0">
+          <strong className="text-body-sm block truncate">
+            配乐 · {render.music?.title ?? '未添加'}
+          </strong>
+          <p className="workflow-muted">
+            {render.music
+              ? `${Math.round(render.music.volume * 100)}% 音量 · ${render.music.playbackRate.toFixed(2)}× · ${render.music.duration.toFixed(1)} 秒`
+              : '可选择本地或在线音频，为成片添加背景音乐。'}
+            {changed && <span role="status"> · 当前选择尚未应用</span>}
+          </p>
+        </div>
+        <Button ref={manageButton} size="sm" variant="secondary" onClick={() => setOpen(true)}>
+          管理配乐
+        </Button>
+      </div>
+      {choices.size > 0 && (
+        <div className="workflow-actions">
+          <Select
+            value={music?.file.id ?? 'none'}
+            disabled={disabled || busy}
+            onValueChange={(value) => {
+              setMusic(choices.get(value))
+              setSourceDuration(undefined)
+              setError('')
+            }}
+          >
+            <SelectTrigger
+              size="sm"
+              className="min-w-0 flex-1 [&>span:first-child]:truncate [&>span:last-child]:rotate-90"
+              aria-label="选择成片配乐"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">无配乐</SelectItem>
+              {[...choices.values()].map((item) => (
+                <SelectItem key={item.file.id} value={item.file.id}>
+                  {item.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {changed && (
+            <Button size="sm" disabled={disabled || busy} onClick={() => void apply()}>
+              {busy ? '应用中…' : '应用选择'}
+            </Button>
+          )}
+        </div>
+      )}
+      {error && !open && (
+        <p className="workflow-error" role="alert">
+          {error}
+        </p>
+      )}
+      <WorkflowDialog
+        open={open}
+        onOpenChange={setOpen}
+        returnFocus={manageButton}
+        title="管理配乐"
+        description="统一选择、试听和调整配乐。关闭保留本次编辑；应用后重新渲染为待审核成片。配音语速仍在分段配音阶段调整。"
+        footer={
+          <>
+            <Button size="sm" variant="secondary" onClick={() => setOpen(false)}>
+              返回成片
+            </Button>
+            <Button size="sm" disabled={disabled || busy || !changed} onClick={() => void apply()}>
+              {busy ? '处理中…' : music ? '应用配乐并重新渲染' : '移除配乐并重新渲染'}
+            </Button>
+          </>
+        }
+      >
+        <div className="workflow-section">
+          {disabled && (
+            <p className="workflow-muted" role="status">
+              当前配乐为只读预览；请返回当前版本并等待正在执行的任务结束后编辑。
+            </p>
+          )}
+          <div className="workflow-actions">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={disabled || busy}
+              onClick={() => void chooseLocal()}
+            >
+              选择本地音频
+            </Button>
+            <span className="workflow-muted">支持 MP3、WAV、M4A、OGG、FLAC</span>
+          </div>
+          <div className="workflow-section" aria-label="国内配乐曲库">
+            <strong className="text-body-sm">国内曲库</strong>
+            <p className="workflow-muted">
+              爱给网可筛选中文配乐素材；100Audio、猴子音悦提供国风、古风和器乐等版权音乐。前往官网选曲并取得所需授权，下载后选择上方“选择本地音频”导入。
+            </p>
+            <div className="workflow-actions">
+              {[
+                { name: '爱给网', url: 'https://www.aigei.com/music/' },
+                { name: '100Audio', url: 'https://100audio.com/' },
+                { name: '猴子音悦', url: 'https://houzi8.com/' },
+              ].map((library) => (
+                <Button
+                  key={library.url}
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void openLibrary(library.url)}
+                >
+                  {library.name}
+                </Button>
+              ))}
+            </div>
+            <p className="workflow-muted">
+              以上入口在浏览器中打开；当前未接入这些网站的站内搜索或自动下载。
+            </p>
+          </div>
+          <details className="workflow-divider" data-music-openverse>
+            <summary className="text-body-sm font-semibold cursor-pointer">
+              其他音源 · Openverse 在线搜索
+            </summary>
+            <div className="workflow-fields mt-4">
+              <VoiceInput
+                label="联网搜索 Openverse 音频"
+                value={query}
+                disabled={disabled || busy}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="例如：ambient technology"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void search()
+                }}
+              />
+              <div className="self-end">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={disabled || busy || !query.trim()}
+                  onClick={() => void search()}
+                >
+                  {busy ? '处理中…' : '搜索'}
+                </Button>
+              </div>
+            </div>
+            {results.length > 0 && (
+              <div className="workflow-section" aria-label="在线配乐搜索结果">
+                {results.map((result) => (
+                  <div key={result.id} className="workflow-toolbar workflow-divider">
+                    <div className="min-w-0">
+                      <strong className="text-body-sm block truncate">{result.title}</strong>
+                      <span className="workflow-muted">
+                        {result.author} · {result.license} · Openverse
+                      </span>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      disabled={disabled || busy}
+                      onClick={() => void applyOnline(result)}
+                    >
+                      下载并使用
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </details>
+          {error && (
+            <p className="workflow-error" role="alert">
+              {error}
+            </p>
+          )}
+          {music && (
+            <div className="workflow-section workflow-divider">
+              <div className="workflow-toolbar">
+                <div className="min-w-0">
+                  <strong className="text-body-sm block truncate">{music.title}</strong>
+                  <span className="workflow-muted">
+                    {music.source === 'openverse'
+                      ? `在线 · ${music.author ?? '未知作者'} · ${music.license ?? '许可证待核实'}`
+                      : '本地音频 · 文件已复制到当前项目'}
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={disabled || busy}
+                  onClick={() => setMusic(undefined)}
+                >
+                  移除选择
+                </Button>
+              </div>
+              <audio
+                controls
+                preload="metadata"
+                src={mediaUrl(project.id, music.file)}
+                className="w-full mt-3"
+                aria-label="配乐试听"
+                onPlay={(event) => {
+                  const current = event.currentTarget
+                  document.querySelectorAll<HTMLMediaElement>('audio, video').forEach((media) => {
+                    if (media !== current) media.pause()
+                  })
+                }}
+                onLoadedMetadata={(event) => {
+                  const duration = event.currentTarget.duration
+                  if (Number.isFinite(duration) && duration > 0) {
+                    setSourceDuration(duration)
+                    if (music.duration > duration) update({ duration })
+                  }
+                }}
+              />
+              <div className="workflow-fields mt-4">
+                <VoiceInput
+                  label="从音频第几秒开始"
+                  type="number"
+                  min={0}
+                  max={Math.max(0, (sourceDuration ?? 300) - 0.1)}
+                  step={0.1}
+                  value={music.start}
+                  disabled={disabled || busy}
+                  onChange={(event) => update({ start: Number(event.target.value) })}
+                />
+                <VoiceInput
+                  label="裁剪时长（秒）"
+                  type="number"
+                  min={0.1}
+                  max={Math.min(render.duration, sourceDuration ?? render.duration)}
+                  step={0.1}
+                  value={music.duration}
+                  disabled={disabled || busy}
+                  onChange={(event) => update({ duration: Number(event.target.value) })}
+                />
+              </div>
+              <div className="workflow-fields mt-4">
+                <div className="voiceover-slider-group">
+                  <div className="voiceover-field-label">
+                    <label htmlFor="workflow-music-volume">配乐音量</label>
+                    <output htmlFor="workflow-music-volume">
+                      {Math.round(music.volume * 100)}%
+                    </output>
+                  </div>
+                  <input
+                    id="workflow-music-volume"
+                    className="voiceover-slider"
+                    type="range"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={Math.round(music.volume * 100)}
+                    disabled={disabled || busy}
+                    onChange={(event) => update({ volume: Number(event.target.value) / 100 })}
+                  />
+                </div>
+                <div className="voiceover-slider-group">
+                  <div className="voiceover-field-label">
+                    <label htmlFor="workflow-music-rate">配乐速度</label>
+                    <output htmlFor="workflow-music-rate">{music.playbackRate.toFixed(2)}×</output>
+                  </div>
+                  <input
+                    id="workflow-music-rate"
+                    className="voiceover-slider"
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.05"
+                    value={music.playbackRate}
+                    disabled={disabled || busy}
+                    onChange={(event) => update({ playbackRate: Number(event.target.value) })}
+                  />
+                </div>
+              </div>
+              {music.source === 'openverse' && music.sourceUrl && (
+                <p className="workflow-muted mt-3">
+                  来源：
+                  <a href={music.sourceUrl} target="_blank" rel="noreferrer" className="underline">
+                    {music.sourceUrl}
+                  </a>
+                  ；发布前请核对许可证要求。
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </WorkflowDialog>
+    </section>
+  )
+}
+
 export function RenderPanel({
   project,
   final,
@@ -469,6 +915,19 @@ export function RenderPanel({
       details.querySelector('summary')?.focus({ preventScroll: true })
     }
   }
+  const applyMusic = (music?: RenderMusic) =>
+    run(
+      () =>
+        workflowCall('generate', {
+          projectId: project.id,
+          stage: 'render',
+          expectedRevision: project.revision,
+          requestId: crypto.randomUUID(),
+          executor: 'template',
+          ...(music ? { music } : {}),
+        }),
+      music ? '配乐已应用，新的正式成片等待审核' : '配乐已移除，新的正式成片等待审核',
+    )
   return (
     <div className="workflow-section">
       {render ? (
@@ -571,6 +1030,14 @@ export function RenderPanel({
               )}
             </div>
           </div>
+          {final && (
+            <MusicPanel
+              project={project}
+              render={render}
+              disabled={disabled || versionId !== 'current'}
+              onApply={applyMusic}
+            />
+          )}
           {storyboard && (
             <>
               <div className="workflow-scenes" role="group" aria-label="视频分镜定位">

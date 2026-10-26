@@ -457,7 +457,8 @@ export class PlatformPublishingService {
         ? 'needs_auth'
         : code === 'RISK_CONTROL'
           ? 'risk_control'
-          : started && !['USAGE', 'UNSUPPORTED'].includes(code)
+          : started &&
+              !['USAGE', 'UNSUPPORTED', 'TOPIC_INVALID', 'TOPIC_UNSUPPORTED'].includes(code)
             ? 'unknown'
             : code === 'CANCELLED'
               ? 'cancelled'

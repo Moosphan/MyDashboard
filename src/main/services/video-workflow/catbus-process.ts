@@ -8,10 +8,11 @@ export function catbusProcess(
   home: string,
   signal?: AbortSignal,
   progress?: (text: string) => void,
+  preload?: string,
 ) {
   return new Promise<{ code: number | null; stdout: string }>((resolve, reject) => {
     if (signal?.aborted) return reject(new Error('CANCELLED'))
-    const child = spawn(node, [entry, ...args], {
+    const child = spawn(node, [...(preload ? ['--import', preload] : []), entry, ...args], {
       shell: false,
       detached: process.platform !== 'win32',
       windowsHide: true,

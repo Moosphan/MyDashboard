@@ -9,6 +9,7 @@ import {
   readFileSync,
   existsSync,
   readdirSync,
+  mkdirSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -21,7 +22,7 @@ import { BilibiliCatbus, supportedCatbusNode } from '../src/main/services/video-
 import { BilibiliPublishingService } from '../src/main/services/video-workflow/bilibili'
 import type { BilibiliPublishRequest } from '../src/shared/bilibili-publishing'
 
-async function fixture(platform: 'bilibili' | 'douyin' = 'bilibili') {
+async function fixture(platform: 'bilibili' | 'douyin' = 'bilibili', tags: string[] = []) {
   const root = mkdtempSync(join(tmpdir(), 'bilibili-publishing-'))
   const db = new Database(':memory:')
   runMigrations(db)
@@ -75,7 +76,7 @@ async function fixture(platform: 'bilibili' | 'douyin' = 'bilibili') {
           description: '@not-a-file $(never execute)',
           tags: ['技术'],
         },
-        douyin: { title: '另一平台', description: '', tags: [] },
+        douyin: { title: '另一平台', description: '', tags },
       },
     },
   }
@@ -95,7 +96,31 @@ async function fixture(platform: 'bilibili' | 'douyin' = 'bilibili') {
       randomUUID(),
     )
   }
-  const cli = join(root, 'fake-catbus.mjs')
+  const cli = join(root, 'dist', 'cli', 'main.mjs')
+  const creator = join(root, 'dist', 'platforms', 'douyin', 'web', 'creator.js')
+  mkdirSync(join(root, 'dist', 'cli'), { recursive: true })
+  mkdirSync(join(root, 'dist', 'platforms', 'douyin', 'web'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ type: 'module' }))
+  writeFileSync(
+    creator,
+    `
+function withExtras() {}
+export function videoItem(info, posterUri, o, creationId) {
+    const title = (o.title ?? '').trim();
+    const desc = (o.desc ?? '').trim();
+    const common = {
+        text: title ? title + ' ' + desc : desc,
+        caption: desc,
+        item_title: title,
+        text_extra: '[]',
+        challenges: '[]',
+        hashtag_source: '',
+    };
+    withExtras(common, o, false);
+    return { item: { common } };
+}
+`,
+  )
   copyFileSync(join(import.meta.dirname, 'fixtures/catbus.mjs'), cli)
   const runtime = {
     nodePath: process.execPath,
@@ -154,8 +179,76 @@ async function fixture(platform: 'bilibili' | 'douyin' = 'bilibili') {
   }
 }
 
-test('douyin publishes its approved metadata with sec_uid and only supported platform parameters', async () => {
+test('douyin publishes structured topics with caption and title offsets', async () => {
   const context = await fixture('douyin')
+  try {
+    const record = context.service.start(context.request)
+    await context.finish(record.id)
+    const snapshot = record.snapshot
+    snapshot.metadata = {
+      title: '  霍去病 🐎  ',
+      description: '  历史🐎故事 #霍去病  ',
+      tags: ['霍去病', '#封狼居胥', '霍去病'],
+    }
+    await context.client.publish(
+      snapshot,
+      '/fixture.mp4',
+      '/fixture.png',
+      new AbortController().signal,
+      () => {},
+    )
+    const common = JSON.parse(readFileSync(join(context.root, 'publish-body'), 'utf8'))
+    const topics = JSON.parse(common.text_extra)
+    assert.equal(topics.length, 2)
+    assert.equal(common.caption, '历史🐎故事 #霍去病 #封狼居胥')
+    assert.equal(common.text, '霍去病 🐎 ' + common.caption)
+    assert.equal(common.hashtag_source, 'search/search')
+    assert.equal(common.challenges, '[]')
+    assert.deepEqual(
+      topics.map((topic: { hashtag_name: string }) => topic.hashtag_name),
+      ['霍去病', '封狼居胥'],
+    )
+    for (const topic of topics) {
+      assert.equal(topic.type, 1)
+      assert.equal(topic.hashtag_id, 0)
+      assert.equal(common.text.slice(topic.start, topic.end), '#' + topic.hashtag_name)
+      assert.equal(
+        common.caption.slice(topic.caption_start, topic.caption_end),
+        '#' + topic.hashtag_name,
+      )
+    }
+    assert.equal(
+      readdirSync(context.client.home).some((name) => name.startsWith('topics-')),
+      false,
+    )
+  } finally {
+    await context.close()
+  }
+})
+
+test('douyin rejects incompatible topic adapters and malformed names before starting the CLI upload', async () => {
+  for (const mode of ['incompatible', 'invalid']) {
+    const context = await fixture('douyin', mode === 'invalid' ? ['错误 话题'] : ['历史'])
+    try {
+      if (mode === 'incompatible') {
+        const creator = join(context.root, 'dist', 'platforms', 'douyin', 'web', 'creator.js')
+        writeFileSync(
+          creator,
+          readFileSync(creator, 'utf8').replace("text_extra: '[]'", "text_extra: 'changed'"),
+        )
+      }
+      const record = await context.finish(context.service.start(context.request).id)
+      assert.equal(record.state, 'failed')
+      assert.match(record.error!, mode === 'invalid' ? /话题名称/ : /话题适配/)
+      assert.equal(existsSync(join(context.root, 'calls')), false)
+    } finally {
+      await context.close()
+    }
+  }
+})
+
+test('douyin publishes its approved metadata with sec_uid and only supported platform parameters', async () => {
+  const context = await fixture('douyin', ['历史'])
   try {
     assert.equal((await context.service.connection(true)).uid, context.request.accountUid)
     const record = await context.finish(context.service.start(context.request).id)
@@ -168,6 +261,8 @@ test('douyin publishes its approved metadata with sec_uid and only supported pla
     assert.equal(args[args.indexOf('-a') + 1], 'mydashboard-douyin')
     assert.equal(args.includes('--category'), false)
     assert.equal(args.includes('--source'), false)
+    const common = JSON.parse(readFileSync(join(context.root, 'publish-body'), 'utf8'))
+    assert.equal(JSON.parse(common.text_extra)[0].hashtag_name, '历史')
     assert.equal(context.service.start(context.request).id, record.id)
     writeFileSync(join(context.root, 'mode'), 'private')
     assert.equal((await context.service.refresh(context.project.id, record.id)).state, 'private')

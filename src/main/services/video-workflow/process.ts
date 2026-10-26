@@ -94,13 +94,19 @@ export function workflowCommand(
         )
       else if (signal || code !== 0) {
         const reason = signal ? `CLI 被 ${signal} 信号终止` : `CLI 退出码 ${code ?? '未知'}`
+        const capacityGuidance =
+          /(?:codex\s+is\s+at\s+capacity|stream disconnected before completion[^\n]*capacity)/i.test(
+            errors,
+          )
+            ? '\nCodex 服务暂时繁忙，本次生成没有返回结果；请稍后重试，或在执行环境切换 Claude Code CLI。'
+            : ''
         const guidance =
           process.platform === 'darwin' && signal === 'SIGKILL'
             ? '\n若 macOS 提示此程序有害或已损坏，请停止使用该文件，在执行环境中选择可信来源重新安装的 CLI；不要关闭系统安全检查。'
             : ''
         reject(
           new Error(
-            `${reason}\n执行文件：${executable}${errors ? `\n${errors.trim()}` : ''}${guidance}`,
+            `${reason}${capacityGuidance}\n执行文件：${executable}${errors ? `\n${errors.trim()}` : ''}${guidance}`,
           ),
         )
       } else resolve(output)

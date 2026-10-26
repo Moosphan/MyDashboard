@@ -1,0 +1,72 @@
+{
+  "version": 4,
+  "style": "ink-wash",
+  "width": 1600,
+  "height": 1000,
+  "background": "transparent",
+  "assets": [
+    {
+      "id": "misty-mountains",
+      "name": "烟岚山水",
+      "note": "青灰远山、淡赭坡面与短笔皴染相衬，山体根部消入留白，江面不另加底色。",
+      "svg": "misty-mountains.svg",
+      "png": "misty-mountains.png"
+    },
+    {
+      "id": "pagoda-pines",
+      "name": "松风古塔",
+      "note": "七层逐级收分，薄檐、连贯墙体与石台相接；灰绿屋面、淡赭塔身保留水墨轻重。",
+      "svg": "pagoda-pines.svg",
+      "png": "pagoda-pines.png"
+    },
+    {
+      "id": "temple-in-mist",
+      "name": "云山古寺",
+      "note": "寺院融进山水，用墨色轻重与留白建立空间，建筑只保留必要识别。",
+      "svg": "temple-in-mist.svg",
+      "png": "temple-in-mist.png"
+    },
+    {
+      "id": "bridge-returning-boat",
+      "name": "江桥归舟",
+      "note": "低拱石桥横接两岸，疏松压住近景；桥洞与江面保持透明留白，适合行旅与水乡题材。",
+      "svg": "bridge-returning-boat.svg",
+      "png": "bridge-returning-boat.png"
+    },
+    {
+      "id": "bamboo-moon-gate",
+      "name": "竹庭月门",
+      "note": "淡赭园墙、通透月门与浓墨修竹形成虚实对照，门内借远山，适合园林与文人生活。",
+      "svg": "bamboo-moon-gate.svg",
+      "png": "bamboo-moon-gate.png"
+    },
+    {
+      "id": "lotus-pond",
+      "name": "荷塘清趣",
+      "note": "灰绿荷叶以大块湿染铺开，藕粉花瓣只作少量设色，保留水面呼吸，适合节气与诗词。",
+      "svg": "lotus-pond.svg",
+      "png": "lotus-pond.png"
+    },
+    {
+      "id": "plum-blossom",
+      "name": "梅影疏香",
+      "note": "老干转折以枯笔落墨，米白与淡胭脂花簇沿枝疏布；偏右构图给左侧正文留出空间。",
+      "svg": "plum-blossom.svg",
+      "png": "plum-blossom.png"
+    },
+    {
+      "id": "palace-courtyard",
+      "name": "云阙重檐",
+      "note": "灰绿重檐、赭红柱列和层叠台基建立宫阙秩序，以疏松与远岫软化对称，属于原创古建意象。",
+      "svg": "palace-courtyard.svg",
+      "png": "palace-courtyard.png"
+    },
+    {
+      "id": "gorge-sails",
+      "name": "峡江帆影",
+      "note": "两岸峭壁夹出一线江面，近山淡赭、远峰青灰，大小帆影建立纵深，适合山河与交通题材。",
+      "svg": "gorge-sails.svg",
+      "png": "gorge-sails.png"
+    }
+  ]
+}

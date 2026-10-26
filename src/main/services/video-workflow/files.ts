@@ -27,6 +27,8 @@ const MIME: Record<string, string> = {
   '.wav': 'audio/wav',
   '.mp3': 'audio/mpeg',
   '.m4a': 'audio/mp4',
+  '.ogg': 'audio/ogg',
+  '.flac': 'audio/flac',
   '.mp4': 'video/mp4',
   '.png': 'image/png',
 }
@@ -51,7 +53,7 @@ export class WorkflowFiles {
     if (
       size <= 0 ||
       size >
-        (['.mp4', '.wav', '.mp3', '.m4a'].includes(extension)
+        (['.mp4', '.wav', '.mp3', '.m4a', '.ogg', '.flac'].includes(extension)
           ? 1024 * 1024 * 1024
           : 4 * 1024 * 1024)
     )

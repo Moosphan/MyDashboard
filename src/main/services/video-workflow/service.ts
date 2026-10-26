@@ -28,6 +28,8 @@ import {
   isMaterialBlocker,
   retainMaterialFallback,
   type WorkflowRevision,
+  validateRenderMusic,
+  type RenderMusic,
 } from '../../../shared/video-workflow'
 import type { VoiceoverService } from '../voiceover/voiceover-service'
 import { WorkflowFiles } from './files'
@@ -56,6 +58,8 @@ import { copyFeedback, copyPrompt } from './copy'
 import { PlatformPublishingService } from './bilibili'
 import type { BilibiliCategory } from '../../../shared/bilibili-publishing'
 import { coverOptions, generatePublicationCover, verifyCoverImages } from './covers'
+import { downloadOpenverseMusic, searchOpenverse } from './music'
+import type { MusicSearchResult } from '../../../shared/video-workflow'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -74,6 +78,7 @@ export interface WorkflowGeneration {
   copyFeedback?: string
   audioTrackId?: string
   reuseNarration?: boolean
+  music?: RenderMusic
 }
 function retainedRequirements(previous: string | undefined, feedback: string | undefined) {
   if (
@@ -123,6 +128,16 @@ export class VideoWorkflowService {
   private notify(id: string) {
     this.changed(id)
     return this.repository.get(id)
+  }
+  async importMusic(projectId: string, path: string) {
+    const file = await this.files.import(projectId, path)
+    return { file, title: basename(path), source: 'local' as const }
+  }
+  async searchMusic(query: string) {
+    return searchOpenverse(query)
+  }
+  async downloadMusic(projectId: string, result: MusicSearchResult) {
+    return downloadOpenverseMusic(this.root, this.files, projectId, result)
   }
   private async verifyInputs(
     projectId: string,
@@ -347,6 +362,9 @@ export class VideoWorkflowService {
     )
       throw new Error('该步骤需要 CLI 或人工导入')
     const project = this.repository.get(input.projectId)
+    const music = input.music === undefined ? undefined : validateRenderMusic(input.music)
+    if (music && input.stage !== 'render') throw new Error('配乐设置仅用于正式成片阶段')
+    if (music) await this.files.verify(project.id, music.file)
     const motionProject =
       input.modification || input.motionPlanJobId ? renderSourceProject(project) : project
     const existingNarration = stageValue(project, 'narration')
@@ -729,6 +747,7 @@ export class VideoWorkflowService {
             signal: controller.signal,
             phase,
             motion: renderMotion,
+            music,
           })
         } else {
           const rawSettings =

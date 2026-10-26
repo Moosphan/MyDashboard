@@ -21,12 +21,34 @@ export const VIDEO_STAGE_LABELS: Record<VideoStage, string> = {
   render: '正式成片',
   publish: '平台发布',
 }
-export const SCENE_LAYOUTS = ['title', 'split', 'steps', 'comparison', 'quote', 'summary'] as const
+export const BASE_SCENE_LAYOUTS = [
+  'title',
+  'split',
+  'steps',
+  'comparison',
+  'quote',
+  'summary',
+] as const
+export const SCENE_LAYOUTS = [
+  ...BASE_SCENE_LAYOUTS,
+  'map',
+  'relations',
+  'artifact',
+  'chapter',
+] as const
 export type SceneLayout = (typeof SCENE_LAYOUTS)[number]
+export function sceneLayoutsForTemplate(template: string): readonly SceneLayout[] {
+  return template === 'history' ? SCENE_LAYOUTS : BASE_SCENE_LAYOUTS
+}
 export const TEMPLATE_FAMILIES = [
   { id: 'technical', name: '技术讲解', description: '深色画布 · 代码与步骤 · 左右对照' },
   { id: 'editorial', name: '知识编辑部', description: '浅色画布 · 大字引言 · 分栏与知识卡' },
   { id: 'product', name: '产品叙事', description: '品牌色画布 · 功能分解 · 前后对比' },
+  {
+    id: 'history',
+    name: '史笺 · 历史文化',
+    description: '牛皮纸 · 宋体与朱砂 · 十种历史叙事版式',
+  },
 ] as const
 export interface WorkflowFile {
   id: string
@@ -49,6 +71,7 @@ export interface StoryboardSceneMotion {
   summary: string
   effects: MotionEffect[]
   blockers: string[]
+  notes?: string[]
 }
 export interface StoryboardPayload {
   mode: 'template' | 'agent'
@@ -80,6 +103,29 @@ export interface AudioPayload {
   duration: number
   voice?: WorkflowVoice
 }
+export type RenderMusicSource = 'local' | 'openverse'
+export interface MusicSearchResult {
+  id: string
+  title: string
+  author: string
+  license: string
+  licenseUrl?: string
+  sourceUrl: string
+  downloadUrl: string
+  duration?: number
+}
+export interface RenderMusic {
+  file: WorkflowFile
+  title: string
+  source: RenderMusicSource
+  sourceUrl?: string
+  license?: string
+  author?: string
+  start: number
+  duration: number
+  volume: number
+  playbackRate: number
+}
 export interface RenderPayload {
   file: WorkflowFile
   duration: number
@@ -90,6 +136,7 @@ export interface RenderPayload {
   manifestHash: string
   checks: string
   cover: WorkflowFile
+  music?: RenderMusic
   motion?: MotionPlan
   sourceStoryboard?: string
   sourceAudio?: string
@@ -379,6 +426,48 @@ function seconds(value: unknown) {
     throw new Error('视频时长必须为 0–300 秒')
   return value
 }
+export function validateRenderMusic(value: unknown): RenderMusic {
+  const input = record(value)
+  const source = input.source
+  if (source !== 'local' && source !== 'openverse') throw new Error('配乐来源无效')
+  const title = text(input.title, '配乐名称', 300)
+  const start = input.start
+  const duration = input.duration
+  const volume = input.volume
+  const playbackRate = input.playbackRate
+  if (typeof start !== 'number' || !Number.isFinite(start) || start < 0 || start > 300)
+    throw new Error('配乐起始时间必须为 0–300 秒')
+  if (typeof duration !== 'number' || !Number.isFinite(duration) || duration <= 0 || duration > 300)
+    throw new Error('配乐时长必须为 0–300 秒')
+  if (typeof volume !== 'number' || !Number.isFinite(volume) || volume < 0 || volume > 1)
+    throw new Error('配乐音量必须为 0–100%')
+  if (
+    typeof playbackRate !== 'number' ||
+    !Number.isFinite(playbackRate) ||
+    playbackRate < 0.5 ||
+    playbackRate > 2
+  )
+    throw new Error('配乐速度必须为 0.5–2 倍')
+  if (
+    source === 'openverse' &&
+    (typeof input.sourceUrl !== 'string' || !/^https:\/\//i.test(input.sourceUrl))
+  )
+    throw new Error('在线配乐必须保留 HTTPS 来源链接')
+  return {
+    file: file(input.file),
+    title,
+    source,
+    ...(input.sourceUrl !== undefined
+      ? { sourceUrl: text(input.sourceUrl, '配乐来源链接', 2000) }
+      : {}),
+    ...(input.license !== undefined ? { license: text(input.license, '配乐许可证', 300) } : {}),
+    ...(input.author !== undefined ? { author: text(input.author, '配乐作者', 300) } : {}),
+    start,
+    duration,
+    volume,
+    playbackRate,
+  }
+}
 export function validatePayload<Stage extends VideoStage>(
   stage: Stage,
   value: unknown,
@@ -516,7 +605,9 @@ export function validatePayload<Stage extends VideoStage>(
       !Array.isArray(input.compositionNames) ||
       input.compositionNames.length !== input.compositionFiles.length ||
       input.compositionNames.some(
-        (name) => typeof name !== 'string' || !/^[a-z0-9-]+\.(html|png|wav|json)$/.test(name),
+        (name) =>
+          typeof name !== 'string' ||
+          !/^[a-z0-9-]+\.(html|png|wav|mp3|m4a|ogg|flac|json)$/.test(name),
       )
     )
       throw new Error('无效冻结工程文件名')
@@ -530,6 +621,7 @@ export function validatePayload<Stage extends VideoStage>(
       compositionNames: input.compositionNames as string[],
       manifestHash: text(input.manifestHash, '工程指纹', 64),
       checks: text(input.checks, '合成检查', 20000),
+      ...(input.music !== undefined ? { music: validateRenderMusic(input.music) } : {}),
       ...(profile
         ? { renderProfile: { quality: profile.quality as 'looks' | 'delivery', fps: 30 as const } }
         : {}),
@@ -806,6 +898,11 @@ function validateStoryboardSceneMotion(id: string, value: unknown): StoryboardSc
   if (!Array.isArray(motion.blockers) || motion.blockers.length > 20)
     throw new Error('请提供动效与素材缺口列表，已完成时填空数组')
   const blockers = motion.blockers.map((value) => text(value, '动效或素材缺口', 1000))
+  if (motion.notes !== undefined && (!Array.isArray(motion.notes) || motion.notes.length > 20))
+    throw new Error('分镜说明须为不超过 20 项的列表')
+  const notes = (motion.notes as unknown[] | undefined)?.map((value) =>
+    text(value, '分镜说明', 1000),
+  )
   if (!Array.isArray(motion.effects)) throw new Error('缺少结构化分镜动效')
   const effects =
     motion.effects.length || !blockers.length
@@ -814,7 +911,7 @@ function validateStoryboardSceneMotion(id: string, value: unknown): StoryboardSc
           [{ id, duration: 1 }],
         ).scenes[0].effects
       : []
-  return { summary, effects, blockers }
+  return { summary, effects, blockers, ...(notes?.length ? { notes } : {}) }
 }
 
 export function sceneMotionEnabled(storyboard: StoryboardPayload, sceneId: string) {
@@ -845,9 +942,31 @@ export function isMaterialBlocker(message: string) {
   )
 }
 
+function isLegacyStoryboardNote(message: string) {
+  return [
+    '未提供实测配音，归一化卡点需在粗剪时按原口播词锚与实际配音校准。',
+    '独立子 agent 设计复核尚未完成：审核会话未收到任务内容，重新创建会话失败，需补做复核。',
+  ].includes(message.trim())
+}
+
+export function storyboardMotionNotes(storyboard: StoryboardPayload) {
+  return storyboard.scenes
+    .filter((scene) => sceneMotionEnabled(storyboard, scene.id))
+    .flatMap((scene) =>
+      [
+        ...new Set([
+          ...(scene.motion?.notes ?? []),
+          ...(scene.motion?.blockers.filter(isLegacyStoryboardNote) ?? []),
+        ]),
+      ].map((message) => ({ sceneId: scene.id, message })),
+    )
+}
+
 function sceneBlockers(scene: StoryScene) {
   return (scene.motion?.blockers ?? []).filter(
-    (message) => !isMaterialBlocker(message) || !scene.materialFallback?.blockers.includes(message),
+    (message) =>
+      !isLegacyStoryboardNote(message) &&
+      (!isMaterialBlocker(message) || !scene.materialFallback?.blockers.includes(message)),
   )
 }
 

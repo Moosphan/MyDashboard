@@ -1,5 +1,17 @@
 # 设计规范 2.0 迁移台账
 
+2026-10-26 · 水墨资源第四辑（用户确认第三稿后授权扩展）：沿用青灰、灰绿、淡赭与牛皮纸展示，新增江桥归舟、竹庭月门、荷塘清趣、梅影疏香、云阙重檐、峡江帆影，连同原三景共九组透明 SVG/PNG。沿用 `resources/visuals/traditional-culture/demo/ink-study.html` 的普通文件浏览/下载链接及原布局，不新增生产应用控件或业务入口。仍为独立创作素材，复用生成器与 Electron 导出检查，新增六景拼图用于视觉验收。
+
+2026-10-26 · 水墨第三稿：根据用户山体与古塔截图，重画山面皴染和七层塔体，采用青灰远山、淡赭坡面、灰绿屋面与暖纸底。研究 `ink-wash-painting` 等开源 Skill 的绘画方法，参考记录见 [水墨 Skill 研究](ink-wash-skill-references.md)。仍为独立创作资源，不修改应用界面、控件或主题；使用原展示页及透明导出入口。
+
+2026-10-26 · 分镜审核说明纠偏：`StoryboardEditor.tsx` 在原 MG 说明区使用既有 `workflow-muted` 显示非阻断说明，沿用 `VIDEO-WORKFLOW-001` 的 React 18 / Radix / Button 与主题例外，不新增控件、图标或布局。共享契约区分 notes 与真实 blockers，仅兼容两条已核实的历史误标；后端仍验证真实 DOM 动效，人工审核位置与动作不变。负责人及 HeroUI 迁移退出里程碑同本例外；验证见 [分镜审核说明验证](video-workflow-storyboard-review-notes-verification.md)。
+
+2026-10-26 · 纸上山河水墨方向修订：用户反馈第一稿偏重线条轮廓，新增 `ink-wash/` 三景代码绘画与 `demo/ink-study.html` 独立对照稿。采用墨块、淡染、枯笔与留白，沿用牛皮纸底；原线描保留。展示页仍仅使用普通文件导航/下载链接，不涉及生产应用、主题或控件迁移。生成和渲染入口 `pnpm design:culture:ink`，验证透明 PNG、SVG 引用及多宽度预览。
+
+2026-10-26 · 纸上山河传统文化绘画 demo：新增 `resources/visuals/traditional-culture/` 的原创 SVG/透明 PNG 与四张独立静态排版展示稿。属于视频画面创作资源，使用史笺牛皮纸色板，未修改应用界面、主题、业务数据或控件。展示页仅用普通链接进行配色浏览、文件下载与独立 demo 导航；不作为生产素材管理面板或新增控件迁移。生成入口 `pnpm design:culture`，研究见 [绘画资源参考](traditional-culture-assets-research.md)，使用边界与验证见资源 README；后续接入工作流需另按规范 2.0 实施真实 HeroUI 控件。
+
+2026-10-26 · 史笺历史文化模板：复用 `VIDEO-WORKFLOW-001` 既有创作设置、单选和安全 iframe 预览，仅增加内置模板项及对应样本，不新增控件、依赖、图标或工作台布局。画面模板属于创作产物，使用独立静态 HTML/CSS/SVG；本机宋体与黑体、确定性牛皮纸纹、十种版式和字幕安全区，不作为应用主题 token。按用户追加要求，由六种扩为十种，新增山川行旅、人物关系、器物解读、章节过渡；既有弹窗展示十页样本，单镜布局可选全部十种，其他模板族保留原六种。负责人：video workflow 维护者；控件例外随工作流整体 HeroUI 迁移退出。验证见 [历史模板验证](video-workflow-history-template-verification.md)。
+
 当前权威：[设计规范 2.0](spec-v2.md)。以下表格记录当前交付边界；下方“历史台账”只保留溯源，不约束新代码。
 
 用户修订已纳入设计稿：现有主题适配、桌面布局恢复、HeroUI 自带图标与经确认的 Heroicons 补充。生产主题桥、图标和完整业务状态仍待分阶段迁移。[交互审核](interaction-audit-v2.md) 的待决项在对应功能开发前须确认。
@@ -131,6 +143,8 @@
 
 `VIDEO-WORKFLOW-001` 配音文件定位与动态截图稳定性（2026-10-24 用户授权）：`AudioTrackPlayer.tsx` 的“更多操作”增加“打开所在文件夹”，通过工作流文件校验后调用 Electron 系统定位；动态粗剪的隔离分镜截图增加场景定位、短暂等待和最多三次独立窗口重试，避免瞬时空画面直接失败。保留原布局、播放器和审核门禁；无新依赖或主题改动。
 
+`VIDEO-WORKFLOW-001` 正式成片配乐增量（2026-10-26 用户授权）：`MediaPanels.tsx` 在既有正式成片播放器与分镜信息之后复用折叠区、Voice 字段、Slider、Button 和原生音频控件，提供本地音频、Openverse 搜索、来源/许可证展示、试听、裁剪起点/时长、音量和速度。应用配乐通过 `render` 任务重新生成待审核版本，HyperFrames 使用 `data-media-start`、`data-duration`、`data-volume` 与 `data-playback-rate`，不修改已审核 MP4；配音语速留在分段配音阶段以保持字幕与镜头同步。沿用 React 18/Radix 局部例外、主题、主栏与审核/底部动作位置，不新增依赖；退出里程碑为视频工作流 HeroUI 生产迁移，在线搜索结果必须保留来源和许可证并由用户核对。
+
 - 令牌单源：执行 `npm run design:generate` 与 `npm run design:check`，生成物与源定义一致。
 - 组件：全部变体、hover/focus/pressed/disabled/loading/error；可选择控件的选中态及组合态。
 - 语义：label/id、accessible name、aria-busy/invalid、role、读屏顺序、焦点陷阱和返回。
@@ -140,6 +154,10 @@
 - 截图：组件工作台、代表页面、全部受影响的高风险弹窗；记录版本与密度。
 
 `VIDEO-WORKFLOW-001` 封面生成弹窗修订（2026-10-26 用户授权）：`PublicationCoverPanel.tsx` 将生成方式、费用说明和修改建议收进既有 `WorkflowDialog`，主区仅保留缩略图、状态、规格与历史选用，复用 Button / Voice 控件和既有主题。打开或取消不启动任务，关闭保留建议，启动失败可重试，成功后关闭；两个弹窗均有焦点返回。紧凑摘要限定在主栏内，保留右栏、审核和底部布局。沿用本例外的负责人及 HeroUI 迁移退出里程碑，验证见 [封面验证](video-workflow-publication-cover-verification.md)。
+
+`VIDEO-WORKFLOW-001` 配乐管理弹窗修订（2026-10-26 用户授权）：`MediaPanels.tsx` 复用已有 WorkflowDialog、Button、Select 与 Voice 表单，正片主区仅保留配乐摘要、历史/本次音频选择及应用动作，搜索/导入/试听/裁剪/音量/速度移入弹窗。关闭保留编辑且卸载试听，打开/关闭/选择不启动渲染，错误保留参数，Escape 返回入口焦点；数据刷新同一成片不清除草稿。国内曲库仅提供已核实官网入口并说明授权后本地导入，Openverse 默认折叠。沿用现有 React 18/Radix 局部例外、主题及审核布局；负责人和退出里程碑沿用 VIDEO-WORKFLOW-001。验证见 [配乐弹窗验证](video-workflow-music-dialog-verification.md)。
+
+`VIDEO-WORKFLOW-001` 单镜 AI 启动反馈修复（2026-10-26 用户截图授权）：`StoryboardEditor.tsx` 在既有单镜弹窗内复用 `workflow-error` 与 `role=alert` 展示启动错误；`StageWorkspace.tsx` 传入实际失败原因。两个 AI 动作均等待启动成功才关窗，失败保留意见和编辑内容；未保存保护、审核门禁及任务执行契约不变。沿用现有 Button、React 18/Radix 局部例外、主题和布局，无新依赖。负责人及 HeroUI 迁移退出里程碑沿用本例外，验证见 [单镜 AI 启动反馈验证](video-workflow-storyboard-ai-feedback-verification.md)。
 
 ## 5. 后续CI建议
 

@@ -1,5 +1,5 @@
-import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, extname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BrowserWindow, session } from 'electron'
 import { randomUUID } from 'node:crypto'
@@ -11,6 +11,7 @@ import {
   type WorkflowFile,
   type WorkflowRuntime,
   type MotionPlan,
+  type RenderMusic,
 } from '../../../shared/video-workflow'
 import { WorkflowFiles } from './files'
 import { escapeHtml, safeStoryboardDocument, sceneHtml } from './storyboard'
@@ -138,6 +139,7 @@ export function hyperframesDocument(
   markup?: string[],
   motion?: MotionPlan,
   fontFamilies: string[] = [],
+  music?: RenderMusic,
 ): string {
   const storyboard = stageValue(project, 'storyboard')!,
     audio = stageValue(project, 'audio')!
@@ -243,7 +245,22 @@ export function hyperframesDocument(
         `@font-face{font-family:${fontString(family)};src:${sources.map((source) => `local(${fontString(source)})`).join(',')}}`,
     )
     .join('')
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-src 'none'"><title>${escapeHtml(project.title)}</title><style>${localFonts}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#111827;font-family:system-ui,sans-serif}#root{position:relative;width:100%;height:100%;overflow:hidden}.clip{position:absolute;inset:0}.scene-motion-layer{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.frame>img{display:block;width:100%;height:100%;object-fit:contain}.caption{display:flex;align-items:flex-end;justify-content:center;padding:0 100px 48px;pointer-events:none}.caption span{display:block;max-width:1720px;padding:12px 28px;border-radius:12px;background:#101521;color:#fff;font-size:38px;line-height:1.4;text-align:center}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-width="1920" data-height="1080" data-no-timeline>${scenes}${subtitles}<audio id="narration" src="narration.wav" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-track-index="10" data-audio-group="voiceover"></audio></div>${animation}</body></html>`
+  const musicTrack = music
+    ? `<audio id="music" src="${escapeHtml(basename(music.file.path))}" data-start="0" data-duration="${music.duration.toFixed(6)}" data-media-start="${music.start.toFixed(6)}" data-volume="${music.volume.toFixed(6)}" data-playback-rate="${music.playbackRate.toFixed(6)}" data-track-index="11" data-audio-group="music"></audio>`
+    : ''
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-src 'none'"><title>${escapeHtml(project.title)}</title><style>${localFonts}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#111827;font-family:system-ui,sans-serif}#root{position:relative;width:100%;height:100%;overflow:hidden}.clip{position:absolute;inset:0}.scene-motion-layer{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.frame>img{display:block;width:100%;height:100%;object-fit:contain}.caption{display:flex;align-items:flex-end;justify-content:center;padding:0 100px 48px;pointer-events:none}.caption span{display:block;max-width:1720px;padding:12px 28px;border-radius:12px;background:#101521;color:#fff;font-size:38px;line-height:1.4;text-align:center}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-width="1920" data-height="1080" data-no-timeline>${scenes}${subtitles}<audio id="narration" src="narration.wav" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-track-index="10" data-audio-group="voiceover"></audio>${musicTrack}</div>${animation}</body></html>`
+}
+
+function musicAudioTag(music: RenderMusic) {
+  return `<audio id="music" src="${escapeHtml(basename(music.file.path))}" data-start="0" data-duration="${music.duration.toFixed(6)}" data-media-start="${music.start.toFixed(6)}" data-volume="${music.volume.toFixed(6)}" data-playback-rate="${music.playbackRate.toFixed(6)}" data-track-index="11" data-audio-group="music"></audio>`
+}
+
+function addMusicToDocument(document: string, music: RenderMusic) {
+  const bodyEnd = document.indexOf('</body>')
+  if (bodyEnd < 0) throw new Error('冻结 HyperFrames 文档缺少 body')
+  const rootEnd = document.lastIndexOf('</div>', bodyEnd)
+  if (rootEnd < 0) throw new Error('冻结 HyperFrames 文档缺少根容器')
+  return `${document.slice(0, rootEnd)}${musicAudioTag(music)}${document.slice(rootEnd)}`
 }
 export function assertHyperframesCheck(value: unknown) {
   const report = value as {
@@ -297,8 +314,9 @@ export async function renderWorkflow(input: {
   signal: AbortSignal
   phase: (message: string) => void
   motion?: MotionPlan
+  music?: RenderMusic
 }): Promise<RenderPayload> {
-  const { project, final, files, runtime, cwd, signal, phase } = input
+  const { project, final, files, runtime, cwd, signal, phase, music } = input
   assertRenderRuntime(runtime)
   mkdirSync(cwd, { recursive: true })
   const version = await hyperframes(runtime, ['--version'], cwd, signal, 15000)
@@ -308,6 +326,19 @@ export async function renderWorkflow(input: {
     compositionNames: string[] = [],
     cover: WorkflowFile,
     motion: MotionPlan | undefined
+  const targetDuration = final
+    ? stageValue(project, 'roughcut')!.duration
+    : stageValue(project, 'audio')!.duration
+  if (music) {
+    if (music.start + 0.001 >= 300 || music.duration > targetDuration + 0.001)
+      throw new Error('配乐裁剪范围不能超过正式成片时长')
+    const musicPath = await files.verify(project.id, music.file)
+    const probedMusic = await probeMedia(runtime, musicPath, cwd, signal)
+    if (music.start >= probedMusic.duration - 0.001)
+      throw new Error('配乐起始时间超过音频本身时长')
+    if (music.start + music.duration > probedMusic.duration + 0.05)
+      throw new Error('配乐裁剪范围超过音频本身时长')
+  }
   if (final) {
     const roughcut = stageValue(project, 'roughcut')!
     if (
@@ -319,12 +350,26 @@ export async function renderWorkflow(input: {
       ) !== roughcut.manifestHash
     )
       throw new Error('冻结工程指纹不一致')
-    compositionFiles = roughcut.compositionFiles
-    compositionNames = roughcut.compositionNames
+    compositionFiles = roughcut.compositionFiles.slice()
+    compositionNames = roughcut.compositionNames.slice()
     cover = roughcut.cover
     motion = roughcut.motion
     for (const [index, file] of compositionFiles.entries())
       copyFileSync(await files.verify(project.id, file), join(cwd, compositionNames[index]))
+    if (music) {
+      const musicName = `music${extname(music.file.path).toLowerCase()}`
+      copyFileSync(await files.verify(project.id, music.file), join(cwd, musicName))
+      const index = compositionNames.indexOf('index.html')
+      if (index < 0) throw new Error('冻结 HyperFrames 工程缺少 index.html')
+      const document = addMusicToDocument(readFileSync(join(cwd, 'index.html'), 'utf8'), {
+        ...music,
+        file: { ...music.file, path: musicName },
+      })
+      writeFileSync(join(cwd, 'index.html'), document)
+      compositionFiles[index] = await files.import(project.id, join(cwd, 'index.html'))
+      compositionFiles.push(await files.import(project.id, join(cwd, musicName)))
+      compositionNames.push(musicName)
+    }
   } else {
     const storyboard = stageValue(project, 'storyboard')!,
       audio = stageValue(project, 'audio')!
@@ -388,11 +433,15 @@ export async function renderWorkflow(input: {
     }
     cover = compositionFiles[0]
     copyFileSync(await files.verify(project.id, audio.file), join(cwd, 'narration.wav'))
+    if (music) {
+      const musicName = basename(music.file.path)
+      copyFileSync(await files.verify(project.id, music.file), join(cwd, musicName))
+    }
     writeFileSync(
       join(cwd, 'index.html'),
-      hyperframesDocument(project, markup, compiledMotion, fontFamilies),
+      hyperframesDocument(project, markup, compiledMotion, fontFamilies, music),
     )
-    for (const name of ['narration.wav', 'index.html']) {
+    for (const name of ['narration.wav', 'index.html', ...(music ? [basename(music.file.path)] : [])]) {
       compositionNames.push(name)
       compositionFiles.push(await files.import(project.id, join(cwd, name)))
     }
@@ -469,6 +518,7 @@ export async function renderWorkflow(input: {
     renderProfile,
     ...(final ? { sourceRoughcut: project.stages.roughcut!.id } : {}),
     ...(motion ? { motion } : {}),
+    ...(music ? { music } : {}),
     sourceStoryboard: final
       ? stageValue(project, 'roughcut')!.sourceStoryboard
       : project.stages.storyboard!.id,

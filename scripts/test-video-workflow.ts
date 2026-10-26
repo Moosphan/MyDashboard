@@ -13,8 +13,12 @@ import {
   type AudioProgress,
   validateMotionPlan,
   storyboardMotionReadiness,
+  storyboardMotionNotes,
   storyboardReviewBlockReason,
   retainMaterialFallback,
+  SCENE_LAYOUTS,
+  TEMPLATE_FAMILIES,
+  validateRenderMusic,
 } from '../src/shared/video-workflow'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -83,6 +87,62 @@ test('image2 failures preserve actionable diagnostics and redact credentials', (
     image2Failure(new Error('Failed to download generated image: connection reset')).message,
     /图片已生成，但下载失败/,
   )
+})
+
+test('render music validates bounded trim, volume and playback rate settings', () => {
+  const file = {
+    id: randomUUID(),
+    path: `media/video-workflow/${randomUUID()}/music.mp3`,
+    sha256: 'a'.repeat(64),
+    size: 12,
+    mime: 'audio/mpeg',
+  }
+  const music = validateRenderMusic({
+    file,
+    title: '配乐',
+    source: 'local',
+    start: 1.25,
+    duration: 8,
+    volume: 0.35,
+    playbackRate: 1.2,
+  })
+  assert.deepEqual(music, { ...music, file })
+  for (const changes of [
+    { start: -1 },
+    { duration: 0 },
+    { volume: 1.1 },
+    { playbackRate: 0.4 },
+    { source: 'remote' },
+  ])
+    assert.throws(() => validateRenderMusic({ ...music, ...changes }))
+})
+
+test('HyperFrames document uses framework audio timing attributes for music', () => {
+  const { state } = visualFixture()
+  const file = {
+    id: randomUUID(),
+    path: `media/video-workflow/${state.id}/music.mp3`,
+    sha256: 'a'.repeat(64),
+    size: 12,
+    mime: 'audio/mpeg',
+  }
+  const document = hyperframesDocument(state, undefined, undefined, [], {
+    file,
+    title: '网格节奏',
+    source: 'openverse',
+    sourceUrl: 'https://example.com/music',
+    license: 'CC BY',
+    author: '作者',
+    start: 3,
+    duration: 4,
+    volume: 0.28,
+    playbackRate: 1.1,
+  })
+  assert.match(document, /id="music"/)
+  assert.match(document, /data-media-start="3\.000000"/)
+  assert.match(document, /data-duration="4\.000000"/)
+  assert.match(document, /data-volume="0\.280000"/)
+  assert.match(document, /data-playback-rate="1\.100000"/)
 })
 
 test('cover requests bind to final render and include video style, content and feedback', () => {
@@ -1150,6 +1210,87 @@ function visualFixture() {
   }
   return { ...fixtureData, state, render }
 }
+
+test('storyboard approval does not wait for downstream audio or unavailable agent review', () => {
+  const { db, state } = visualFixture()
+  try {
+    const notices = [
+      '未提供实测配音，归一化卡点需在粗剪时按原口播词锚与实际配音校准。',
+      '独立子 agent 设计复核尚未完成：审核会话未收到任务内容，重新创建会话失败，需补做复核。',
+    ]
+    const storyboard = validatePayload('storyboard', {
+      ...stageValue(state, 'storyboard')!,
+      scenes: [
+        {
+          id: 'one',
+          title: '第一镜',
+          body: '说明',
+          layout: 'title',
+          html: '<div id="portrait">刘邦</div>',
+          motion: {
+            summary: '人物入场',
+            effects: [
+              {
+                selector: '#portrait',
+                start: 0,
+                duration: 0.2,
+                keyframes: [{ opacity: 0 }, { opacity: 1 }],
+              },
+            ],
+            blockers: notices,
+            notes: [notices[0], '粗剪时校准配音卡点'],
+          },
+        },
+      ],
+    })
+    assert.equal(storyboardReviewBlockReason(storyboard), '')
+    assert.equal(storyboardMotionReadiness(storyboard).planned, 1)
+    assert.deepEqual(storyboardMotionNotes(storyboard), [
+      { sceneId: 'one', message: notices[0] },
+      { sceneId: 'one', message: '粗剪时校准配音卡点' },
+      { sceneId: 'one', message: notices[1] },
+    ])
+    assert.deepEqual(validatePayload('storyboard', storyboard), storyboard)
+    assert.throws(() =>
+      validatePayload('storyboard', {
+        ...storyboard,
+        scenes: [
+          {
+            ...storyboard.scenes[0],
+            motion: { ...storyboard.scenes[0].motion!, notes: '说明必须是数组' },
+          },
+        ],
+      }),
+    )
+    assert.deepEqual(
+      storyboard.scenes[0].motion?.blockers,
+      notices,
+      'Historical evidence remains intact',
+    )
+    for (const blocker of [
+      '缺少独立动画元素，选择器无法匹配',
+      '实际配音文件缺失，无法生成粗剪',
+      '设计复核发现动画元素选择器未匹配',
+      '尚未取得真实人物照片',
+    ]) {
+      const invalid = {
+        ...storyboard,
+        scenes: [
+          {
+            ...storyboard.scenes[0],
+            motion: { ...storyboard.scenes[0].motion!, blockers: [...notices, blocker] },
+          },
+        ],
+      }
+      assert.equal(storyboardMotionReadiness(invalid).blockers.length, 1, blocker)
+      assert.ok(storyboardReviewBlockReason(invalid), blocker)
+    }
+    const prompt = agentPrompt(state, 'storyboard', { template: 'technical' }, '')
+    assert.match(prompt, /未提供实测配音不属于分镜缺口/)
+  } finally {
+    db.close()
+  }
+})
 
 test('material fallback is explicit, scoped to unchanged content and never waives motion failures', () => {
   const { db, state } = visualFixture()
@@ -3438,6 +3579,108 @@ test('agent JSON parsing supports Codex plain output and Claude envelopes, rejec
   assert.throws(() => parseAgentJson('Here is your script: hello'), /JSON/)
 })
 
+test('history template is reusable offline and preserves escaped content in every layout', () => {
+  assert.ok(TEMPLATE_FAMILIES.some((family) => family.id === 'history'))
+  assert.equal(SCENE_LAYOUTS.length, 10)
+  for (const layout of ['map', 'relations', 'artifact', 'chapter'])
+    assert.ok(SCENE_LAYOUTS.some((item) => item === layout))
+  const layouts = new Set<string>()
+  for (const layout of SCENE_LAYOUTS) {
+    const scene = {
+      id: 'history-' + layout,
+      title: '史料 <辨析>',
+      body: '前138年｜张骞出使西域\n文献与实物相互参照\n保留 & 不删改',
+      layout,
+    }
+    const payload = validatePayload('storyboard', {
+      mode: 'template',
+      template: 'history',
+      scenes: [scene],
+    })
+    const html = sceneHtml(payload.scenes[0], payload.template)
+    assert.match(html, /史料 &lt;辨析&gt;/)
+    assert.match(html, /张骞出使西域/)
+    assert.match(html, /文献与实物相互参照/)
+    assert.match(html, /保留 &amp; 不删改/)
+    assert.match(html, /#dfc69c/)
+    assert.match(html, /history-scene/)
+    assert.ok(!/<script|https?:\/\//.test(html.replace(/http:\/\/www.w3.org\/2000\/svg/g, '')))
+    assert.equal(html, sceneHtml(scene, 'history'))
+    layouts.add(html)
+  }
+  assert.equal(layouts.size, SCENE_LAYOUTS.length)
+  assert.equal(
+    sceneHtml(
+      { id: 'custom', title: '题', body: '文', layout: 'title', html: '<p>自定义</p>' },
+      'history',
+    ),
+    '<p>自定义</p>',
+  )
+  assert.throws(
+    () =>
+      sceneHtml({ id: 'long', title: '题', body: '文'.repeat(361), layout: 'split' }, 'history'),
+    /拆分/,
+  )
+})
+
+test('history family supplies its visual contract to Agent and MG generation', () => {
+  const { db, state } = visualFixture()
+  try {
+    const prompt = agentPrompt(
+      state,
+      'storyboard',
+      { template: 'history', motionPolicy: { enabled: true, excludedSceneIds: [] } },
+      '',
+    )
+    assert.match(prompt, /史笺/)
+    assert.match(prompt, /#dfc69c/)
+    assert.match(prompt, /宋体/)
+    assert.match(prompt, /map,relations,artifact,chapter/)
+    assert.match(prompt, /路线示意/)
+    assert.match(prompt, /非实物复原/)
+    assert.match(prompt, /不.*虚构.*来源/)
+    assert.ok(!agentPrompt(state, 'storyboard', { template: 'technical' }, '').includes('史笺'))
+  } finally {
+    db.close()
+  }
+})
+
+test('history planning cycles ten layouts while other template families retain six', () => {
+  const { db, state } = visualFixture()
+  try {
+    stageValue(state, 'copy')!.text = Array.from(
+      { length: 10 },
+      (_, index) => `# 第${index + 1}节\n本节的历史文化说明`,
+    ).join('\n\n')
+    const history = templateStoryboard(state, { template: 'history' })
+    assert.deepEqual(
+      history.scenes.map((scene) => scene.layout),
+      [...SCENE_LAYOUTS],
+    )
+    for (const template of ['technical', 'editorial', 'product']) {
+      const storyboard = templateStoryboard(state, { template })
+      assert.equal(new Set(storyboard.scenes.map((scene) => scene.layout)).size, 6)
+      assert.ok(!agentPrompt(state, 'storyboard', { template }, '').includes('map,relations'))
+    }
+    for (const layout of ['map', 'relations', 'artifact'] as const) {
+      const scene = { id: 'diagram', title: '主题', body: '甲｜说明甲\n乙｜说明乙', layout }
+      const html = sceneHtml(scene, 'history')
+      assert.match(html, /id="history-entry-1"/)
+      assert.match(html, /id="history-entry-2"/)
+      assert.equal(
+        new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1])).size,
+        [...html.matchAll(/\bid="([^"]+)"/g)].length,
+      )
+      assert.throws(
+        () => sceneHtml({ ...scene, body: '主题｜内容\n'.repeat(5) }, 'history'),
+        /拆分/,
+      )
+    }
+  } finally {
+    db.close()
+  }
+})
+
 test('HTML preview removes active elements and applies a no-network no-script policy', () => {
   const html = safeStoryboardDocument(
     '<script>alert(1)</script><iframe src="https://evil.test"></iframe><h1 onclick="x()">标题</h1>',
@@ -3509,6 +3752,25 @@ test('process signal termination preserves stderr diagnostics', async () => {
     (error: Error) => {
       assert.match(error.message, /SIGTERM/)
       assert.match(error.message, /agent diagnostic/)
+      return true
+    },
+  )
+})
+
+test('Codex capacity failures explain that the provider is busy and suggest switching executor', async () => {
+  await assert.rejects(
+    workflowCommand(
+      process.execPath,
+      [
+        '-e',
+        "process.stderr.write('ERROR: Reconnecting... 5/5\\nERROR: stream disconnected before completion: Codex is at capacity, please try again later');process.exit(1)",
+      ],
+      { cwd: tmpdir() },
+    ),
+    (error: Error) => {
+      assert.match(error.message, /Codex 服务暂时繁忙/)
+      assert.match(error.message, /Claude Code CLI/)
+      assert.match(error.message, /stream disconnected before completion/)
       return true
     },
   )

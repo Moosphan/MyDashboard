@@ -548,6 +548,7 @@ export function StageWorkspace({
                     }
                     onCreate={(settings, sceneId) => generate(sceneId, settings)}
                     unsaved={draft.dirty}
+                    generationError={error}
                     onAcceptIllustration={() =>
                       run(async () => {
                         if (draft.dirty)

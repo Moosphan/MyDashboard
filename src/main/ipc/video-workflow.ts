@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { getDatabase } from '../database/connection'
 import { getVoiceoverService } from '../services/tts-service'
 import { VideoWorkflowService, type WorkflowGeneration } from '../services/video-workflow/service'
-import type { VideoStage, VideoPlatform, WorkflowFile } from '../../shared/video-workflow'
+import type { VideoStage, VideoPlatform, WorkflowFile, MusicSearchResult } from '../../shared/video-workflow'
 import { workflowMediaResponse } from '../services/video-workflow/media'
 import type { BilibiliPublishRequest } from '../../shared/bilibili-publishing'
 import { publishingVideoUrl } from '../services/video-workflow/catbus'
@@ -153,6 +153,18 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     })
     return result.canceled ? null : getVideoWorkflow().files.import(id, result.filePaths[0])
   })
+  handle('workflow:importMusic', async (id: string) => {
+    const result = await dialog.showOpenDialog(mainWindow()!, {
+      title: '选择配乐文件',
+      properties: ['openFile'],
+      filters: [{ name: '音频', extensions: ['mp3', 'wav', 'm4a', 'ogg', 'flac'] }],
+    })
+    return result.canceled ? null : getVideoWorkflow().importMusic(id, result.filePaths[0])
+  })
+  handle('workflow:searchMusic', (query: string) => getVideoWorkflow().searchMusic(query))
+  handle('workflow:downloadMusic', (id: string, result: MusicSearchResult) =>
+    getVideoWorkflow().downloadMusic(id, result),
+  )
   handle('workflow:import', async (id: string, stage: VideoStage, expected: number) => {
     const result = await dialog.showOpenDialog(mainWindow()!, {
       title: '导入阶段结果',

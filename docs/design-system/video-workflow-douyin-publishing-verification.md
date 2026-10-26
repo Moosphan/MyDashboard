@@ -2,6 +2,8 @@
 
 日期：2026-10-26。承接 B 站多账号实现，用户明确要求接入抖音，并将封面播放按钮改为半透明黑色圆底与浅色图标。
 
+后续故障修订：Catbus 0.2.1 的 `--tag` 仅拼接普通文字，不能据此认定可点击话题已提交；话题参数修复及验证边界见 [抖音话题验证](video-workflow-douyin-topics-verification.md)。
+
 ## 能力依据与实现
 
 已核实本机安装的 `catbus-cli@0.2.1`：真实 CLI 的 `platforms douyin -o json` 返回 web 登录与视频投稿已实现（`/tmp/douyin-real-capabilities.json`）。`dist/platforms/douyin/index.js`、`web/commands.js` 和 `web/normalize.js` 证实支持扫码、视频、封面、标题、正文、标签、可见性及作品列表；身份为 sec_uid，作品 ID 为数字。未进行真实扫码或投稿。

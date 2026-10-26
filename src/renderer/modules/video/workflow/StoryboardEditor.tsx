@@ -4,9 +4,10 @@ import { Toggle } from '@/components/ui/toggle'
 import { VoiceInput, VoiceRadioGroup, VoiceTextArea } from '../components/voiceover/VoiceControls'
 import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
 import {
-  SCENE_LAYOUTS,
+  sceneLayoutsForTemplate,
   TEMPLATE_FAMILIES,
   storyboardMotionReadiness,
+  storyboardMotionNotes,
   sceneMotionEnabled,
   isMaterialBlocker,
   type StoryboardPayload,
@@ -24,6 +25,22 @@ export const layoutNames = {
   comparison: '对比说明',
   quote: '大字引言',
   summary: '总结清单',
+  map: '山川行旅',
+  relations: '人物关系',
+  artifact: '器物解读',
+  chapter: '章节过渡',
+}
+const historyLayoutNames = {
+  title: '卷首山川',
+  split: '人物与背景',
+  steps: '编年脉络',
+  comparison: '双栏辨析',
+  quote: '文本细读',
+  summary: '结语索引',
+  map: '山川行旅',
+  relations: '人物关系',
+  artifact: '器物解读',
+  chapter: '章节过渡',
 }
 
 export function ScenePreview({
@@ -101,17 +118,19 @@ export function StoryboardEditor({
   narration,
   onAcceptIllustration,
   unsaved,
+  generationError,
 }: {
   projectId: string
   value: StoryboardPayload
   onChange: (payload: StoryboardPayload) => void
   disabled: boolean
-  onRegenerate: (sceneId: string) => void
+  onRegenerate: (sceneId: string) => Promise<boolean>
   onAiModify: (sceneId: string, feedback: string) => Promise<boolean>
   onCreate: (settings: StoryboardPayload, sceneId?: string) => Promise<boolean>
   narration?: { scenes: { id: string; text: string }[] }
   onAcceptIllustration: () => Promise<boolean>
   unsaved: boolean
+  generationError?: string
 }) {
   const [active, setActive] = useState(value.scenes[0]?.id ?? '')
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -157,32 +176,96 @@ export function StoryboardEditor({
     ),
   )
   const index = scene ? value.scenes.indexOf(scene) : 0
-  const sampleScenes: StoryScene[] = [
-    {
-      id: 'sample-title',
-      title: '一个想法，清晰表达',
-      body: '从问题开始\n把内容组织成故事',
-      layout: 'title',
-    },
-    {
-      id: 'sample-steps',
-      title: '把创作串成工作流',
-      body: '整理观点\n设计画面\n生成作品',
-      layout: 'steps',
-    },
-    {
-      id: 'sample-split',
-      title: '结构与内容相辅相成',
-      body: '左侧解释原理\n右侧展示实践',
-      layout: 'split',
-    },
-    {
-      id: 'sample-comparison',
-      title: '从灵感到作品',
-      body: '修改前：信息分散\n修改后：叙事清晰',
-      layout: 'comparison',
-    },
-  ]
+  const sampleScenes: StoryScene[] =
+    candidate.template === 'history'
+      ? [
+          {
+            id: 'sample-title',
+            title: '从长安出发',
+            body: '丝绸之路上的相遇与交流\n一条路，如何连接不同的文明？',
+            layout: 'title',
+          },
+          {
+            id: 'sample-steps',
+            title: '把历史放回时间之中',
+            body: '前138年｜张骞首次出使西域\n前119年｜张骞再次出使西域\n交流｜往来逐渐连接不同地域',
+            layout: 'steps',
+          },
+          {
+            id: 'sample-split',
+            title: '器物背后，是人的生活',
+            body: '从材质与工艺，观察当时的生产方式\n从使用与流传，理解人们的日常生活',
+            layout: 'split',
+          },
+          {
+            id: 'sample-comparison',
+            title: '史实与讲述，如何分辨？',
+            body: '文献记载：关注作者、时代与语境\n实物证据：关注出土背景与年代',
+            layout: 'comparison',
+          },
+          {
+            id: 'sample-quote',
+            title: '读史料，也读它的语境',
+            body: '谁写下了这段文字？\n它在何时、为何而写？\n让文字回到自己的时代。',
+            layout: 'quote',
+          },
+          {
+            id: 'sample-summary',
+            title: '路的尽头，仍是相遇',
+            body: '看时间｜建立历史坐标\n看证据｜让文献与实物相互参照\n看生活｜从具体的人理解时代',
+            layout: 'summary',
+          },
+          {
+            id: 'sample-map',
+            title: '一条路，连接不同的世界',
+            body: '长安｜以城市为起点，观察往来的方向。\n河西｜沿走廊展开，理解交通与地理。\n西域｜在不同地域的相遇中，寻找交流的线索。',
+            layout: 'map',
+          },
+          {
+            id: 'sample-relations',
+            title: '历史，由人的往来织成',
+            body: '行旅者｜带来沿途的见闻\n工匠｜在器物中留下技艺\n记录者｜用文字保存时代的记忆',
+            layout: 'relations',
+          },
+          {
+            id: 'sample-artifact',
+            title: '一件器物的阅读方法',
+            body: '器形｜观察轮廓与结构\n工艺｜辨认制作方法和表面痕迹\n语境｜结合来源与使用背景理解器物',
+            layout: 'artifact',
+          },
+          {
+            id: 'sample-chapter',
+            title: '从山川，走向人间',
+            body: '循着道路留下的线索，\n走近相遇、交换与日常生活。',
+            layout: 'chapter',
+          },
+        ]
+      : [
+          {
+            id: 'sample-title',
+            title: '一个想法，清晰表达',
+            body: '从问题开始\n把内容组织成故事',
+            layout: 'title',
+          },
+          {
+            id: 'sample-steps',
+            title: '把创作串成工作流',
+            body: '整理观点\n设计画面\n生成作品',
+            layout: 'steps',
+          },
+          {
+            id: 'sample-split',
+            title: '结构与内容相辅相成',
+            body: '左侧解释原理\n右侧展示实践',
+            layout: 'split',
+          },
+          {
+            id: 'sample-comparison',
+            title: '从灵感到作品',
+            body: '修改前：信息分散\n修改后：叙事清晰',
+            layout: 'comparison',
+          },
+        ]
   const examples = { ...candidate, scenes: sampleScenes }
   const importReference = async () => {
     try {
@@ -222,6 +305,18 @@ export function StoryboardEditor({
         mode: 'template',
         template: candidate.template,
         motionPolicy: candidate.motionPolicy,
+        ...(candidate.template !== value.template
+          ? {
+              scenes: value.scenes.map(
+                ({ html: _html, motion: _motion, materialFallback: _fallback, ...item }) => ({
+                  ...item,
+                  layout: sceneLayoutsForTemplate(candidate.template).includes(item.layout)
+                    ? item.layout
+                    : 'split',
+                }),
+              ),
+            }
+          : {}),
       })
     } else {
       setStarting(true)
@@ -245,18 +340,29 @@ export function StoryboardEditor({
       setEditing(true)
     }
   }
-  const runAiModification = async () => {
+  const runSceneGeneration = async (action: () => Promise<boolean>) => {
+    if (aiStarting) return
+    setError('')
+    setAiStarting(true)
+    try {
+      if (await action()) {
+        setAiFeedback('')
+        setEditing(false)
+      } else {
+        setError('任务未启动，请先保存或放弃未保存修改，并检查前置审核与执行环境。修改意见已保留。')
+      }
+    } catch (failure) {
+      setError((failure as Error).message || '任务启动失败，修改意见已保留，请重试。')
+    } finally {
+      setAiStarting(false)
+    }
+  }
+  const runAiModification = () => {
     if (!sceneDraft || !aiFeedback.trim()) {
       setError('请填写 AI 修改意见。')
       return
     }
-    setAiStarting(true)
-    const started = await onAiModify(sceneDraft.id, aiFeedback.trim())
-    setAiStarting(false)
-    if (started) {
-      setAiFeedback('')
-      setEditing(false)
-    }
+    void runSceneGeneration(() => onAiModify(sceneDraft.id, aiFeedback.trim()))
   }
   return (
     <div className="workflow-section workflow-storyboard">
@@ -294,6 +400,16 @@ export function StoryboardEditor({
           {storyboardMotionReadiness(value).blockers.map((issue, issueIndex) => (
             <p key={`${issue.sceneId}-${issueIndex}`} className="workflow-error">
               {value.scenes.find((item) => item.id === issue.sceneId)?.title}：{issue.message}
+            </p>
+          ))}
+          {storyboardMotionNotes(value).map((issue, issueIndex) => (
+            <p
+              key={`note-${issue.sceneId}-${issueIndex}`}
+              className="workflow-muted"
+              data-storyboard-motion-note
+            >
+              {value.scenes.find((item) => item.id === issue.sceneId)?.title} · 说明：
+              {issue.message} 此说明不阻止人工审核，实际动效仍会校验。
             </p>
           ))}
           {materialScenes.length > 0 && (
@@ -411,7 +527,11 @@ export function StoryboardEditor({
         </span>
         <span>
           {TEMPLATE_FAMILIES.find((item) => item.id === value.template)?.name} ·{' '}
-          {scene?.html ? '自由 HTML' : scene ? layoutNames[scene.layout] : '等待创作'}
+          {scene?.html
+            ? '自由 HTML'
+            : scene
+              ? (value.template === 'history' ? historyLayoutNames : layoutNames)[scene.layout]
+              : '等待创作'}
         </span>
       </div>
       {value.scenes.length > 0 && (
@@ -648,7 +768,13 @@ export function StoryboardEditor({
               {sampleScenes.map((item) => (
                 <div key={item.id}>
                   <ScenePreview projectId={projectId} value={examples} scene={item} thumbnail />
-                  <p className="workflow-muted mt-1">{layoutNames[item.layout]}</p>
+                  <p className="workflow-muted mt-1">
+                    {
+                      (candidate.template === 'history' ? historyLayoutNames : layoutNames)[
+                        item.layout
+                      ]
+                    }
+                  </p>
                 </div>
               ))}
             </div>
@@ -775,9 +901,9 @@ export function StoryboardEditor({
                   html: undefined,
                 })
               }
-              options={SCENE_LAYOUTS.map((layout) => ({
+              options={sceneLayoutsForTemplate(value.template).map((layout) => ({
                 value: layout,
-                label: layoutNames[layout],
+                label: (value.template === 'history' ? historyLayoutNames : layoutNames)[layout],
               }))}
             />
             <VoiceTextArea
@@ -856,6 +982,11 @@ export function StoryboardEditor({
                 AI
                 只修改当前分镜并生成待审核版本；不会直接覆盖已审核内容。需要保持事实、口播和镜头顺序。
               </p>
+              {(generationError || error) && (
+                <p role="alert" className="workflow-error" data-storyboard-ai-error>
+                  {generationError || error}
+                </p>
+              )}
               <div className="workflow-actions">
                 <Button
                   size="sm"
@@ -871,10 +1002,7 @@ export function StoryboardEditor({
                     size="sm"
                     variant="ghost"
                     disabled={aiStarting}
-                    onClick={() => {
-                      onRegenerate(sceneDraft.id)
-                      setEditing(false)
-                    }}
+                    onClick={() => void runSceneGeneration(() => onRegenerate(sceneDraft.id))}
                   >
                     用已保存要求重绘当前一镜
                   </Button>

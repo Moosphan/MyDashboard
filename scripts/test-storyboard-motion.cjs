@@ -146,7 +146,16 @@ app.whenReady().then(async () => {
     const generated = {
       ...storyboard,
       scenes: [
-        ...storyboard.scenes,
+        ...storyboard.scenes.map((scene) => ({
+          ...scene,
+          motion: {
+            ...scene.motion,
+            blockers: [
+              '未提供实测配音，归一化卡点需在粗剪时按原口播词锚与实际配音校准。',
+              '独立子 agent 设计复核尚未完成：审核会话未收到任务内容，重新创建会话失败，需补做复核。',
+            ],
+          },
+        })),
         {
           id: 'two',
           title: '排除镜头',

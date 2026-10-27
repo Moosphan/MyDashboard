@@ -201,23 +201,73 @@ export async function createWorkflowAudio(input: {
                 ),
               },
             }
-      const voiceJob = await service.create({
+      const request = resolveVoiceRequest({
         ...segmentVoice,
         text,
         clientRequestId: `workflow:${job.id}:${sceneIndex}:${chunkIndex}`,
       })
+      let completed: AudioTrack | undefined
+      if (!audioTrackId) {
+        for (const previousJob of project.jobs) {
+          if (
+            previousJob.stage !== 'audio' ||
+            previousJob.state !== 'failed' ||
+            previousJob.expectedRevision !== job.expectedRevision
+          )
+            continue
+          const track = previousJob.audioProgress?.tracks[segmentIndex]
+          if (!track || track.sceneId !== sceneId || track.text !== text) continue
+          const prior = service.repository.byRequest(
+            `workflow:${previousJob.id}:${sceneIndex}:${chunkIndex}`,
+          )
+          if (!prior || prior.state !== 'succeeded') continue
+          const sameVoice = (
+            ['engine', 'voiceId', 'voiceDesign', 'profileId', 'profileRevision'] as const
+          ).every((key) => prior.request[key] === request[key])
+          if (
+            !sameVoice ||
+            JSON.stringify(resolveVoiceRequest(prior.request).options) !==
+              JSON.stringify(request.options)
+          )
+            continue
+          try {
+            await files.verify(project.id, track.file)
+            completed = track
+            break
+          } catch {
+            signal.throwIfAborted()
+          }
+        }
+      }
+      if (completed) {
+        phase(`复用已完成配音 ${segmentIndex + 1}/${trackCount}，音色参数与文件校验一致`)
+        total += completed.duration
+        if (total > 300) throw new Error('实际配音超过 5 分钟，请缩短口播后重新生成')
+        normalized.push(files.path(completed.file))
+        tracks.push(completed)
+        await input.progress?.({ tracks: [...tracks], total: trackCount })
+        continue
+      }
+      const voiceJob = await service.create(request)
       const cancel = () => {
         service.jobs.cancel(voiceJob.id)
       }
       signal.addEventListener('abort', cancel, { once: true })
       try {
         let state = voiceJob
+        let lastPhase = ''
         while (!VOICE_TERMINAL.includes(state.state)) {
+          if (state.phase !== lastPhase) {
+            phase(`配音 ${sceneIndex + 1}/${scenes.length} 镜 · ${state.phase}`)
+            lastPhase = state.phase
+          }
           await delay(350, undefined, { signal })
           state = service.jobs.get(voiceJob.id)!
         }
         if (state.state !== 'succeeded' || !state.assetId)
-          throw new Error(state.error ?? `配音${state.phase}`)
+          throw new Error(
+            `第 ${sceneIndex + 1} 镜第 ${chunkIndex + 1} 段：${state.error ?? `配音${state.phase}`}。已完成片段保留，原音色与文案重试可复用。`,
+          )
         source = managedPath(service.root, service.assets.asset(state.assetId).file_path)
       } finally {
         signal.removeEventListener('abort', cancel)

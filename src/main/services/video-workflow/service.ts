@@ -9,6 +9,9 @@ import {
 import {
   VIDEO_STAGES,
   stageValue,
+  projectVideoFormat,
+  storyboardFormatIssue,
+  videoFrame,
   renderSourceProject,
   stageUnlocked,
   validatePayload,
@@ -234,10 +237,11 @@ export class VideoWorkflowService {
       if (sceneMotionEnabled(storyboard, scene.id) && !scene.motion?.effects.length)
         throw new Error(`请先补齐「${scene.title}」动效计划，素材降级不能替代 MG 动画`)
       const prepared = await prepareMotionScene(
-        sceneHtml(scene, storyboard.template),
+        sceneHtml(scene, storyboard.template, storyboard.format),
         'illustration-check',
         [],
         new AbortController().signal,
+        videoFrame(storyboard.format),
       )
       if (!prepared.illustrationLabel)
         throw new Error(`「${scene.title}」缺少可见的原创示意图或原创意象图标注，请先补上标注`)
@@ -280,6 +284,8 @@ export class VideoWorkflowService {
   ) {
     const project = this.repository.get(projectId)
     if (stage === 'storyboard' && project.stages.storyboard) {
+      const formatIssue = storyboardFormatIssue(project)
+      if (formatIssue) throw new Error(formatIssue)
       const readiness = storyboardMotionReadiness(stageValue(project, 'storyboard')!)
       if (stageValue(project, 'storyboard')!.motionPolicy?.enabled && readiness.unplanned.length)
         throw new Error(
@@ -578,10 +584,11 @@ export class VideoWorkflowService {
             phase('校验动效目标与分镜时长')
             const source = scenes.scenes.find((item) => item.id === scene.sceneId)!
             const prepared = await prepareMotionScene(
-              sceneHtml(source, scenes.template),
+              sceneHtml(source, scenes.template, scenes.format),
               'check-scene',
               scene.effects.map((effect) => effect.selector),
               controller.signal,
+              videoFrame(scenes.format),
             ).catch((error: Error) => {
               throw new Error(`分镜「${source.title}」：${error.message}`)
             })
@@ -760,12 +767,21 @@ export class VideoWorkflowService {
                   mode: 'agent',
                   template: 'technical',
                   ...rawSettings,
+                  format: projectVideoFormat(project, rawSettings.referenceText),
                   scenes: [
                     { id: 'settings', title: '设置校验', body: '设置校验', layout: 'title' },
                   ],
                 })
               : {}
           delete settings.scenes
+          if (
+            input.stage === 'storyboard' &&
+            input.sceneId &&
+            (stageValue(project, 'storyboard')?.format ?? 'landscape') !== settings.format
+          )
+            throw new Error(
+              '项目画幅已改变，请重新生成整组分镜；单镜重绘不能混用横竖画幅，原版本已保留',
+            )
           if (input.stage === 'storyboard' && input.executor === 'template')
             payload = templateStoryboard(project, settings)
           else {
@@ -803,6 +819,10 @@ export class VideoWorkflowService {
                     input.storyboardModification?.feedback,
                   ),
               controller.signal,
+              {
+                timeout: input.stage === 'storyboard' && !input.sceneId ? 1800000 : 900000,
+                onProgress: phase,
+              },
             )
             if (input.stage === 'storyboard') {
               const generated = retainMaterialFallback(
@@ -966,6 +986,7 @@ export class VideoWorkflowService {
     else if (stage === 'storyboard' && /\.html?$/i.test(path))
       payload = {
         mode: 'agent',
+        format: projectVideoFormat(project),
         template: stageValue(project, 'storyboard')?.template ?? 'technical',
         scenes: [
           {
@@ -985,7 +1006,10 @@ export class VideoWorkflowService {
     await this.files.verifyPayload(projectId, payload)
     const scene = payload.scenes.find((item) => item.id === sceneId)
     if (!scene) throw new Error('分镜不存在')
-    return safeStoryboardDocument(sceneHtml(scene, payload.template))
+    return safeStoryboardDocument(
+      sceneHtml(scene, payload.template, payload.format),
+      videoFrame(payload.format),
+    )
   }
   async restoreAudioVersion(
     projectId: string,

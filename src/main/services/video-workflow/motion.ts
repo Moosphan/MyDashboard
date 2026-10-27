@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto'
 import {
   stageValue,
   renderSourceProject,
+  videoFrame,
   validateMotionPlan,
   storyboardMotionReadiness,
   sceneMotionEnabled,
@@ -132,13 +133,20 @@ export async function verifyStoryboardMotion(
   signal: AbortSignal,
 ) {
   for (const [index, scene] of storyboard.scenes.entries()) {
-    if (!sceneMotionEnabled(storyboard, scene.id) || !scene.motion?.effects.length) continue
+    if (
+      storyboard.format !== 'portrait' &&
+      (!sceneMotionEnabled(storyboard, scene.id) || !scene.motion?.effects.length)
+    )
+      continue
     try {
       await prepareMotionScene(
-        sceneHtml(scene, storyboard.template),
+        sceneHtml(scene, storyboard.template, storyboard.format),
         `verify-scene-${index}`,
-        scene.motion.effects.map((effect) => effect.selector),
+        sceneMotionEnabled(storyboard, scene.id)
+          ? (scene.motion?.effects.map((effect) => effect.selector) ?? [])
+          : [],
         signal,
+        videoFrame(storyboard.format),
       )
     } catch (error) {
       throw new Error(`分镜「${scene.title}」动效目标校验失败：${(error as Error).message}`)
@@ -215,6 +223,7 @@ export async function prepareMotionScene(
   id: string,
   selectors: string[],
   signal: AbortSignal,
+  viewport = videoFrame(),
 ) {
   signal.throwIfAborted()
   const isolated = session.fromPartition(`motion-${randomUUID()}`, { cache: false })
@@ -225,8 +234,9 @@ export async function prepareMotionScene(
   )
   const window = new BrowserWindow({
     show: false,
-    width: 1920,
-    height: 1080,
+    width: viewport.width,
+    height: viewport.height,
+    useContentSize: true,
     webPreferences: {
       session: isolated,
       sandbox: true,
@@ -245,12 +255,30 @@ export async function prepareMotionScene(
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   try {
     await window.loadURL(
-      `data:text/html;charset=utf-8,${encodeURIComponent(safeStoryboardDocument(html))}`,
+      `data:text/html;charset=utf-8,${encodeURIComponent(safeStoryboardDocument(html, viewport))}`,
     )
     const result = (await window.webContents.executeJavaScriptInIsolatedWorld(1001, [
       {
         code: `(() => { try {
+      const canvas = document.body.querySelector(':scope > section, :scope > main, :scope > .scene');
+      if (canvas) {
+        const bounds = canvas.getBoundingClientRect();
+        if (bounds.width > ${viewport.width} + 1 || bounds.height > ${viewport.height} + 1)
+          throw new Error('分镜主容器超出 ${viewport.width}×${viewport.height} 画布，请按目标画幅重新排版或重新生成整组分镜');
+      }
       const styleNodes = Array.from(document.querySelectorAll('style')).slice(1, -1);
+      const checkCanvasRules = rules => {
+        for (const rule of rules) {
+          if (rule.cssRules) checkCanvasRules(Array.from(rule.cssRules));
+          if (!rule.selectorText?.split(',').some(selector => /^(html|body)$/.test(selector.trim()))) continue;
+          for (const [property, expected] of [['width', ${viewport.width}], ['height', ${viewport.height}]]) {
+            const value = rule.style.getPropertyValue(property).trim();
+            if (/^[\\d.]+px$/.test(value) && Math.abs(parseFloat(value) - expected) > 1)
+              throw new Error('分镜 HTML 声明了错误画幅，请按 ${viewport.width}×${viewport.height} 重新排版');
+          }
+        }
+      };
+      styleNodes.forEach(node => checkCanvasRules(Array.from(node.sheet?.cssRules ?? [])));
       const fontFamilies = new Map();
       const declaredFonts = new Set();
       const collectFonts = value => {
@@ -314,7 +342,7 @@ export async function prepareMotionScene(
       const illustrationLabel = Array.from(document.body.querySelectorAll('*')).some(node => {
         if (node.children.length || !/原创.{0,12}(示意|意象)/.test(node.innerText || '')) return false;
         const bounds = node.getBoundingClientRect();
-        if (!bounds.width || !bounds.height || bounds.right <= 0 || bounds.bottom <= 0 || bounds.left >= 1920 || bounds.top >= 1080) return false;
+        if (!bounds.width || !bounds.height || bounds.right <= 0 || bounds.bottom <= 0 || bounds.left >= ${viewport.width} || bounds.top >= ${viewport.height}) return false;
         for (let current = node; current; current = current.parentElement) {
           const style = getComputedStyle(current);
           if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0) return false;
@@ -393,5 +421,5 @@ ${initial ? '初始动效要求已由创作输入明确提出，必须把它落�
 修改意见：${JSON.stringify(feedback)}；整片定位时间：${at}秒。当前意见优先于旧动效要求中与其冲突的部分；未要求改变的部分保留，返回的每镜 effects 必须包含该镜仍需保留的既有动效。summary 逐镜说明本次实际改动，不能只写“已添加 MG”。${initial ? '初始动效要求' : '本次修改意见'}中当前属性无法实现的要求必须返回 requiresUpstream 和具体原因，不可用通用标题入场替代。
 已有动效：${JSON.stringify(stageValue(project, 'roughcut')?.motion ?? null)}
 分镜与实测时长：${JSON.stringify(motionScenes(project).filter((scene) => sceneMotionEnabled(storyboard, scene.id)))}
-分镜HTML：${JSON.stringify(storyboard.scenes.filter((scene) => sceneMotionEnabled(storyboard, scene.id) && (!sceneId || scene.id === sceneId)).map((scene) => ({ id: scene.id, title: scene.title, html: sceneHtml(scene, storyboard.template) })))} `
+分镜HTML：${JSON.stringify(storyboard.scenes.filter((scene) => sceneMotionEnabled(storyboard, scene.id) && (!sceneId || scene.id === sceneId)).map((scene) => ({ id: scene.id, title: scene.title, html: sceneHtml(scene, storyboard.template, storyboard.format) })))} `
 }

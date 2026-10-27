@@ -27,6 +27,14 @@ export class VoiceRepository {
     return row ? this.jobFromRow(row) : undefined
   }
 
+  deleteJob(id: string): void {
+    const job = this.job(id)
+    if (!job) return
+    if (!['failed', 'cancelled', 'interrupted'].includes(job.state) || job.assetId !== null)
+      throw new Error('只能删除失败、已取消或中断且未生成音频的任务')
+    this.db.prepare('DELETE FROM voice_jobs WHERE id = ?').run(id)
+  }
+
   createJob(request: VoiceRequest): VoiceJob {
     const existing = this.byRequest(request.clientRequestId)
     if (existing) return existing

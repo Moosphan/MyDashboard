@@ -1,0 +1,98 @@
+[
+  {
+    "id": "historian",
+    "name": "砚声 · 历史旁白",
+    "description": "成熟男性，中低音，温暖醇厚而有共鸣，普通话清晰标准，语速舒缓，叙事沉稳克制，句尾自然收束，适合历史纪录片。",
+    "seed": 1042,
+    "builtin": true,
+    "sampleText": "让声音带你走进故事，在文字之间，听见细节，也听见新的灵感。",
+    "filename": "historian.wav",
+    "duration": 7.200166666666667,
+    "sampleRate": 48000,
+    "sha256": "08c3953c4b7f743459eacd5fa3a57cf186bd759c92212aa77cba4a82982b371c",
+    "model": {
+      "id": "mlx-community/VoxCPM2-8bit",
+      "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032"
+    },
+    "options": {
+      "seed": 1042,
+      "gainDb": 0,
+      "denoise": false,
+      "steps": 20,
+      "cfg": 2,
+      "promptPauseMs": 320
+    }
+  },
+  {
+    "id": "storyteller",
+    "name": "听澜 · 温柔讲述",
+    "description": "成年女性，中音，温柔自然，声音柔和清澈，普通话标准，语速适中偏慢，亲切而有叙事感，呼吸轻盈，情绪平和，避免夸张表演。",
+    "seed": 2048,
+    "builtin": true,
+    "sampleText": "让声音带你走进故事，在文字之间，听见细节，也听见新的灵感。",
+    "filename": "storyteller.wav",
+    "duration": 7.520166666666666,
+    "sampleRate": 48000,
+    "sha256": "e7f6724ad8b35a58ebdd0eeaa71d078c839637a2a7613fb99487f03849dd59f0",
+    "model": {
+      "id": "mlx-community/VoxCPM2-8bit",
+      "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032"
+    },
+    "options": {
+      "seed": 2048,
+      "gainDb": 0,
+      "denoise": false,
+      "steps": 20,
+      "cfg": 2,
+      "promptPauseMs": 320
+    }
+  },
+  {
+    "id": "explainer",
+    "name": "知行 · 清晰解说",
+    "description": "年轻成年男性，中音偏明亮，干净利落，普通话标准，吐字准确，节奏轻快但不急促，充满好奇心，适合科技与知识讲解。",
+    "seed": 3096,
+    "builtin": true,
+    "sampleText": "让声音带你走进故事，在文字之间，听见细节，也听见新的灵感。",
+    "filename": "explainer.wav",
+    "duration": 4.6401666666666666,
+    "sampleRate": 48000,
+    "sha256": "dd028d1b96645be3c40dd36e4db59182756923409a4d725f5c1e1f1c77612913",
+    "model": {
+      "id": "mlx-community/VoxCPM2-8bit",
+      "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032"
+    },
+    "options": {
+      "seed": 3096,
+      "gainDb": 0,
+      "denoise": false,
+      "steps": 20,
+      "cfg": 2,
+      "promptPauseMs": 320
+    }
+  },
+  {
+    "id": "bright",
+    "name": "晴语 · 活力主持",
+    "description": "年轻成年女性，明亮清爽的中高音，普通话标准，语调轻盈活泼，语速适中偏快，带自然微笑和积极情绪，清晰有感染力，避免尖锐或幼态。",
+    "seed": 4096,
+    "builtin": true,
+    "sampleText": "让声音带你走进故事，在文字之间，听见细节，也听见新的灵感。",
+    "filename": "bright.wav",
+    "duration": 6.880166666666667,
+    "sampleRate": 48000,
+    "sha256": "04f730c4a316ad46ce176b58ec452d5d67b7dbbf5f62d8c458499f05fcee52fd",
+    "model": {
+      "id": "mlx-community/VoxCPM2-8bit",
+      "revision": "d52725898a0675703f7f9ddc5a4d1a3cdbb99032"
+    },
+    "options": {
+      "seed": 4096,
+      "gainDb": 0,
+      "denoise": false,
+      "steps": 20,
+      "cfg": 2,
+      "promptPauseMs": 320
+    }
+  }
+]

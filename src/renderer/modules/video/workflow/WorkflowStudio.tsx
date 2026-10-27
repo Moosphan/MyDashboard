@@ -20,6 +20,8 @@ import {
   VIDEO_STAGES,
   VIDEO_STAGE_LABELS,
   stageValue,
+  projectVideoFormat,
+  videoFormatLabel,
   type VideoProject,
   type VideoStage,
   type StagePayloads,
@@ -148,7 +150,7 @@ export function WorkflowStudio({
               </Button>
               <h1 className="workflow-page-title">{state.project.title}</h1>
               <div className="workflow-facts">
-                <span>横版 16:9</span>
+                <span>{videoFormatLabel(projectVideoFormat(state.project))}</span>
                 <span>
                   目标 {stageValue(state.project, 'brief')?.duration ?? '—'} 秒 · 最长 5 分钟
                 </span>
@@ -285,7 +287,7 @@ export function WorkflowStudio({
             </div>
             <div>
               <span className="workflow-muted">首期制作规格</span>
-              <strong className="workflow-spec">横版 · ≤ 5 分钟</strong>
+              <strong className="workflow-spec">横版 / 竖版 · ≤ 5 分钟</strong>
             </div>
           </div>
           <div className="workflow-project-filters">
@@ -362,7 +364,10 @@ export function WorkflowStudio({
                             <span>
                               {stageValue(project, 'storyboard')?.scenes[0]?.title ?? project.title}
                             </span>
-                            <small>16:9 · VIDEO PROJECT</small>
+                            <small>
+                              {projectVideoFormat(project) === 'portrait' ? '9:16' : '16:9'} · VIDEO
+                              PROJECT
+                            </small>
                           </div>
                         )}
                       </div>
@@ -373,7 +378,7 @@ export function WorkflowStudio({
                             {stageValue(project, 'audio')?.duration.toFixed(0) ??
                               stageValue(project, 'brief')?.duration ??
                               '—'}{' '}
-                            秒 · 横版
+                            秒 · {projectVideoFormat(project) === 'portrait' ? '竖版' : '横版'}
                           </span>
                         </div>
                         <h3>{project.title}</h3>

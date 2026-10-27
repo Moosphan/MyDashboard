@@ -19,6 +19,8 @@ import {
   SCENE_LAYOUTS,
   TEMPLATE_FAMILIES,
   validateRenderMusic,
+  projectVideoFormat,
+  videoFrame,
 } from '../src/shared/video-workflow'
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -48,6 +50,7 @@ import { mediaRange, workflowMediaResponse } from '../src/main/services/video-wo
 import { VideoWorkflowService } from '../src/main/services/video-workflow/service'
 import { VoiceoverService } from '../src/main/services/voiceover/voiceover-service'
 import { resolveVoiceRequest } from '../src/shared/voiceover'
+import { copyPrompt } from '../src/main/services/video-workflow/copy'
 import { createWorkflowAudio, workflowVoiceSeed } from '../src/main/services/video-workflow/audio'
 import {
   defaultMotion,
@@ -443,6 +446,114 @@ function fixture() {
   const project = repository.create('演示项目')
   return { db, repository, project }
 }
+
+test('portrait requirements survive brief validation and override legacy landscape generation', () => {
+  const { db, state } = visualFixture()
+  try {
+    const brief = validatePayload('brief', { text: '人物志', duration: 120, format: 'portrait' })
+    assert.equal(brief.format, 'portrait')
+    state.stages.brief!.payload = brief
+    assert.equal(projectVideoFormat(state), 'portrait')
+    assert.deepEqual(videoFrame('portrait'), { width: 1080, height: 1920 })
+    assert.match(copyPrompt(state), /1080×1920/)
+    const prompt = agentPrompt(state, 'storyboard', { template: 'history' }, '')
+    assert.match(prompt, /1080×1920/)
+    assert.doesNotMatch(prompt.split('已审核简报：')[0], /视频横版 1920×1080|body 1920×1080/)
+    assert.equal(templateStoryboard(state, { template: 'history' }).format, 'portrait')
+    assert.throws(() => validatePayload('brief', { ...brief, format: 'square' }), /画幅/)
+  } finally {
+    db.close()
+  }
+})
+
+test('legacy explicit portrait requests are recovered without changing frozen storyboard geometry', () => {
+  const { db, state } = visualFixture()
+  try {
+    state.stages.brief!.payload = { text: '讲清历史', duration: 120 }
+    state.stages.copy!.payload = { text: '内容定位：竖版全屏，面向抖音' }
+    assert.equal(projectVideoFormat(state), 'portrait')
+    assert.equal(projectVideoFormat(state, '抖音竖版全面屏'), 'portrait')
+    state.stages.copy!.payload = { text: '面向抖音' }
+    assert.equal(projectVideoFormat(state), 'landscape')
+    assert.match(hyperframesDocument(state), /data-width="1920" data-height="1080"/)
+    state.stages.brief!.payload = { text: '人物志', duration: 120, format: 'landscape' }
+    assert.equal(projectVideoFormat(state, '旧参考：竖版全屏'), 'landscape')
+  } finally {
+    db.close()
+  }
+})
+
+test('portrait storyboard preview and HyperFrames composition use the same frozen dimensions', () => {
+  const { db, state } = visualFixture()
+  try {
+    const board = validatePayload('storyboard', {
+      ...stageValue(state, 'storyboard'),
+      format: 'portrait',
+    })
+    assert.equal(board.format, 'portrait')
+    state.stages.storyboard!.payload = board
+    const preview = safeStoryboardDocument(
+      sceneHtml(board.scenes[0], board.template, board.format),
+      videoFrame(board.format),
+    )
+    assert.match(preview, /width:1080px;height:1920px/)
+    const motion = defaultMotion(state)
+    motion.scenes[1].transition = { type: 'slide-up', duration: 0.3 }
+    const document = hyperframesDocument(state, undefined, motion)
+    assert.match(document, /data-width="1080" data-height="1920"/)
+    assert.match(document, /width="1080" height="1920"/)
+    assert.match(document, /0px 1920px/)
+    assert.match(document, /0px -1920px/)
+  } finally {
+    db.close()
+  }
+})
+
+test('render payload accepts portrait but frozen frames cannot be reused across formats', () => {
+  const { db, repository, state: initial, render } = visualFixture()
+  try {
+    assert.equal(validatePayload('roughcut', { ...render, width: 1080, height: 1920 }).height, 1920)
+    assert.throws(
+      () => validatePayload('roughcut', { ...render, width: 1080, height: 1080 }),
+      /合成工程/,
+    )
+    const motion = defaultMotion(initial)
+    const state = repository.save(
+      initial.id,
+      'roughcut',
+      {
+        ...render,
+        sourceStoryboard: initial.stages.storyboard!.id,
+        motion,
+        compositionFiles: [render.compositionFiles[0], render.compositionFiles[0]],
+        compositionNames: ['frame-0.png', 'frame-1.png'],
+      },
+      initial.revision,
+      randomUUID(),
+    )
+    assert.ok(reusableFrameFiles(state, 2, motion))
+    state.stages.storyboard!.payload = { ...stageValue(state, 'storyboard')!, format: 'portrait' }
+    assert.equal(reusableFrameFiles(state, 2, motion), undefined)
+    assert.throws(
+      () =>
+        repository.save(
+          initial.id,
+          'roughcut',
+          {
+            ...render,
+            width: 1080,
+            height: 1920,
+            sourceStoryboard: initial.stages.storyboard!.id,
+          },
+          state.revision,
+          randomUUID(),
+        ),
+      /画幅/,
+    )
+  } finally {
+    db.close()
+  }
+})
 
 test('directional scaling from storyboard MG plans validates and compiles to real WAAPI scale', () => {
   const plan = validateMotionPlan(
@@ -999,7 +1110,7 @@ test('explicit MG requests invoke the motion Agent before roughcut rendering and
     const script = join(root, 'motion-codex')
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],JSON.stringify({requiresUpstream:true,reason:'需要增加图形后再编排 MG'}));});\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],JSON.stringify({requiresUpstream:true,reason:'需要增加图形后再编排 MG'}));});\n`,
     )
     chmodSync(script, 0o755)
     service.runtime.set({ codexPath: script, claudePath: '' })
@@ -1019,7 +1130,7 @@ test('explicit MG requests invoke the motion Agent before roughcut rendering and
     assert.equal(repository.get(project.id).stages.roughcut, undefined)
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ summary: '只返回首镜', scenes: [defaultMotion(state).scenes[0]] }))}));\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ summary: '只返回首镜', scenes: [defaultMotion(state).scenes[0]] }))}));\n`,
     )
     const incomplete = await service.generate({ ...request, requestId: randomUUID() })
     for (
@@ -1729,7 +1840,7 @@ test('saved styles guide Agent storyboard generation with new approved copy and 
       capture = join(root, 'prompt.txt')
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(output))});});\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(output))});});\n`,
     )
     chmodSync(script, 0o755)
     service.runtime.set({ codexPath: script })
@@ -1785,7 +1896,7 @@ test('AI storyboard modification updates only the requested scene and leaves a r
     const capture = join(root, 'prompt.txt')
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(output))});});\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(output))});});\n`,
     )
     chmodSync(script, 0o755)
     service.runtime.set({ codexPath: script })
@@ -1816,7 +1927,7 @@ test('AI storyboard modification updates only the requested scene and leaves a r
     const revisedScene = storyboard.scenes[0]
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboard, scenes: [revisedScene] }))}));\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboard, scenes: [revisedScene] }))}));\n`,
     )
     const noChange = await service.generate({
       projectId: initial.id,
@@ -1839,7 +1950,7 @@ test('AI storyboard modification updates only the requested scene and leaves a r
     const latestFeedback = '保留原有事实和口播。'
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboard, scenes: [{ ...revisedScene, title: '再次调整的标题' }] }))}));\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');process.stdin.resume();process.stdin.on('end',()=>fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify({ ...storyboard, scenes: [{ ...revisedScene, title: '再次调整的标题' }] }))}));\n`,
     )
     const latest = await service.generate({
       projectId: initial.id,
@@ -1974,6 +2085,99 @@ test('audio publishes durable playable segments before later segments fail or ar
       db.close()
       rmSync(root, { recursive: true, force: true })
     }
+  }
+})
+
+test('audio retries reuse verified completed segments only with identical narration and voice settings', async () => {
+  const { db, repository, state: initial } = visualFixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-audio-resume-'))
+  const service = new VoiceoverService(root, db, join(root, 'worker.py'))
+  const files = new WorkflowFiles(root, repository)
+  const runtime = new WorkflowRuntimeManager(root).get()
+  try {
+    const source = join(root, 'source.wav')
+    await workflowCommand(
+      runtime.ffmpegPath,
+      ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=0.2', source],
+      { cwd: root },
+    )
+    const voice = { engine: 'edge' as const, voiceId: 'zh-CN-XiaoxiaoNeural', options: {} }
+    const narration = stageValue(initial, 'narration')!
+    const previous = repository.startJob(
+      initial.id,
+      'audio',
+      initial.revision,
+      randomUUID(),
+      'template',
+    )
+    const first = service.repository.createJob(
+      resolveVoiceRequest({
+        ...voice,
+        text: narration.scenes[0].text,
+        clientRequestId: `workflow:${previous.id}:0:0`,
+      }),
+    )
+    service.repository.updateJob(first.id, { state: 'succeeded' })
+    const track = {
+      sceneId: narration.scenes[0].id,
+      text: narration.scenes[0].text,
+      duration: 0.2,
+      file: await files.import(initial.id, source),
+    }
+    repository.updateAudioProgress(previous.id, { tracks: [track], total: 2 })
+    repository.updateJob(previous.id, { state: 'failed', error: 'JOB_TIMEOUT: 后续段超时' })
+    const captured: string[] = []
+    const assetId = Number(
+      db
+        .prepare(
+          "INSERT INTO video_assets(title,type,file_path) VALUES('fixture','audio','source.wav')",
+        )
+        .run().lastInsertRowid,
+    )
+    service.create = async (input) => {
+      const request = resolveVoiceRequest(input)
+      captured.push(request.text)
+      return { ...service.repository.createJob(request), state: 'succeeded', assetId }
+    }
+    for (const change of ['same', 'voice', 'text', 'tampered'] as const) {
+      const state = repository.get(initial.id)
+      if (change === 'text')
+        state.stages.narration = {
+          ...state.stages.narration!,
+          payload: {
+            scenes: narration.scenes.map((scene, index) =>
+              index ? scene : { ...scene, text: '修改后的口播。' },
+            ),
+          },
+        }
+      if (change === 'tampered') writeFileSync(files.path(track.file), Buffer.alloc(100))
+      const retry = repository.startJob(
+        initial.id,
+        'audio',
+        initial.revision,
+        randomUUID(),
+        'template',
+      )
+      captured.length = 0
+      const result = await createWorkflowAudio({
+        project: state,
+        job: retry,
+        voice: change === 'voice' ? { ...voice, voiceId: 'zh-CN-YunxiNeural' } : voice,
+        service,
+        files,
+        runtime,
+        cwd: join(root, retry.id),
+        signal: new AbortController().signal,
+        phase: () => {},
+      })
+      assert.equal(captured.length, change === 'same' ? 1 : 2, change)
+      if (change === 'same') assert.equal(result.tracks[0].file.id, track.file.id)
+      repository.updateJob(retry.id, { state: 'cancelled' })
+    }
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
@@ -2585,7 +2789,7 @@ test('AI copy uses approved brief and revision feedback, preserves history and r
     const response = join(root, 'response.json')
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);setTimeout(()=>fs.copyFileSync(${JSON.stringify(response)},process.argv[process.argv.indexOf('--output-last-message')+1]),200);});\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);setTimeout(()=>fs.copyFileSync(${JSON.stringify(response)},process.argv[process.argv.indexOf('--output-last-message')+1]),200);});\n`,
     )
     chmodSync(script, 0o755)
     service.runtime.set({ codexPath: script })
@@ -2766,7 +2970,7 @@ test('single-scene narration regenerates only the target and rejects out-of-scop
     const configureResult = (value: unknown) => {
       writeFileSync(
         script,
-        `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(value))});});\n`,
+        `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(value))});});\n`,
       )
       chmodSync(script, 0o755)
     }
@@ -2980,7 +3184,7 @@ test('AI narration uses approved copy and storyboard and stays awaiting human re
     }
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(result))});});\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],${JSON.stringify(JSON.stringify(result))});});\n`,
     )
     chmodSync(script, 0o755)
     service.runtime.set({ codexPath: script })
@@ -2994,7 +3198,7 @@ test('AI narration uses approved copy and storyboard and stays awaiting human re
     for (let attempt = 0; attempt < 100 && repository.job(job.id)?.state === 'running'; attempt++)
       await new Promise((resolve) => setTimeout(resolve, 30))
     assert.equal(repository.job(job.id)?.state, 'succeeded', repository.job(job.id)?.error ?? '')
-    assert.equal(readFileSync(capture, 'utf8'), prompt)
+    assert.ok(readFileSync(capture, 'utf8').endsWith(prompt))
     const generated = repository.get(project.id)
     assert.equal(generated.stages.narration?.status, 'review')
     assert.deepEqual(generated.stages.narration?.payload, result)
@@ -3092,7 +3296,7 @@ test('AI publishing regenerates one platform from approved content and preserves
     const response = join(root, 'response.json')
     writeFileSync(
       script,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.copyFileSync(${JSON.stringify(response)},process.argv[process.argv.indexOf('--output-last-message')+1]);});\n`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let input='';process.stdin.on('data',chunk=>input+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},input);fs.copyFileSync(${JSON.stringify(response)},process.argv[process.argv.indexOf('--output-last-message')+1]);});\n`,
     )
     chmodSync(script, 0o755)
     service.runtime.set({ codexPath: script })
@@ -3802,6 +4006,54 @@ test('process timeout retains the last download stage and streams stderr progres
   )
 })
 
+test('process timeout explains the task deadline without blaming CLI login', async () => {
+  await assert.rejects(
+    workflowCommand(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      cwd: tmpdir(),
+      timeout: 100,
+      timeoutMessage: '分镜创作超过 30 分钟，原版本已保留',
+    }),
+    /分镜创作超过 30 分钟，原版本已保留/,
+  )
+})
+
+test('Codex generation disables unrelated integrations and delegates preview to the host', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'video-cli-isolation-'))
+  try {
+    const executable = join(root, 'fake-codex')
+    const capture = join(root, 'invocation.json')
+    writeFileSync(
+      executable,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');if(process.argv[2]==='mcp'){process.stdout.write(JSON.stringify([{name:'local.browser',enabled:true},{name:'node_repl',enabled:true}]));process.exit(0)}let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args:process.argv.slice(2),prompt}));fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],JSON.stringify({text:'通过'}));process.stdout.write(JSON.stringify({type:'turn.completed'})+'\\n')});\n`,
+    )
+    chmodSync(executable, 0o700)
+    const runtime = { ...new WorkflowRuntimeManager(root).get(), codexPath: executable }
+    assert.deepEqual(
+      await runAgent(
+        'codex',
+        runtime,
+        root,
+        '根据指定的本地绘图技能生成分镜',
+        new AbortController().signal,
+      ),
+      { text: '通过' },
+    )
+    const invocation = JSON.parse(readFileSync(capture, 'utf8'))
+    for (const setting of [
+      'mcp_servers={"local.browser"={command="disabled-for-video-workflow",enabled=false},"node_repl"={command="disabled-for-video-workflow",enabled=false}}',
+      'features.plugins=false',
+      'features.apps=false',
+      'features.multi_agent=false',
+    ])
+      assert.ok(invocation.args.includes(setting), `Missing isolation: ${setting}`)
+    assert.match(invocation.prompt, /宿主.*预览.*校验/)
+    assert.match(invocation.prompt, /本地.*技能/)
+    assert.match(invocation.prompt, /不要.*浏览器/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('process cancellation terminates the process and its child group', async () => {
   const root = mkdtempSync(join(tmpdir(), 'workflow-process-'))
   const signal = new AbortController()
@@ -3838,7 +4090,7 @@ test('CLI adapters pass prompts through stdin, preserve spaces in executable pat
     const executable = join(root, 'fake agent')
     writeFileSync(
       executable,
-      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{if(!prompt.includes('标题'))process.exit(2);const output=JSON.stringify({text:'通过'});const index=process.argv.indexOf('--output-last-message');if(index>=0){if(!process.argv.includes('read-only'))process.exit(3);fs.writeFileSync(process.argv[index+1],output)}else{if(process.argv[process.argv.indexOf('--tools')+1]!=='')process.exit(4);process.stdout.write(JSON.stringify({result:output}))}})`,
+      `#!/usr/bin/env node\nif(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}const fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{if(!prompt.includes('标题'))process.exit(2);const output=JSON.stringify({text:'通过'});const index=process.argv.indexOf('--output-last-message');if(index>=0){if(!process.argv.includes('read-only'))process.exit(3);fs.writeFileSync(process.argv[index+1],output)}else{if(process.argv[process.argv.indexOf('--tools')+1]!=='')process.exit(4);process.stdout.write(JSON.stringify({result:output}))}})`,
     )
     chmodSync(executable, 0o700)
     const config = {

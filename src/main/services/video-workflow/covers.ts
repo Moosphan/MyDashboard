@@ -51,7 +51,7 @@ export function coverPrompt(project: VideoProject, options: CoverGeneration) {
     .map((scene) => ({
       title: scene.title,
       body: scene.body,
-      html: sceneHtml(scene, storyboard.template)
+      html: sceneHtml(scene, storyboard.template, storyboard.format)
         .replace(/data:[^"'\s<>]+/gi, '[图片省略，参考配色与布局]')
         .slice(0, 14000),
     }))

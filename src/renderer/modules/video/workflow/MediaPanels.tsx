@@ -998,11 +998,18 @@ export function RenderPanel({
             src={mediaUrl(project.id, render.file)}
             poster={mediaUrl(project.id, render.cover)}
             aria-label={final ? '最终成片预览' : '粗剪预览'}
+            style={
+              render.width < render.height
+                ? { aspectRatio: '16 / 9', objectFit: 'contain' }
+                : undefined
+            }
             onTimeUpdate={(event) => syncPlayback(event.currentTarget)}
             onSeeked={(event) => syncPlayback(event.currentTarget)}
           />
           <div className="workflow-toolbar">
-            <span>{render.duration.toFixed(1)} 秒 · 1920 × 1080 · 30 fps</span>
+            <span>
+              {render.duration.toFixed(1)} 秒 · {render.width} × {render.height} · 30 fps
+            </span>
             <div className="workflow-actions">
               <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
               {final && selectedVersion && (
@@ -1177,7 +1184,11 @@ export function PublishingPanel({
       {render && (
         <div className="workflow-publish-asset">
           <div className="relative shrink-0">
-            <img src={mediaUrl(project.id, render.cover)} alt="共用成片封面" />
+            <img
+              src={mediaUrl(project.id, render.cover)}
+              alt="共用成片封面"
+              style={render.width < render.height ? { objectFit: 'contain' } : undefined}
+            />
             <VideoPreviewButton
               ref={previewButton}
               open={previewOpen}
@@ -1188,7 +1199,10 @@ export function PublishingPanel({
             />
           </div>
           <div>
-            <strong className="text-body-sm">共用成片 · 横版 1920×1080</strong>
+            <strong className="text-body-sm">
+              共用成片 · {render.width < render.height ? '竖版' : '横版'} {render.width}×
+              {render.height}
+            </strong>
             <p className="workflow-muted mt-2">{render.duration.toFixed(1)} 秒 · Bilibili / 抖音</p>
           </div>
         </div>
@@ -1210,6 +1224,11 @@ export function PublishingPanel({
             autoPlay
             preload="metadata"
             aria-label="发布成片预览"
+            style={
+              render.width < render.height
+                ? { aspectRatio: '16 / 9', objectFit: 'contain' }
+                : undefined
+            }
             onError={() =>
               setPreviewError(
                 '视频加载失败，请检查成片文件是否仍然存在，或返回正式成片页重新打开。',
@@ -1224,7 +1243,7 @@ export function PublishingPanel({
         )}
       </WorkflowDialog>
       <p className="workflow-muted">
-        两平台使用同一份横版成片。审核发布信息后，均可一键投稿，也可导出发布包后上传并回填链接。
+        两平台使用同一份成片，保持原始画幅。审核发布信息后，均可一键投稿，也可导出发布包后上传并回填链接。
       </p>
       {platform === 'bilibili' && (
         <PublicationCoverPanel

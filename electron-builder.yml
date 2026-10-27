@@ -12,6 +12,12 @@ files:
 asar: true
 
 extraResources:
+  - from: resources/voice-design
+    to: voice-design
+    filter:
+      - '*.wav'
+      - '*.json'
+      - '*.md'
   - from: resources/voice-runtime
     to: voice-runtime
     filter:

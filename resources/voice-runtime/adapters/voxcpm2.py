@@ -1,9 +1,28 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import math
 import wave
 
 
+def generation_limit(request):
+    if "maxTokens" in request:
+        return request["maxTokens"]
+    characters = len(request["text"].strip())
+    seconds = min(120, max(12, characters * 0.8 + 4))
+    return min(1500, math.ceil(seconds / 0.08) + 3)
+
+
 def generate(model, request):
+    max_tokens = generation_limit(request)
+    if request.get("voiceDesign"):
+        yield from model.generate(
+            text=request["text"],
+            instruct=request["voiceDesign"],
+            inference_timesteps=request["options"]["steps"],
+            cfg_value=request["options"]["cfg"],
+            max_tokens=max_tokens,
+        )
+        return
     with wave.open(request["referencePath"], "rb") as reference:
         parameters = reference.getparams()
         frames = reference.readframes(reference.getnframes())
@@ -23,5 +42,5 @@ def generate(model, request):
             prompt_text=request["referenceText"],
             inference_timesteps=request["options"]["steps"],
             cfg_value=request["options"]["cfg"],
-            max_tokens=1500,
+            max_tokens=max_tokens,
         )

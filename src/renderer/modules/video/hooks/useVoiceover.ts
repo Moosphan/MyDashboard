@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { IPCResponse } from '@shared/types/ipc'
 import type { VoiceJob, VoiceProfile, VoiceRuntime } from '@shared/voiceover'
 import { mergeVoiceJobs } from '@shared/voiceover'
@@ -15,6 +15,12 @@ export async function voiceCall<T>(channel: string, ...args: unknown[]): Promise
 
 export function useVoiceover(open: boolean) {
   const [jobs, setJobs] = useState<VoiceJob[]>([])
+  const deletedJobs = useRef(new Set<string>())
+  const deleteJob = useCallback(async (id: string) => {
+    await voiceCall('tts:deleteJob', id)
+    deletedJobs.current.add(id)
+    setJobs(current => mergeVoiceJobs(current, [], deletedJobs.current))
+  }, [])
   const [profiles, setProfiles] = useState<VoiceProfile[]>([])
   const [runtime, setRuntime] = useState<VoiceRuntime | null>(null)
   const [assets, setAssets] = useState<VoiceAsset[]>([])
@@ -30,17 +36,17 @@ export function useVoiceover(open: boolean) {
     setLoading(true)
     try {
       const [snapshot, environment] = await Promise.all([voiceCall<VoiceJob[]>('tts:listJobs'), voiceCall<VoiceRuntime>('tts:getRuntime'), refreshProfiles(), refreshAssets()])
-      setJobs(current => mergeVoiceJobs(current, snapshot))
+      setJobs(current => mergeVoiceJobs(current, snapshot, deletedJobs.current))
       setRuntime(environment)
       setError(null)
     } catch (failure) { setError((failure as Error).message) }
     finally { setLoading(false) }
   }, [refreshAssets, refreshProfiles])
   useEffect(() => {
-    const unsubscribeJobs = window.electronAPI.onVoiceoverJobUpdated(job => setJobs(current => mergeVoiceJobs(current, [job])))
+    const unsubscribeJobs = window.electronAPI.onVoiceoverJobUpdated(job => setJobs(current => mergeVoiceJobs(current, [job], deletedJobs.current)))
     const unsubscribeAssets = window.electronAPI.onVideoAssetsChanged(() => { if (open) void refreshAssets().catch(failure => setError(failure.message)) })
     if (open) void refresh()
     return () => { unsubscribeJobs(); unsubscribeAssets() }
   }, [open, refresh, refreshAssets])
-  return { jobs, profiles, runtime, setRuntime, assets, trash, error, setError, loading, refresh, refreshAssets, refreshProfiles }
+  return { jobs, deleteJob, profiles, runtime, setRuntime, assets, trash, error, setError, loading, refresh, refreshAssets, refreshProfiles }
 }

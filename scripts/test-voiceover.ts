@@ -31,6 +31,127 @@ function fixture() {
 
 const request = (id: string) => ({ clientRequestId: id, engine: 'edge' as const, text: 'Hello world', voiceId: 'en-US-AriaNeural', options: { rate: 0, pitchHz: 0, volume: 0 } })
 const delay = (milliseconds: number) => new Promise(resolve => setTimeout(resolve, milliseconds))
+
+test('only unsuccessful terminal jobs without assets can be deleted', async () => {
+  const context = fixture()
+  const manager = new VoiceJobManager(context.repository, context.root, async () => { throw new Error('unused') })
+  try {
+    for (const state of ['failed', 'cancelled', 'interrupted'] as const) {
+      const job = context.repository.createJob(request(`delete-${state}`))
+      context.repository.updateJob(job.id, { state })
+      manager.delete(job.id)
+      assert.equal(manager.get(job.id), undefined)
+      manager.delete(job.id)
+    }
+    for (const state of ['queued', 'generating', 'cancelling', 'succeeded'] as const) {
+      const job = context.repository.createJob(request(`keep-${state}`))
+      context.repository.updateJob(job.id, { state })
+      assert.throws(() => manager.delete(job.id), /任务|音频/)
+      assert.ok(manager.get(job.id))
+    }
+  } finally { await manager.dispose(); context.close() }
+})
+
+test('deleted job IDs stay removed when a stale snapshot arrives', () => {
+  const context = fixture()
+  try {
+    const job = context.repository.createJob(request('deleted-snapshot'))
+    const deleted = new Set([job.id])
+    assert.deepEqual(mergeVoiceJobs([job], [job], deleted), [])
+  } finally { context.close() }
+})
+
+test('voice design tempo is explicit, bounded and unavailable to clone or Edge requests', () => {
+  const input = { clientRequestId: 'tempo', engine: 'voxcpm2', text: '你好', voiceDesign: '少女感软音', options: { designTempo: 0.8 } }
+  assert.equal(resolveVoiceRequest(input).options.designTempo, 0.8)
+  for (const designTempo of [0.69, 1.31, '1', NaN]) assert.throws(() => resolveVoiceRequest({ ...input, options: { designTempo } }), /参数/)
+  assert.throws(() => resolveVoiceRequest({ ...input, voiceDesign: undefined, profileId: 'p', profileRevision: 1 }), /参数/)
+  assert.throws(() => resolveVoiceRequest({ ...request('tempo-edge'), options: { designTempo: 1 } }), /参数/)
+})
+
+test('design tempo changes real duration while preserving the raw audio and pitch', async () => {
+  const { applyVoiceDesignTempo } = await import('../src/main/services/voiceover/python-adapter')
+  const context = fixture()
+  try {
+    const rawPath = join(context.root, 'raw.wav')
+    const path = join(context.root, 'output.wav')
+    await runCommand('/opt/homebrew/bin/ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-ar', '48000', rawPath])
+    writeFileSync(path, readFileSync(rawPath))
+    const original = readFileSync(rawPath)
+    const processed = await applyVoiceDesignTempo({ path, rawPath, duration: 2, sampleRate: 48000 }, 0.8, '/opt/homebrew/bin/ffmpeg', '/opt/homebrew/bin/ffprobe', new AbortController().signal)
+    assert.ok(processed.duration > 2.4 && processed.duration < 2.55)
+    assert.deepEqual(readFileSync(rawPath), original)
+    const pcm = join(context.root, 'processed.pcm')
+    await runCommand('/opt/homebrew/bin/ffmpeg', ['-v', 'error', '-i', processed.path, '-f', 'f32le', pcm])
+    const buffer = readFileSync(pcm)
+    let crossings = 0
+    for (let offset = 4; offset < buffer.length; offset += 4) if (buffer.readFloatLE(offset - 4) < 0 && buffer.readFloatLE(offset) >= 0) crossings++
+    assert.ok(Math.abs(crossings / processed.duration - 440) < 5)
+  } finally { context.close() }
+})
+
+test('voice recipes compile contrasting traits and graded emotions without inheriting the selected builtin', async () => {
+  const { buildVoiceDesignDescription, VOICE_CHARACTER_RECIPES, VOICE_EMOTION_PRESETS } = await import('../src/shared/voice-design-controls')
+  const soft = VOICE_CHARACTER_RECIPES.find(item => item.id === 'anime-soft')!
+  const mature = VOICE_CHARACTER_RECIPES.find(item => item.id === 'mature-narrator')!
+  const describe = (recipe: typeof soft) => buildVoiceDesignDescription(recipe.traits, recipe.emotions, '')
+  assert.match(describe(soft), /少女|软糯|气声/)
+  assert.match(describe(mature), /成熟|低音|胸腔/)
+  assert.notEqual(describe(soft), describe(mature))
+  assert.ok(VOICE_EMOTION_PRESETS.some(item => item.id === 'shy'))
+  assert.ok(VOICE_EMOTION_PRESETS.some(item => item.id === 'wronged'))
+  assert.notEqual(buildVoiceDesignDescription({}, { happy: 1 }, ''), buildVoiceDesignDescription({}, { happy: 3 }, ''))
+  assert.ok(!buildVoiceDesignDescription({}, {}, '').includes('男性'))
+  assert.match(buildVoiceDesignDescription({}, {}, '句尾收束'), /句尾收束/)
+})
+
+test('VoxCPM2 voice design accepts a description without any reference and keeps it separate from spoken text', () => {
+  const input = { clientRequestId: 'design', engine: 'voxcpm2', text: '你好，欢迎收听。', voiceDesign: '温暖沉稳的成年男声，吐字清晰。', options: { seed: 1024 } }
+  const resolved = resolveVoiceRequest(input)
+  assert.equal(resolved.voiceDesign, input.voiceDesign)
+  assert.equal(resolved.text, input.text)
+  assert.equal(resolved.profileId, undefined)
+  assert.equal(resolved.options.denoise, false)
+  for (const engine of ['edge', 'qwen3-tts']) assert.throws(() => resolveVoiceRequest({ ...input, engine }), /造声/)
+  for (const voiceDesign of ['', ' ', '字'.repeat(601), 123]) assert.throws(() => resolveVoiceRequest({ ...input, voiceDesign }), /描述/)
+  assert.throws(() => resolveVoiceRequest({ ...input, profileId: 'reference', profileRevision: 1 }), /参考/)
+  assert.throws(() => resolveVoiceRequest({ ...input, options: { denoise: true } }), /降噪/)
+})
+
+test('reference-free design runs through the existing queue and records design metadata', async () => {
+  const context = fixture()
+  const manager = new VoiceJobManager(context.repository, context.root, async job => {
+    const path = join(context.root, 'cache', 'voice-jobs', job.id, 'output.wav')
+    writeFileSync(path, 'generated audio')
+    return { path, duration: 6, sampleRate: 48000 }
+  })
+  try {
+    const job = manager.create({ clientRequestId: 'no-reference', engine: 'voxcpm2', text: '设计声音测试。', voiceDesign: '明亮清晰的青年女声', options: { seed: 42 } })
+    await waitUntil(() => manager.get(job.id)?.state === 'succeeded')
+    const asset = new VoiceAssetStore(context.root, context.repository).asset(manager.get(job.id)!.assetId!)
+    const metadata = JSON.parse(asset.metadata)
+    assert.equal(metadata.mode, 'design')
+    assert.equal(metadata.voiceDesign, '明亮清晰的青年女声')
+    assert.ok(!asset.title.includes('undefined'))
+  } finally { await manager.dispose(); context.close() }
+})
+
+test('voice design plans persist validated descriptions and seeds without overwriting built-in presets', async () => {
+  const { VoiceDesignStore } = await import('../src/main/services/voiceover/design-store')
+  const context = fixture()
+  try {
+    const store = new VoiceDesignStore(context.root)
+    assert.ok(store.list().filter(item => item.builtin).length >= 4)
+    const saved = store.save({ name: '我的历史旁白', description: '沉稳温暖的成年男声', seed: 123 })
+    assert.equal(new VoiceDesignStore(context.root).list().find(item => item.id === saved.id)?.description, saved.description)
+    assert.throws(() => store.save({ name: '', description: '男声', seed: 1 }), /名称/)
+    assert.throws(() => store.save({ name: '声音', description: '', seed: 1 }), /描述/)
+    assert.throws(() => store.save({ name: '声音', description: '男声', seed: -1 }), /seed/)
+    const paced = store.save({ name: '舒缓声音', description: '柔和的女性声线', seed: 321, tempo: 0.85 })
+    assert.equal(new VoiceDesignStore(context.root).list().find(item => item.id === paced.id)?.tempo, 0.85)
+    assert.throws(() => store.save({ name: '声音', description: '女声', seed: 1, tempo: 2 }), /参数/)
+  } finally { context.close() }
+})
 async function waitUntil(condition: () => boolean) {
   for (let attempt = 0; attempt < 150; attempt++) {
     if (condition()) return
@@ -228,6 +349,21 @@ test('rejects traversal and returns actual audio MIME', () => {
     symlinkSync(tmpdir(), join(context.root, 'outside-link'))
     assert.throws(() => managedPath(context.root, 'outside-link/not-yet-created.wav'), /路径/)
   } finally { context.close() }
+})
+
+test('worker and local queue preserve timeout reasons instead of reporting user cancellation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'voice-timeout-'))
+  try {
+    const script = join(root, 'worker.cjs')
+    writeFileSync(script, 'process.stdin.resume();setInterval(()=>{},1000)')
+    const controller = new AbortController()
+    const pending = runVoiceWorker(process.execPath, script, {jobId:'job',attemptId:'attempt'}, controller.signal)
+    const rejection = assert.rejects(pending, /JOB_TIMEOUT:.*超时/)
+    controller.abort(new Error('JOB_TIMEOUT: 配音生成超时'))
+    await rejection
+    const queue = new LocalVoiceQueue()
+    await assert.rejects(queue.run(async () => 'unused', controller.signal), /JOB_TIMEOUT:.*超时/)
+  } finally { rmSync(root, {recursive:true,force:true}) }
 })
 
 test('worker protocol validates identity, rejects stray output and observes cancellation', async () => {

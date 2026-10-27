@@ -9,6 +9,7 @@ export function workflowCommand(
     signal?: AbortSignal
     input?: string
     timeout?: number
+    timeoutMessage?: string
     onOutput?: (text: string) => void
     onStderr?: (text: string) => void
     nodePath?: string
@@ -64,7 +65,7 @@ export function workflowCommand(
     }
     const abort = () => stop(new Error('任务已取消'))
     const timer = setTimeout(
-      () => stop(new Error('执行超时，请检查 CLI 登录、网络或本地模型')),
+      () => stop(new Error(options.timeoutMessage ?? '执行超时，请检查 CLI 登录、网络或本地模型')),
       options.timeout ?? 600000,
     )
     child.stdout.on('data', (data) => {

@@ -1,6 +1,6 @@
-import type { StoryScene } from '../../../shared/video-workflow'
+import type { StoryScene, VideoFormat } from '../../../shared/video-workflow'
 
-export const HISTORY_TEMPLATE_GUIDE = `视觉模板「史笺 · 历史文化」：全幅牛皮纸 #dfc69c，深墨 #302a23，朱砂 #873b2a，辅色茶褐 #654d3a；低对比纸纤维纹理，书籍版心、细规则线与印章式栏目签。中文宋体标题（Songti SC / STSong / SimSun / serif），黑体正文（PingFang SC / Microsoft YaHei / sans-serif），不要用圆角卡片、现代科技界面或满屏仿古花纹。1920×1080，底部140px为字幕安全区，标题76–112px、正文32–38px。十种版式按内容选择：title 卷首山川、split 人物/背景分栏、steps 编年脉络、comparison 双栏辨析、quote 文本细读、summary 结语索引、map 山川行旅、relations 人物关系、artifact 器物解读、chapter 章节过渡。map 使用独立路线和节点，标注“路线示意 · 非比例地图”；relations 只呈现文案明确的关联，不推断血缘、师承或因果；artifact 使用可拆解的原创器形轮廓，标注“原创器形示意 · 非实物复原”，不自动套用为具体文物；chapter 使用大字章节与短导语，承接叙事转场。地图、关系、器物各最多4项，支持“标签｜说明”；普通段落使用序号，不猜测地名或人名。山川仅为原创装饰，不能冒充史实地图、文物或历史人物肖像；不虚构年代、引文及来源。保留文案事实，长段落拆镜。MG开启时创建可独立选中的年表线/节点、人物关系线、器形局部/说明、证据段落/重点标记，以实际内容解释顺序或关系；每个元素有稳定ID，纸纹不做闪烁或随机运动；MG关闭时保持静态。不用通用标题入场代替解释性动画。`
+export const HISTORY_TEMPLATE_GUIDE = `视觉模板「史笺 · 历史文化」：全幅牛皮纸 #dfc69c，深墨 #302a23，朱砂 #873b2a，辅色茶褐 #654d3a；低对比纸纤维纹理，书籍版心、细规则线与印章式栏目签。中文宋体标题（Songti SC / STSong / SimSun / serif），黑体正文（PingFang SC / Microsoft YaHei / sans-serif），不要用圆角卡片、现代科技界面或满屏仿古花纹。画布遵循当前项目指定画幅及字幕安全区，标题76–112px、正文32–38px；竖版使用上下布局，图解与正文错层，避免横版分栏挤压。十种版式按内容选择：title 卷首山川、split 人物/背景分栏、steps 编年脉络、comparison 双栏辨析、quote 文本细读、summary 结语索引、map 山川行旅、relations 人物关系、artifact 器物解读、chapter 章节过渡。map 使用独立路线和节点，标注“路线示意 · 非比例地图”；relations 只呈现文案明确的关联，不推断血缘、师承或因果；artifact 使用可拆解的原创器形轮廓，标注“原创器形示意 · 非实物复原”，不自动套用为具体文物；chapter 使用大字章节与短导语，承接叙事转场。地图、关系、器物各最多4项，支持“标签｜说明”；普通段落使用序号，不猜测地名或人名。山川仅为原创装饰，不能冒充史实地图、文物或历史人物肖像；不虚构年代、引文及来源。保留文案事实，长段落拆镜。MG开启时创建可独立选中的年表线/节点、人物关系线、器形局部/说明、证据段落/重点标记，以实际内容解释顺序或关系；每个元素有稳定ID，纸纹不做闪烁或随机运动；MG关闭时保持静态。不用通用标题入场代替解释性动画。`
 
 function escapeText(value: string) {
   return value.replace(
@@ -124,7 +124,40 @@ body{background:#dfc69c;color:#302a23}
 .history-long-title.history-map h1,.history-long-title.history-relations h1,.history-long-title.history-artifact h1{font-size:62px}
 `
 
-export function historySceneHtml(scene: StoryScene) {
+const portraitStyles = `
+.history-top{left:72px;right:120px;top:90px;font-size:22px;gap:18px}
+.history-top>span:last-child{display:none}
+.history-bottom{left:72px;right:120px;bottom:320px}
+.history-main{inset:230px 120px 390px 72px}
+.history-scene h1{font-size:80px;line-height:1.3}
+.history-content{gap:36px;margin-top:60px}
+.history-title .history-main{right:120px;justify-content:flex-start;padding-top:110px}
+.history-title h1{font-size:96px}
+.history-title .history-spine{right:65px;top:270px;font-size:26px}
+.history-title .history-landscape{width:1080px;height:800px;bottom:220px;opacity:.5}
+.history-title .history-content{margin-top:80px}
+.history-split .history-main,.history-chapter .history-main,.history-summary .history-main{display:flex;flex-direction:column;align-items:stretch;gap:70px}
+.history-split .history-heading,.history-chapter .history-heading{border-right:0;border-bottom:2px solid #923e2b90;padding:0 0 42px;display:block}
+.history-split .history-content,.history-chapter .history-content{margin:0}
+.history-steps .history-content{grid-template-columns:1fr;margin-top:70px;gap:42px;padding-left:40px}
+.history-timeline{top:0;bottom:0;left:0;width:2px;height:auto;right:auto;transform-origin:top}
+.history-steps .history-entry{padding:0 0 0 20px}
+.history-node{left:-48px;top:12px}
+.history-steps .history-entry-label{font-size:36px;margin-bottom:14px}
+.history-comparison .history-content,.history-summary .history-content{grid-template-columns:1fr}
+.history-comparison .history-entry,.history-comparison .history-entry:nth-child(even){border-left:0;padding:32px 0}
+.history-quote .history-main{padding:30px 0 0 40px}
+.history-quote .history-content{padding-left:32px}
+.history-quote .history-entry{font-size:44px}
+.history-map .history-diagram,.history-relations .history-diagram,.history-artifact .history-diagram{position:relative;top:auto;left:auto;width:100%;height:400px;margin-top:42px}
+.history-map .history-content,.history-relations .history-content,.history-artifact .history-content{position:relative;top:auto;left:auto;right:auto;margin:54px 0 0;height:auto;gap:24px;display:flex;flex-direction:column}
+.history-map .history-diagram-note,.history-artifact .history-diagram-note{bottom:-30px;font-size:20px}
+.history-relations .history-entry{grid-template-columns:170px 1fr}
+.history-chapter h1{font-size:96px}
+.history-dense.history-many-nodes .history-entry{font-size:30px}
+`
+
+export function historySceneHtml(scene: StoryScene, format: VideoFormat = 'landscape') {
   const characters = Array.from(scene.body).length
   if (characters > 180 || Array.from(scene.title).length > 48)
     throw new Error('史笺模板单镜最多 180 字正文、48 字标题，请拆分为多个分镜或使用 Agent 重新排版')
@@ -204,5 +237,5 @@ export function historySceneHtml(scene: StoryScene) {
     diagram = `<div class="history-diagram" id="history-artifact"><svg viewBox="0 0 560 410" xmlns="http://www.w3.org/2000/svg"><ellipse cx="280" cy="385" rx="170" ry="12" fill="#70584318"/><path id="history-artifact-body" d="M150 90 Q170 140 160 200 Q158 305 235 328 L325 328 Q402 305 400 200 Q390 140 410 90Z" fill="#70584318" stroke="#654d3a" stroke-width="3"/><path id="history-artifact-rim" d="M140 78 Q280 45 420 78 L410 96 Q280 72 150 96Z" fill="#dfc69c" stroke="#873b2a" stroke-width="3"/><path id="history-artifact-handles" d="M160 140 C40 80 70 270 180 255 M400 140 C520 80 490 270 380 255" fill="none" stroke="#654d3a" stroke-width="8"/><path id="history-artifact-foot" d="M235 328 L220 373 M325 328 L340 373 M280 330 L280 373" fill="none" stroke="#654d3a" stroke-width="10"/><path id="history-artifact-detail" d="M172 182 Q280 211 388 182 M173 200 Q280 229 387 200 M193 270 Q280 294 367 270" fill="none" stroke="#873b2a" stroke-width="2"/><path id="history-artifact-callout" d="M346 194 L458 170 L530 170 M325 328 L470 320 L530 320" fill="none" stroke="#873b2a" stroke-width="1.5"/><circle cx="346" cy="194" r="5" fill="#873b2a"/><circle cx="325" cy="328" r="5" fill="#873b2a"/></svg><div class="history-diagram-note">原创器形示意 · 非实物复原</div></div>`
   }
   const heading = `<div class="history-heading" id="history-heading"><div class="history-kicker">${roles[scene.layout]}</div><h1 id="history-title">${escapeText(scene.title)}</h1></div>`
-  return `<style>${styles}</style><section class="history-scene history-${scene.layout}${characters > 100 || paragraphs.length > 4 ? ' history-dense' : ''}${paragraphs.length > 2 ? ' history-many-nodes' : ''}${Array.from(scene.title).length > 18 ? ' history-long-title' : ''}" style="--entries:${Math.min(paragraphs.length, 4)}"><div class="history-top"><div class="history-seal">史笺</div><span>历史 · 文化 · 人间</span><div class="history-top-rule"></div><span>HISTORY &amp; CULTURE</span></div>${['title', 'summary', 'map'].includes(scene.layout) ? landscape() : ''}${scene.layout === 'chapter' ? '<div class="history-chapter-arc" aria-hidden="true"></div>' : ''}${scene.layout === 'title' ? '<div class="history-spine">以古观今 · 以史为镜</div>' : ''}<main class="history-main">${scene.layout === 'quote' ? '<div class="history-mark" aria-hidden="true">“</div>' : ''}${heading}${diagram}<div class="history-content" id="history-content">${scene.layout === 'steps' ? '<div class="history-timeline" id="history-timeline"></div>' : ''}${entries}</div></main><div class="history-bottom">${roles[scene.layout]} / 史笺</div></section>`
+  return `<style>${styles}${format === 'portrait' ? portraitStyles : ''}</style><section class="history-scene history-${scene.layout}${characters > 100 || paragraphs.length > 4 ? ' history-dense' : ''}${paragraphs.length > 2 ? ' history-many-nodes' : ''}${Array.from(scene.title).length > 18 ? ' history-long-title' : ''}" style="--entries:${Math.min(paragraphs.length, 4)}"><div class="history-top"><div class="history-seal">史笺</div><span>历史 · 文化 · 人间</span><div class="history-top-rule"></div><span>HISTORY &amp; CULTURE</span></div>${['title', 'summary', 'map'].includes(scene.layout) ? landscape() : ''}${scene.layout === 'chapter' ? '<div class="history-chapter-arc" aria-hidden="true"></div>' : ''}${scene.layout === 'title' ? '<div class="history-spine">以古观今 · 以史为镜</div>' : ''}<main class="history-main">${scene.layout === 'quote' ? '<div class="history-mark" aria-hidden="true">“</div>' : ''}${heading}${diagram}<div class="history-content" id="history-content">${scene.layout === 'steps' ? '<div class="history-timeline" id="history-timeline"></div>' : ''}${entries}</div></main><div class="history-bottom">${roles[scene.layout]} / 史笺</div></section>`
 }

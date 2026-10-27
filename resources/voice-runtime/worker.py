@@ -7,6 +7,13 @@ import threading
 import time
 
 
+def configure_memory(runtime):
+    info = runtime.device_info()
+    memory_limit = min(info["max_recommended_working_set_size"], info["memory_size"] // 2)
+    runtime.set_memory_limit(memory_limit)
+    runtime.set_cache_limit(128 * 1024**2)
+
+
 def main():
     request = json.loads(sys.stdin.readline())
     output_stream = sys.stdout
@@ -38,18 +45,26 @@ def main():
             import soundfile as sf
             from mlx_audio.tts.utils import load_model
 
+            configure_memory(mx)
             if request.get("protocolVersion") != 1:
                 raise ValueError("不支持的 Worker 协议")
-            with open(request["referencePath"], "rb") as reference_file:
-                digest = hashlib.sha256(reference_file.read()).hexdigest()
-            if digest != request["referenceSha256"]:
-                raise ValueError("REFERENCE_INVALID: 参考声音校验失败")
+            if request.get("voiceDesign"):
+                if request["engine"] != "voxcpm2":
+                    raise ValueError("INVALID_OPTIONS: 文字造声仅支持 VoxCPM2")
+            else:
+                with open(request["referencePath"], "rb") as reference_file:
+                    digest = hashlib.sha256(reference_file.read()).hexdigest()
+                if digest != request["referenceSha256"]:
+                    raise ValueError("REFERENCE_INVALID: 参考声音校验失败")
             started = time.monotonic()
             model = load_model(request["modelPath"])
+            mx.eval(model.parameters())
+            load_seconds = time.monotonic() - started
             emit("phase", message="正在生成配音")
             mx.random.seed(request["options"]["seed"])
             if request["engine"] == "voxcpm2":
-                from adapters.voxcpm2 import generate
+                from adapters.voxcpm2 import generate, generation_limit
+                request["maxTokens"] = generation_limit(request)
             elif request["engine"] == "qwen3-tts":
                 from adapters.qwen3 import generate
             else:
@@ -74,8 +89,8 @@ def main():
                 raise ValueError("OUTPUT_TRUNCATED: 已达到时长上限，请缩短文案")
             if request["engine"] == "voxcpm2":
                 patch_samples = model.patch_size * model.audio_vae.decode_chunk_size
-                if audio.size >= patch_samples * 1499:
-                    raise ValueError("OUTPUT_TRUNCATED: 已达到生成上限，请缩短文案")
+                if audio.size >= patch_samples * (request["maxTokens"] - 1):
+                    raise ValueError("OUTPUT_TRUNCATED: 本段生成未正常收尾，已达到按文案长度设置的时长上限；请核对参考音转写或缩短本段重试")
             raw_path = request["outputPath"]
             sf.write(raw_path, audio, rate, subtype="FLOAT")
             audio *= (10 ** (-1 / 20)) / peak
@@ -85,7 +100,7 @@ def main():
                 audio /= max(1.0, float(np.max(np.abs(audio))) / (10 ** (-1 / 20)))
             processed_path = os.path.join(os.path.dirname(raw_path), "output.wav")
             sf.write(processed_path, audio, rate, subtype="PCM_16")
-            emit("result", path="output.wav", rawPath="raw.wav", duration=duration, sampleRate=rate, generationSeconds=time.monotonic() - started)
+            emit("result", path="output.wav", rawPath="raw.wav", duration=duration, sampleRate=rate, generationSeconds=time.monotonic() - started, loadSeconds=load_seconds, peakMemoryBytes=mx.get_peak_memory())
     except Exception as error:
         emit("error", message=str(error))
         sys.exit(1)

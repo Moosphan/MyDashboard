@@ -3,6 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import wave
+from types import SimpleNamespace
 
 
 adapter_path = Path(__file__).resolve().parent.parent / "resources/voice-runtime/adapters/voxcpm2.py"
@@ -15,6 +16,11 @@ qwen_spec = importlib.util.spec_from_file_location(
 )
 qwen_adapter = importlib.util.module_from_spec(qwen_spec)
 qwen_spec.loader.exec_module(qwen_adapter)
+worker_spec = importlib.util.spec_from_file_location(
+    "voice_worker", adapter_path.parent.parent / "worker.py"
+)
+worker = importlib.util.module_from_spec(worker_spec)
+worker_spec.loader.exec_module(worker)
 
 
 class ContinuationCloneModel:
@@ -40,6 +46,30 @@ class QwenCloneModel:
 
 
 class VoxCPM2AdapterTests(unittest.TestCase):
+    def test_short_text_has_a_bounded_audio_budget_and_keeps_an_explicit_limit(self):
+        model = ContinuationCloneModel()
+        request = {"text": "欢迎收听。", "voiceDesign": "温暖女声", "options": {"steps": 20, "cfg": 2}}
+        list(adapter.generate(model, request))
+        self.assertLess(model.arguments["max_tokens"], 400)
+        self.assertGreaterEqual(model.arguments["max_tokens"], 125)
+        request["maxTokens"] = 321
+        list(adapter.generate(model, request))
+        self.assertEqual(model.arguments["max_tokens"], 321)
+
+    def test_voice_design_uses_instructions_without_opening_reference_audio(self):
+        model = ContinuationCloneModel()
+        request = {
+            "text": "欢迎走进历史。",
+            "voiceDesign": "A mature man, warm resonant voice, clear Mandarin.",
+            "options": {"steps": 20, "cfg": 2},
+        }
+        self.assertEqual(list(adapter.generate(model, request)), ["cloned audio"])
+        self.assertEqual(model.arguments["text"], request["text"])
+        self.assertEqual(model.arguments["instruct"], request["voiceDesign"])
+        self.assertNotIn("ref_audio", model.arguments)
+        self.assertNotIn("prompt_audio", model.arguments)
+        self.assertNotIn("prompt_text", model.arguments)
+
     def generate(self, directory, rate, fail=False, pause_ms=None):
         model = ContinuationCloneModel(fail)
         reference = Path(directory) / "reference.wav"
@@ -75,7 +105,7 @@ class VoxCPM2AdapterTests(unittest.TestCase):
         self.assertEqual(model.arguments["text"], request["text"])
         self.assertEqual(model.arguments["inference_timesteps"], 10)
         self.assertEqual(model.arguments["cfg_value"], 2)
-        self.assertEqual(model.arguments["max_tokens"], 1500)
+        self.assertLess(model.arguments["max_tokens"], 1500)
         self.assertFalse(Path(model.arguments["prompt_audio"]).exists())
 
     def test_continuation_starts_after_a_pause_without_changing_speaker_reference(self):
@@ -114,6 +144,19 @@ class Qwen3AdapterTests(unittest.TestCase):
         self.assertEqual(model.arguments["temperature"], 0.35)
         self.assertNotIn("voice", model.arguments)
         self.assertNotIn("speaker", model.arguments)
+
+
+class WorkerMemoryTests(unittest.TestCase):
+    def test_inference_does_not_keep_an_entire_unified_memory_cache(self):
+        limits = {}
+        runtime = SimpleNamespace(
+            device_info=lambda: {"memory_size": 16 * 1024**3, "max_recommended_working_set_size": 11 * 1024**3},
+            set_cache_limit=lambda value: limits.update(cache=value),
+            set_memory_limit=lambda value: limits.update(memory=value),
+        )
+        worker.configure_memory(runtime)
+        self.assertLessEqual(limits["cache"], 256 * 1024**2)
+        self.assertLessEqual(limits["memory"], 8 * 1024**3)
 
 
 if __name__ == "__main__":

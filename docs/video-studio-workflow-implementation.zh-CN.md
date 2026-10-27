@@ -52,6 +52,9 @@ SQLite migration 34 新增项目、阶段版本、幂等请求、任务、文件
 执行环境可配置 Node.js、Codex、Claude Code、HyperFrames、FFmpeg、FFprobe 的绝对路径。配置仅保存在本机，不引入新的模型 API Key。先使用各 CLI 自身流程完成登录。
 
 - Codex：非交互 `exec`，只读 sandbox，临时任务目录，stdin 输入完整上下文，读取最后一条回复。
+- 内容生成使用本次进程的配置覆盖关闭 Codex 插件、Apps、子代理和已配置的 MCP 服务，不修改用户配置、模型或登录信息。仍允许读取用户指定的本地绘图技能，预览和画幅、动效检查由宿主完成，避免在分镜任务中反复启动浏览器。
+- 整组 Agent 分镜创作最多 30 分钟，单镜、文案和口播创作最多 15 分钟；等待期间显示已用分钟数。超时不会保存不完整 JSON，原版本保留，取消仍终止整个进程组。CLI 配置读取另有 15 秒上限。
+- 2026-10-27 现场验证：张良项目原任务在 15 分钟被终止，末尾仍在读取绘图技能并尝试预览工具。隔离后真实重生成耗时约 5 分 22 秒，10 镜以 1080×1920 保存为待审核 v2；稳定 ID、逐元素动效目标和 Chromium 画幅校验通过，原 v1 保留。工作流回归测试 73/73 通过，构建通过；全项目类型检查仍有既存 82 条诊断，本次变更文件无新增诊断。
 - Claude Code：`--print --output-format json --tools "" --no-session-persistence`，解析 JSON 输出。
 - 两者仅生成阶段 JSON；格式或语义校验失败会停在任务错误，不自动写入草稿或审批。
 - 导出任务得到 `task.md` 和已审核输入快照；可在外部 CLI/编辑器完成工作，随后导入 `result.json`。导入内容始终作为待审核的新版本。
@@ -174,3 +177,7 @@ WORKFLOW_NODE_PATH=/absolute/path/node pnpm test:video-workflow:render
 - [1024 工作台](screenshots/video-workflow-production-light-1024.png)
 
 工作目录：`/Users/dorck/.codex/worktrees/video-studio-workflow/MyDashboard`。原工作区的 HeroUI 设计分支与未提交内容保持原位。本次未创建提交、推送或合并。
+
+### 2026-10-27 配音性能与失败恢复
+
+本地模型增加 MLX 缓存限制与按文案长度设置的生成上限，保留原有音色和推理参数。超时不再显示为用户取消；同版本、同文案与音色参数重试失败配音时，校验并复用已经完成的片段。现场证据、真实模型对照结果及限制见 [配音性能排查记录](voiceover-performance-2026-10-27.md)。

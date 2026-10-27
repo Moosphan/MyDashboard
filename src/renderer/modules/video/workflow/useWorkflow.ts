@@ -3,6 +3,7 @@ import { ipcInvoke } from '@/lib/ipc'
 import {
   VIDEO_STAGES,
   stageValue,
+  projectVideoFormat,
   type VideoProject,
   type VideoStage,
   type StagePayloads,
@@ -77,6 +78,7 @@ export function initialPayload(
       return { text: '' }
     case 'storyboard':
       return {
+        format: projectVideoFormat(project),
         mode: 'template',
         template: 'technical',
         referenceText: '',

@@ -11,6 +11,10 @@ import {
   VIDEO_STAGE_LABELS,
   stageUnlocked,
   stageValue,
+  projectVideoFormat,
+  storyboardFormatIssue,
+  videoFormatLabel,
+  type VideoFormat,
   storyboardMotionReadiness,
   storyboardReviewBlockReason,
   type StagePayloads,
@@ -34,7 +38,7 @@ const stageDescriptions: Record<VideoStage, string> = {
   narration: '结合已审核文案与分镜生成逐镜口播，编辑确认后再进入配音。',
   audio: '逐镜生成或导入配音，试听并确认字幕与真实时长。',
   roughcut: '组合已审核的画面、声音与字幕，检查整体观感。',
-  render: '使用冻结粗剪工程输出最终横版视频。',
+  render: '使用冻结粗剪工程，按原画幅输出最终视频。',
   publish: '分别确认平台信息，导出发布包并记录发布结果。',
 }
 export function StageWorkspace({
@@ -241,6 +245,10 @@ export function StageWorkspace({
     (revision.status !== 'stale' || (stage === 'audio' && canReuseAudio(project, revision))) &&
     !draft.dirty &&
     !motionBlocked &&
+    !(
+      stage === 'storyboard' &&
+      storyboardFormatIssue(project, draft.payload as StagePayloads['storyboard'])
+    ) &&
     !running &&
     !busy
   const status = revision ? revisionStatus[revision.status] : '待开始'
@@ -374,7 +382,7 @@ export function StageWorkspace({
                             : stage === 'roughcut'
                               ? '音画合成预览'
                               : stage === 'render'
-                                ? '横版正式成片'
+                                ? '正式成片'
                                 : stage === 'publish'
                                   ? '一份成片，分别发布'
                                   : VIDEO_STAGE_LABELS[stage]}
@@ -470,10 +478,44 @@ export function StageWorkspace({
                       />
                     </div>
                     <div className="workflow-facts">
-                      <span>横版成片</span>
+                      <span>
+                        {videoFormatLabel(
+                          (draft.payload as StagePayloads['brief']).format ??
+                            projectVideoFormat({
+                              ...project,
+                              stages: {
+                                ...project.stages,
+                                brief: { ...project.stages.brief!, payload: draft.payload },
+                              },
+                            }),
+                        )}
+                      </span>
                       <span>Bilibili · 抖音</span>
                       <span>逐步人工审核</span>
                     </div>
+                    <VoiceSelect
+                      label="视频画幅"
+                      value={
+                        (draft.payload as StagePayloads['brief']).format ??
+                        projectVideoFormat({
+                          ...project,
+                          stages: {
+                            ...project.stages,
+                            brief: { ...project.stages.brief!, payload: draft.payload },
+                          },
+                        })
+                      }
+                      options={[
+                        { value: 'landscape', label: '横版 16:9 · 1920×1080' },
+                        { value: 'portrait', label: '竖版 9:16 · 1080×1920（抖音全屏）' },
+                      ]}
+                      onChange={(format) =>
+                        draft.update({
+                          ...(draft.payload as StagePayloads['brief']),
+                          format: format as VideoFormat,
+                        })
+                      }
+                    />
                     <VoiceTextArea
                       label="参考资料"
                       rows={3}
@@ -534,37 +576,40 @@ export function StageWorkspace({
                   </>
                 )}
                 {stage === 'storyboard' && (
-                  <StoryboardEditor
-                    projectId={project.id}
-                    value={draft.payload as StagePayloads['storyboard']}
-                    onChange={draft.update}
-                    disabled={!unlocked || busy || Boolean(running)}
-                    onRegenerate={generate}
-                    onAiModify={(sceneId, feedback) =>
-                      generate(sceneId, draft.payload as StagePayloads['storyboard'], {
-                        sceneId,
-                        feedback,
-                      })
-                    }
-                    onCreate={(settings, sceneId) => generate(sceneId, settings)}
-                    unsaved={draft.dirty}
-                    generationError={error}
-                    onAcceptIllustration={() =>
-                      run(async () => {
-                        if (draft.dirty)
-                          throw new Error('请先保存或放弃当前修改，再接受示意图降级。')
-                        const result = await workflowCall<VideoProject>(
-                          'acceptIllustration',
-                          project.id,
-                          project.revision,
-                          crypto.randomUUID(),
-                        )
-                        draft.reset(result)
-                        onProject(result)
-                      }, '已接受当前素材缺口降级，保留现有分镜与 MG 动画；已保存待审核版本')
-                    }
-                    narration={stageValue(project, 'narration')}
-                  />
+                  <>
+                    <StoryboardEditor
+                      projectId={project.id}
+                      targetFormat={projectVideoFormat(project)}
+                      value={draft.payload as StagePayloads['storyboard']}
+                      onChange={draft.update}
+                      disabled={!unlocked || busy || Boolean(running)}
+                      onRegenerate={generate}
+                      onAiModify={(sceneId, feedback) =>
+                        generate(sceneId, draft.payload as StagePayloads['storyboard'], {
+                          sceneId,
+                          feedback,
+                        })
+                      }
+                      onCreate={(settings, sceneId) => generate(sceneId, settings)}
+                      unsaved={draft.dirty}
+                      generationError={error}
+                      onAcceptIllustration={() =>
+                        run(async () => {
+                          if (draft.dirty)
+                            throw new Error('请先保存或放弃当前修改，再接受示意图降级。')
+                          const result = await workflowCall<VideoProject>(
+                            'acceptIllustration',
+                            project.id,
+                            project.revision,
+                            crypto.randomUUID(),
+                          )
+                          draft.reset(result)
+                          onProject(result)
+                        }, '已接受当前素材缺口降级，保留现有分镜与 MG 动画；已保存待审核版本')
+                      }
+                      narration={stageValue(project, 'narration')}
+                    />
+                  </>
                 )}
                 {stage === 'narration' && (
                   <div className="workflow-section">
@@ -838,7 +883,14 @@ export function StageWorkspace({
                 ref={approveButton}
                 size="sm"
                 disabled={!canApprove}
-                aria-describedby={motionBlocked ? 'storyboard-review-blocked' : undefined}
+                aria-describedby={
+                  motionBlocked
+                    ? 'storyboard-review-blocked'
+                    : stage === 'storyboard' &&
+                        storyboardFormatIssue(project, draft.payload as StagePayloads['storyboard'])
+                      ? 'storyboard-format-blocked'
+                      : undefined
+                }
                 onClick={() => setReview(true)}
               >
                 {stage === 'audio' &&
@@ -857,6 +909,12 @@ export function StageWorkspace({
                   {storyboardReviewBlockReason(draft.payload as StagePayloads['storyboard'])}
                 </p>
               )}
+              {stage === 'storyboard' &&
+                storyboardFormatIssue(project, draft.payload as StagePayloads['storyboard']) && (
+                  <p id="storyboard-format-blocked" role="status" className="workflow-error">
+                    {storyboardFormatIssue(project, draft.payload as StagePayloads['storyboard'])}
+                  </p>
+                )}
               {draft.dirty && <p className="workflow-muted">请先保存修改，再审核当前版本。</p>}
             </div>
           </Card>

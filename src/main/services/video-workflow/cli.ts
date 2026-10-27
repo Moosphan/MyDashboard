@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
@@ -138,33 +139,94 @@ export async function runAgent(
   cwd: string,
   prompt: string,
   signal: AbortSignal,
+  options: { timeout?: number; onProgress?: (message: string) => void } = {},
 ): Promise<unknown> {
   if (prompt.length > 200000)
     throw new Error('创作输入超过 200000 字符，请精简分镜正文、HTML 或参考材料后重试')
   const output = join(cwd, 'agent-result.txt')
-  if (executor === 'codex') {
-    await workflowCommand(
-      runtime.codexPath,
-      [
-        'exec',
-        '--skip-git-repo-check',
-        '--sandbox',
-        'read-only',
-        '--ephemeral',
-        '--output-last-message',
-        output,
-        '-',
-      ],
-      { cwd, input: prompt, signal, timeout: 900000, nodePath: runtime.nodePath },
+  const timeout = options.timeout ?? 900000
+  const minutes = Math.ceil(timeout / 60000)
+  const taskPrompt = `这是宿主视频工作流中的非交互内容生成任务。只返回所要求的完整 JSON。可以读取用户明确指定的本地参考和绘图技能，按其视觉语言创作；不要启动浏览器、渲染器、预览服务或子代理，不修改文件，不执行后续工作流。宿主负责预览、画幅与动效校验，生成结果仍需用户审核。不要为工具不可用而等待或重复尝试。\n\n${prompt}`
+  const started = Date.now()
+  const progress = () =>
+    options.onProgress?.(
+      `${executor === 'codex' ? 'Codex' : 'Claude Code'} 创作中（已用 ${Math.floor((Date.now() - started) / 60000)} 分钟，最长 ${minutes} 分钟）；生成后需人工审核`,
     )
-    if (!existsSync(output)) throw new Error('Codex 未生成结果，请检查 CLI 版本与登录状态')
-    return parseAgentJson(readFileSync(output, 'utf8'))
+  const timer = options.onProgress ? setInterval(progress, 15000) : undefined
+  try {
+    progress()
+    if (executor === 'codex') {
+      const integrations: unknown = JSON.parse(
+        await workflowCommand(
+          runtime.codexPath,
+          ['mcp', 'list', '--json', '-c', 'features.plugins=false', '-c', 'features.apps=false'],
+          {
+            cwd,
+            signal,
+            timeout: 15000,
+            timeoutMessage: '读取 Codex 工具配置超时，请检查 CLI 是否可正常启动；原版本已保留',
+            nodePath: runtime.nodePath,
+          },
+        ),
+      )
+      if (!Array.isArray(integrations)) throw new Error('Codex 工具配置返回格式无效')
+      const disabledServers = integrations.map((server) => {
+        if (!server || typeof server.name !== 'string' || !server.name)
+          throw new Error('Codex 工具配置缺少有效名称')
+        const transport = server.transport
+        const connection =
+          typeof transport?.url === 'string'
+            ? `url=${JSON.stringify(transport.url)}`
+            : `command=${JSON.stringify(typeof transport?.command === 'string' ? transport.command : 'disabled-for-video-workflow')}`
+        return `${JSON.stringify(server.name)}={${connection},enabled=false}`
+      })
+      const overrides = [
+        'features.plugins=false',
+        'features.apps=false',
+        'features.multi_agent=false',
+        `mcp_servers={${disabledServers.join(',')}}`,
+      ].flatMap((setting) => ['-c', setting])
+      rmSync(output, { force: true })
+      await workflowCommand(
+        runtime.codexPath,
+        [
+          'exec',
+          '--skip-git-repo-check',
+          '--sandbox',
+          'read-only',
+          '--ephemeral',
+          ...overrides,
+          '--output-last-message',
+          output,
+          '-',
+        ],
+        {
+          cwd,
+          input: taskPrompt,
+          signal,
+          timeout,
+          timeoutMessage: `创作执行超时（${minutes} 分钟），尚未收到完整结果；原版本已保留。可稍后重试或缩小到单镜修改，不需要重新登录来处理此超时。`,
+          nodePath: runtime.nodePath,
+        },
+      )
+      if (!existsSync(output)) throw new Error('Codex 未生成结果，请检查 CLI 版本与登录状态')
+      return parseAgentJson(readFileSync(output, 'utf8'))
+    }
+    return parseAgentJson(
+      await workflowCommand(
+        runtime.claudePath,
+        ['--print', '--output-format', 'json', '--tools', '', '--no-session-persistence'],
+        {
+          cwd,
+          input: taskPrompt,
+          signal,
+          timeout,
+          timeoutMessage: `创作执行超时（${minutes} 分钟），尚未收到完整结果；原版本已保留。可稍后重试或缩小到单镜修改。`,
+          nodePath: runtime.nodePath,
+        },
+      ),
+    )
+  } finally {
+    clearInterval(timer)
   }
-  return parseAgentJson(
-    await workflowCommand(
-      runtime.claudePath,
-      ['--print', '--output-format', 'json', '--tools', '', '--no-session-persistence'],
-      { cwd, input: prompt, signal, timeout: 900000, nodePath: runtime.nodePath },
-    ),
-  )
 }

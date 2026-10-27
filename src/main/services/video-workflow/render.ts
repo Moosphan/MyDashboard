@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { fingerprint } from '../../database/repositories/video-workflow-repository'
 import {
   stageValue,
+  videoFrame,
   type RenderPayload,
   type VideoProject,
   type WorkflowFile,
@@ -60,8 +61,11 @@ export function reusableFrameFiles(
   motion: MotionPlan | undefined,
 ): WorkflowFile[] | undefined {
   const previous = stageValue(project, 'roughcut')
+  const frame = videoFrame(stageValue(project, 'storyboard')?.format)
   if (
     !previous ||
+    previous.width !== frame.width ||
+    previous.height !== frame.height ||
     !project.stages.storyboard ||
     previous.sourceStoryboard !== project.stages.storyboard.id ||
     fingerprint(previous.motion ?? null) !== fingerprint(motion ?? null) ||
@@ -78,7 +82,7 @@ export async function captureStoryboard(
   html: string,
   signal: AbortSignal,
   label = '',
-  viewport = { width: 1920, height: 1080 },
+  viewport = videoFrame(),
 ): Promise<Buffer> {
   let lastError: Error | undefined
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -114,7 +118,7 @@ export async function captureStoryboard(
     const timer = setTimeout(abort, 20000)
     try {
       await window.loadURL(
-        `data:text/html;charset=utf-8,${encodeURIComponent(safeStoryboardDocument(html))}`,
+        `data:text/html;charset=utf-8,${encodeURIComponent(safeStoryboardDocument(html, viewport))}`,
       )
       signal.throwIfAborted()
       await delay(attempt ? 120 : 50, undefined, { signal })
@@ -143,6 +147,7 @@ export function hyperframesDocument(
 ): string {
   const storyboard = stageValue(project, 'storyboard')!,
     audio = stageValue(project, 'audio')!
+  const { width, height } = videoFrame(storyboard.format)
   let start = 0
   const scenes = storyboard.scenes
     .map((scene, index) => {
@@ -155,7 +160,7 @@ export function hyperframesDocument(
       const hold = nextTransition?.type !== 'cut' ? (nextTransition?.duration ?? 0) : 0
       const content = markup?.[index]
         ? `<div id="scene-enter-${index}" class="scene-motion-layer"><div id="scene-exit-${index}" class="scene-motion-layer">${markup[index]}</div></div>`
-        : `<img src="frame-${index}.png" alt="${escapeHtml(scene.title)}" width="1920" height="1080">`
+        : `<img src="frame-${index}.png" alt="${escapeHtml(scene.title)}" width="${width}" height="${height}">`
       const result = `<section class="clip frame" id="clip-${index}" data-start="${start.toFixed(6)}" data-duration="${(duration + hold).toFixed(6)}" data-track-index="0" data-label="${escapeHtml(scene.title)}">${content}</section>`
       start += duration
       return result
@@ -184,7 +189,7 @@ export function hyperframesDocument(
           : type === 'wipe-left'
             ? [{ clipPath: 'inset(0 100% 0 0)' }, { clipPath: 'inset(0 0% 0 0)' }]
             : [
-                { translate: type === 'slide-left' ? '1920px 0px' : '0px 1080px' },
+                { translate: type === 'slide-left' ? `${width}px 0px` : `0px ${height}px` },
                 { translate: '0px 0px' },
               ]
       transitions.push({
@@ -200,7 +205,7 @@ export function hyperframesDocument(
           duration: transition.duration,
           keyframes: [
             { translate: '0px 0px' },
-            { translate: type === 'slide-left' ? '-1920px 0px' : '0px -1080px' },
+            { translate: type === 'slide-left' ? `-${width}px 0px` : `0px -${height}px` },
           ],
         })
     }
@@ -248,7 +253,7 @@ export function hyperframesDocument(
   const musicTrack = music
     ? `<audio id="music" src="${escapeHtml(basename(music.file.path))}" data-start="0" data-duration="${music.duration.toFixed(6)}" data-media-start="${music.start.toFixed(6)}" data-volume="${music.volume.toFixed(6)}" data-playback-rate="${music.playbackRate.toFixed(6)}" data-track-index="11" data-audio-group="music"></audio>`
     : ''
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-src 'none'"><title>${escapeHtml(project.title)}</title><style>${localFonts}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#111827;font-family:system-ui,sans-serif}#root{position:relative;width:100%;height:100%;overflow:hidden}.clip{position:absolute;inset:0}.scene-motion-layer{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.frame>img{display:block;width:100%;height:100%;object-fit:contain}.caption{display:flex;align-items:flex-end;justify-content:center;padding:0 100px 48px;pointer-events:none}.caption span{display:block;max-width:1720px;padding:12px 28px;border-radius:12px;background:#101521;color:#fff;font-size:38px;line-height:1.4;text-align:center}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-width="1920" data-height="1080" data-no-timeline>${scenes}${subtitles}<audio id="narration" src="narration.wav" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-track-index="10" data-audio-group="voiceover"></audio>${musicTrack}</div>${animation}</body></html>`
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; frame-src 'none'"><title>${escapeHtml(project.title)}</title><style>${localFonts}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;background:#111827;font-family:system-ui,sans-serif}#root{position:relative;width:100%;height:100%;overflow:hidden}.clip{position:absolute;inset:0}.scene-motion-layer{position:absolute;inset:0;width:100%;height:100%;overflow:hidden}.frame>img{display:block;width:100%;height:100%;object-fit:contain}.caption{display:flex;align-items:flex-end;justify-content:center;padding:0 ${storyboard.format === 'portrait' ? '120px 200px 72px' : '100px 48px'};pointer-events:none}.caption span{display:block;max-width:${width - (storyboard.format === 'portrait' ? 192 : 200)}px;padding:12px 28px;border-radius:12px;background:#101521;color:#fff;font-size:38px;line-height:1.4;text-align:center}</style></head><body><div id="root" data-composition-id="main" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-width="${width}" data-height="${height}" data-no-timeline>${scenes}${subtitles}<audio id="narration" src="narration.wav" data-start="0" data-duration="${audio.duration.toFixed(6)}" data-track-index="10" data-audio-group="voiceover"></audio>${musicTrack}</div>${animation}</body></html>`
 }
 
 function musicAudioTag(music: RenderMusic) {
@@ -317,6 +322,9 @@ export async function renderWorkflow(input: {
   music?: RenderMusic
 }): Promise<RenderPayload> {
   const { project, final, files, runtime, cwd, signal, phase, music } = input
+  const frame = final
+    ? stageValue(project, 'roughcut')!
+    : videoFrame(stageValue(project, 'storyboard')?.format)
   assertRenderRuntime(runtime)
   mkdirSync(cwd, { recursive: true })
   const version = await hyperframes(runtime, ['--version'], cwd, signal, 15000)
@@ -334,8 +342,7 @@ export async function renderWorkflow(input: {
       throw new Error('配乐裁剪范围不能超过正式成片时长')
     const musicPath = await files.verify(project.id, music.file)
     const probedMusic = await probeMedia(runtime, musicPath, cwd, signal)
-    if (music.start >= probedMusic.duration - 0.001)
-      throw new Error('配乐起始时间超过音频本身时长')
+    if (music.start >= probedMusic.duration - 0.001) throw new Error('配乐起始时间超过音频本身时长')
     if (music.start + music.duration > probedMusic.duration + 0.05)
       throw new Error('配乐裁剪范围超过音频本身时长')
   }
@@ -397,10 +404,11 @@ export async function renderWorkflow(input: {
       const sceneMotion = motion.scenes.find((item) => item.sceneId === scene.id)
       const effects = sceneMotion?.effects ?? []
       const prepared = await prepareMotionScene(
-        sceneHtml(scene, storyboard.template),
+        sceneHtml(scene, storyboard.template, storyboard.format),
         `scene-${index}`,
         effects.map((effect) => effect.selector),
         signal,
+        frame,
       )
       if (input.motion && prepared.counts.some((count) => count === 0))
         throw new Error(`分镜「${scene.title}」的动效目标不存在，请重新生成修改计划`)
@@ -422,9 +430,10 @@ export async function renderWorkflow(input: {
         compositionFiles.push(cachedFrame)
       } else {
         const image = await captureStoryboard(
-          sceneHtml(scene, storyboard.template),
+          sceneHtml(scene, storyboard.template, storyboard.format),
           signal,
           scene.title,
+          frame,
         )
         writeFileSync(join(cwd, name), image)
         compositionNames.push(name)
@@ -441,7 +450,11 @@ export async function renderWorkflow(input: {
       join(cwd, 'index.html'),
       hyperframesDocument(project, markup, compiledMotion, fontFamilies, music),
     )
-    for (const name of ['narration.wav', 'index.html', ...(music ? [basename(music.file.path)] : [])]) {
+    for (const name of [
+      'narration.wav',
+      'index.html',
+      ...(music ? [basename(music.file.path)] : []),
+    ]) {
       compositionNames.push(name)
       compositionFiles.push(await files.import(project.id, join(cwd, name)))
     }
@@ -472,7 +485,7 @@ export async function renderWorkflow(input: {
     quality: final ? ('delivery' as const) : ('looks' as const),
     fps: 30 as const,
   }
-  phase(final ? '渲染最终成片 · 1920×1080 / 30 fps' : '渲染粗剪 · 完成后等待人工审核')
+  phase(`${final ? '渲染最终成片' : '渲染粗剪'} · ${frame.width}×${frame.height} / 30 fps`)
   await hyperframes(
     runtime,
     [
@@ -493,8 +506,8 @@ export async function renderWorkflow(input: {
     video = probed.streams.find((stream) => stream.codec_type === 'video')
   if (
     !video ||
-    video.width !== 1920 ||
-    video.height !== 1080 ||
+    video.width !== frame.width ||
+    video.height !== frame.height ||
     Math.abs(
       probed.duration -
         (final
@@ -506,8 +519,8 @@ export async function renderWorkflow(input: {
   return {
     file: await files.import(project.id, output),
     duration: probed.duration,
-    width: 1920,
-    height: 1080,
+    width: frame.width,
+    height: frame.height,
     compositionFiles,
     compositionNames,
     cover,

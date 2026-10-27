@@ -16,6 +16,7 @@ import {
   type MotionPlan,
   type VideoStyleTemplate,
   stageValue,
+  videoFrame,
   renderSourceProject,
   validateMotionPlan,
   type WorkflowOperation,
@@ -246,6 +247,17 @@ export class VideoWorkflowRepository {
       if (this.request(id, requestId, ['save', stage, payload])) return this.get(id)
       const project = this.current(id, expected)
       const dependencies = this.dependencies(project, stage)
+      if (stage === 'roughcut' || stage === 'render') {
+        const rendered = payload as StagePayloads['roughcut']
+        const source = rendered.sourceStoryboard
+          ? (project.history.find(
+              (item) => item.id === rendered.sourceStoryboard && item.stage === 'storyboard',
+            )?.payload as StagePayloads['storyboard'] | undefined)
+          : stageValue(project, 'storyboard')
+        const frame = videoFrame(source?.format)
+        if (!source || rendered.width !== frame.width || rendered.height !== frame.height)
+          throw new Error('冻结工程画幅与来源分镜不一致，请重新生成粗剪')
+      }
       if (
         (stage === 'roughcut' || stage === 'render') &&
         (payload as { motion?: MotionPlan }).motion

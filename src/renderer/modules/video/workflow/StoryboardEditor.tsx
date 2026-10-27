@@ -5,12 +5,15 @@ import { VoiceInput, VoiceRadioGroup, VoiceTextArea } from '../components/voiceo
 import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
 import {
   sceneLayoutsForTemplate,
+  videoFrame,
+  videoFormatLabel,
   TEMPLATE_FAMILIES,
   storyboardMotionReadiness,
   storyboardMotionNotes,
   sceneMotionEnabled,
   isMaterialBlocker,
   type StoryboardPayload,
+  type VideoFormat,
   type StoryScene,
   type WorkflowFile,
   type VideoStyleTemplate,
@@ -57,14 +60,18 @@ export function ScenePreview({
   const [html, setHtml] = useState('')
   const [error, setError] = useState('')
   const [scale, setScale] = useState(0)
+  const frame = videoFrame(value.format)
   const viewport = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const element = viewport.current
     if (!element) return
-    const observer = new ResizeObserver((entries) => setScale(entries[0].contentRect.width / 1920))
+    const observer = new ResizeObserver((entries) => {
+      const bounds = entries[0].contentRect
+      setScale(Math.min(bounds.width / frame.width, bounds.height / frame.height))
+    })
     observer.observe(element)
     return () => observer.disconnect()
-  }, [])
+  }, [frame.width, frame.height])
   useEffect(() => {
     let current = true
     setHtml('')
@@ -96,7 +103,15 @@ export function ScenePreview({
           referrerPolicy="no-referrer"
           srcDoc={html}
           tabIndex={-1}
-          style={{ transform: 'scale(' + scale + ')' }}
+          style={{
+            width: frame.width,
+            height: frame.height,
+            inset: 'auto',
+            left: '50%',
+            top: '50%',
+            transformOrigin: 'center',
+            transform: 'translate(-50%, -50%) scale(' + scale + ')',
+          }}
         />
       ) : (
         <div className="absolute inset-0 grid place-items-center p-3 workflow-muted">
@@ -111,6 +126,7 @@ export function StoryboardEditor({
   projectId,
   value,
   onChange,
+  targetFormat,
   disabled,
   onRegenerate,
   onAiModify,
@@ -122,6 +138,7 @@ export function StoryboardEditor({
 }: {
   projectId: string
   value: StoryboardPayload
+  targetFormat?: VideoFormat
   onChange: (payload: StoryboardPayload) => void
   disabled: boolean
   onRegenerate: (sceneId: string) => Promise<boolean>
@@ -519,11 +536,18 @@ export function StoryboardEditor({
           </p>
         )}
       </WorkflowDialog>
+      {targetFormat && (value.format ?? 'landscape') !== targetFormat && (
+        <p className="workflow-notice" role="status">
+          当前分镜为{videoFormatLabel(value.format)}，项目目标为{videoFormatLabel(targetFormat)}
+          。请重新生成整组分镜以按目标画幅重新排版，旧版保留在历史记录中。
+        </p>
+      )}
       <ScenePreview projectId={projectId} value={value} scene={scene} />
       <div className="workflow-toolbar workflow-muted">
         <span>
           分镜 {scene ? String(index + 1).padStart(2, '0') : '—'} /{' '}
-          {String(value.scenes.length).padStart(2, '0')} · 静态关键帧
+          {String(value.scenes.length).padStart(2, '0')} · 静态关键帧 ·{' '}
+          {videoFormatLabel(value.format)}
         </span>
         <span>
           {TEMPLATE_FAMILIES.find((item) => item.id === value.template)?.name} ·{' '}
@@ -920,7 +944,7 @@ export function StoryboardEditor({
                   onChange={(event) =>
                     setSceneDraft({ ...sceneDraft, html: event.target.value || undefined })
                   }
-                  placeholder="内联 CSS + 静态 HTML，1920×1080"
+                  placeholder={`内联 CSS + 静态 HTML，${videoFormatLabel(value.format)}`}
                   className="font-mono text-[12px]"
                 />
                 <p className="workflow-muted mt-2">

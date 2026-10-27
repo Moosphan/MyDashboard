@@ -1,5 +1,44 @@
 import type { VoiceRequest } from './voiceover'
 
+export type VideoFormat = 'landscape' | 'portrait'
+export function videoFrame(format: VideoFormat = 'landscape') {
+  return format === 'portrait' ? { width: 1080, height: 1920 } : { width: 1920, height: 1080 }
+}
+export function videoFormatLabel(format: VideoFormat = 'landscape') {
+  return format === 'portrait' ? '竖版 9:16 · 1080×1920' : '横版 16:9 · 1920×1080'
+}
+export function projectVideoFormat(project: VideoProject, referenceText = ''): VideoFormat {
+  const brief = stageValue(project, 'brief')
+  if (brief?.format) return brief.format
+  const requirements = [
+    referenceText,
+    stageValue(project, 'storyboard')?.referenceText,
+    brief?.text,
+    stageValue(project, 'copy')?.requirements,
+    stageValue(project, 'copy')?.text,
+  ]
+  for (const value of requirements) {
+    const match = value?.match(
+      /竖(?:版|屏)|横(?:版|屏)|1080\s*[×xX*]\s*1920|1920\s*[×xX*]\s*1080|9\s*[:：/]\s*16|16\s*[:：/]\s*9/,
+    )
+    if (match) return /竖|1080\s*[×xX*]|^9/.test(match[0]) ? 'portrait' : 'landscape'
+  }
+  return 'landscape'
+}
+function validateVideoFormat(value: unknown): VideoFormat {
+  if (value !== 'landscape' && value !== 'portrait')
+    throw new Error('视频画幅仅支持横版 16:9 或竖版 9:16')
+  return value
+}
+export function storyboardFormatIssue(
+  project: VideoProject,
+  storyboard = stageValue(project, 'storyboard'),
+) {
+  return storyboard && (storyboard.format ?? 'landscape') !== projectVideoFormat(project)
+    ? '分镜画幅与项目目标不一致，请重新生成整组分镜，原版本保留在历史记录中'
+    : ''
+}
+
 export const VIDEO_STAGES = [
   'brief',
   'copy',
@@ -74,6 +113,7 @@ export interface StoryboardSceneMotion {
   notes?: string[]
 }
 export interface StoryboardPayload {
+  format?: VideoFormat
   mode: 'template' | 'agent'
   template: string
   referenceText?: string
@@ -233,7 +273,13 @@ export interface PublishPayload {
   platforms: Record<VideoPlatform, PlatformMetadata>
 }
 export interface StagePayloads {
-  brief: { text: string; duration: number; audience?: string; references?: string }
+  brief: {
+    text: string
+    duration: number
+    audience?: string
+    references?: string
+    format?: VideoFormat
+  }
   copy: { text: string; requirements?: string }
   storyboard: StoryboardPayload
   narration: { scenes: { id: string; text: string; pronunciation?: string }[] }
@@ -481,6 +527,7 @@ export function validatePayload<Stage extends VideoStage>(
       duration: seconds(input.duration),
       audience: optionalText(input.audience, '目标受众', 500),
       references: optionalText(input.references, '参考资料', 15000),
+      ...(input.format !== undefined ? { format: validateVideoFormat(input.format) } : {}),
     }
   else if (stage === 'copy')
     output = {
@@ -558,6 +605,7 @@ export function validatePayload<Stage extends VideoStage>(
       }
       output = {
         mode: input.mode as 'template' | 'agent',
+        ...(input.format !== undefined ? { format: validateVideoFormat(input.format) } : {}),
         template: String(input.template),
         references: references as string[],
         referenceText: typeof input.referenceText === 'string' ? input.referenceText : '',
@@ -597,10 +645,12 @@ export function validatePayload<Stage extends VideoStage>(
     if (
       !Array.isArray(input.compositionFiles) ||
       !input.compositionFiles.length ||
-      input.width !== 1920 ||
-      input.height !== 1080
+      !(
+        (input.width === 1920 && input.height === 1080) ||
+        (input.width === 1080 && input.height === 1920)
+      )
     )
-      throw new Error('缺少冻结的 1920×1080 合成工程')
+      throw new Error('缺少冻结的横版 1920×1080 或竖版 1080×1920 合成工程')
     if (
       !Array.isArray(input.compositionNames) ||
       input.compositionNames.length !== input.compositionFiles.length ||
@@ -615,8 +665,8 @@ export function validatePayload<Stage extends VideoStage>(
       file: file(input.file),
       cover: file(input.cover),
       duration: seconds(input.duration),
-      width: 1920,
-      height: 1080,
+      width: input.width as number,
+      height: input.height as number,
       compositionFiles: input.compositionFiles.map(file),
       compositionNames: input.compositionNames as string[],
       manifestHash: text(input.manifestHash, '工程指纹', 64),

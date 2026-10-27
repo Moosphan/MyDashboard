@@ -10,7 +10,12 @@ import { runMigrations } from '../src/main/database/migrations'
 import { VideoWorkflowService } from '../src/main/services/video-workflow/service'
 import { VoiceoverService } from '../src/main/services/voiceover/voiceover-service'
 import { workflowCommand } from '../src/main/services/video-workflow/process'
-import { stageValue, type VideoStage } from '../src/shared/video-workflow'
+import {
+  stageValue,
+  videoFrame,
+  type VideoFormat,
+  type VideoStage,
+} from '../src/shared/video-workflow'
 import { prepareMotionScene } from '../src/main/services/video-workflow/motion'
 
 app.on('window-all-closed', () => {})
@@ -27,6 +32,9 @@ app.whenReady().then(async () => {
   )
   const service = new VideoWorkflowService(root, db, () => voice)
   try {
+    const format: VideoFormat =
+      process.env.WORKFLOW_FORMAT === 'portrait' ? 'portrait' : 'landscape'
+    const frame = videoFrame(format)
     if (!process.env.WORKFLOW_HYPERFRAMES_PATH)
       throw new Error('Set WORKFLOW_HYPERFRAMES_PATH to HyperFrames 0.8.181 executable or .mjs')
     service.runtime.set({
@@ -91,11 +99,16 @@ app.whenReady().then(async () => {
         '自动化测试数据',
       )
     }
-    await saveAndApprove('brief', { text: '验证两镜视频闭环；测试数据，不发布', duration: 10 })
+    await saveAndApprove('brief', {
+      text: '验证两镜视频闭环；测试数据，不发布',
+      duration: 10,
+      format,
+    })
     await saveAndApprove('copy', {
       text: '# 从想法到成片\n每个步骤都由你确认。\n\n# 不同分镜，不同布局\n统一视觉，多样表达。',
     })
     await saveAndApprove('storyboard', {
+      format,
       mode: 'template',
       template: 'technical',
       scenes: [
@@ -272,6 +285,15 @@ app.whenReady().then(async () => {
       )
     }
     await generate('render')
+    for (const stage of ['roughcut', 'render'] as const) {
+      const output = stageValue(project, stage)!
+      assert.equal(output.width, frame.width)
+      assert.equal(output.height, frame.height)
+      const document = service.files.text(
+        output.compositionFiles[output.compositionNames.indexOf('index.html')],
+      )
+      assert.ok(document.includes(`data-width="${frame.width}" data-height="${frame.height}"`))
+    }
     assert.equal(stageValue(project, 'render')!.motion?.scenes.length, 2)
     assert.equal(stageValue(project, 'render')!.sourceRoughcut, project.stages.roughcut!.id)
     assert.deepEqual(stageValue(project, 'render')!.renderProfile, { quality: 'delivery', fps: 30 })

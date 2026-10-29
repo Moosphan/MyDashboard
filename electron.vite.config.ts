@@ -4,6 +4,14 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/main/index.ts'),
+          'codex-session-usage-worker': resolve('src/main/services/codex-session-usage-worker.ts'),
+        },
+      },
+    },
     plugins: [externalizeDepsPlugin()],
     resolve: {
       alias: {

@@ -1,3 +1,4 @@
+import { stopCodexSessionUsage } from './services/codex-session-usage-service'
 import { app, BrowserWindow, shell, ipcMain } from 'electron'
 import { join, resolve } from 'path'
 import { appendFileSync, mkdirSync } from 'fs'
@@ -300,6 +301,7 @@ app.on('before-quit', (event) => {
   stopTrendingRefreshScheduler()
   stopTaskReminderScheduler()
   stopChatGPTUsageRefreshScheduler()
+  void stopCodexSessionUsage()
   stopToolbox()
   closeDatabase()
 })

@@ -1,12 +1,22 @@
-const { app, BrowserWindow, dialog, nativeImage, shell } = require('electron')
+const { app, BrowserWindow, dialog, nativeImage, shell, net } = require('electron')
 const assert = require('node:assert/strict')
-const { mkdtempSync, writeFileSync, readFileSync } = require('node:fs')
+const { mkdtempSync, writeFileSync, readFileSync, existsSync } = require('node:fs')
 const { join } = require('node:path')
 const { tmpdir } = require('node:os')
 const { spawnSync } = require('node:child_process')
 const { setTimeout: delay } = require('node:timers/promises')
 
 const root = mkdtempSync(join(tmpdir(), 'publication-cover-ui-'))
+const originalFetch = net.fetch.bind(net)
+let recoveredDownloads = 0
+net.fetch = (url, options) => {
+  if (url === 'https://image-recovery.example/generated-cover.png') {
+    recoveredDownloads++
+    assert.equal(options.credentials, 'omit')
+    return Promise.resolve(new Response(readFileSync(join(root, 'cover-source.png'))))
+  }
+  return originalFetch(url, options)
+}
 const revealed = []
 shell.showItemInFolder = path => revealed.push(path)
 const node = spawnSync('which', ['node'], { encoding: 'utf8' }).stdout.trim()
@@ -225,6 +235,18 @@ app.whenReady().then(async () => {
     assert.equal(imageArgs[imageArgs.indexOf('--model') + 1], 'gpt-image-2')
     assert.equal(imageArgs[imageArgs.indexOf('--size') + 1], '1600x1200')
     assert.deepEqual(nativeImage.createFromPath(join(root, image2.file.path)).getSize(), { width: 1600, height: 900 })
+    writeFileSync(join(root, 'cover-mode'), 'download-error')
+    const recoveryJob = await call('generate', { projectId: initial.id, stage: 'publish', executor: 'codex', expectedRevision: project.revision, requestId: 'recover-image2-cover', cover: { method: 'image2' } })
+    project = await completed()
+    assert.equal(project.jobs[0].state, 'succeeded', project.jobs[0].error)
+    assert.equal(recoveredDownloads, 1)
+    assert.equal(readFileSync(join(root, 'cover-generation-count'), 'utf8'), '1')
+    const recoveryDirectory = join(root, 'cache/video-cover-recovery', initial.id, recoveryJob.id)
+    assert.ok(existsSync(join(recoveryDirectory, 'result.json')))
+    assert.deepEqual(nativeImage.createFromPath(join(recoveryDirectory, 'original.png')).getSize(), {width:1600,height:1200})
+    assert.ok(!existsSync(join(root, 'cache/video-workflow', recoveryJob.id)))
+    assert.equal(project.stages.publish.payload.platforms.bilibili.cover.method, 'image2')
+    writeFileSync(join(root, 'cover-mode'), '')
     await waitFor('document.querySelector("[data-cover-status]")?.textContent.includes("已纳入")', 'image2 applied')
     await evaluate('document.querySelector("button[aria-label=封面历史版本]").focus()')
     await key('Space')

@@ -292,7 +292,9 @@ test('cancelling a dispatched schedule preserves uncertain platform outcomes', a
     writeFileSync(join(f.root, 'mode'), 'slow')
     const plan = f.service.publishing.start(f.request)
     f.service.publishing.checkScheduled(Date.parse(f.request.scheduleAt!))
-    for (let i = 0; i < 200 && !readdirSync(f.root).includes('calls'); i++) await delay(10)
+    // Starting a real CLI process can take longer while local video renders are busy.
+    const dispatchDeadline = Date.now() + 20000
+    while (!readdirSync(f.root).includes('calls') && Date.now() < dispatchDeadline) await delay(30)
     assert.ok(readdirSync(f.root).includes('calls'))
     const result = await f.service.publishing.cancel(f.project.id, plan.id)
     assert.equal(result.state, 'unknown')

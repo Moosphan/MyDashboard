@@ -3,9 +3,38 @@ import { readFileSync, writeFileSync, copyFileSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 const root = resolve(process.cwd(), '../../..')
+// Runtime probes must never be treated as a generation request. An absent
+// --output-last-message previously selected argv[0] (the Node executable).
+if (process.argv.includes('--version')) {
+  console.log('cover-agent fixture 1.0.0')
+  process.exit(0)
+}
+if (process.argv[2] === 'mcp' && process.argv[3] === 'list') {
+  console.log('[]')
+  process.exit(0)
+}
+const outputIndex = process.argv.indexOf('--output-last-message')
+if (!process.argv.includes('--image') && (outputIndex < 0 || !process.argv[outputIndex + 1])) {
+  console.error('Fixture requires --output-last-message for code generation')
+  process.exit(2)
+}
 const mode = existsSync(join(root, 'cover-mode')) ? readFileSync(join(root, 'cover-mode'), 'utf8') : ''
 if (mode === 'slow') await new Promise(resolve => setTimeout(resolve, 30000))
 if (process.argv.includes('--image')) {
+  if (mode === 'download-error') {
+    const { createServer } = await import('node:http')
+    const server = createServer((_request, response) => {
+      writeFileSync(join(root, 'cover-generation-count'), '1')
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify({data:[{url:'https://image-recovery.example/generated-cover.png'}]}))
+    })
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/images/edits`, {method:'POST'})
+    await response.json()
+    await new Promise(resolve => server.close(resolve))
+    console.error('Image generated; downloading image file.\nFailed to download generated image: The operation timed out.')
+    process.exit(1)
+  }
   if (mode === 'api-error') {
     process.stderr.write('OpenAI edits API error: HTTP 503 upstream unavailable\nAuthorization: Bearer test-private-token\nOPENAI_API_KEY=test-private-key\nsk-exampleSensitiveCredential12345\n')
     process.exit(1)
@@ -23,6 +52,6 @@ if (process.argv.includes('--image')) {
   const result = JSON.stringify(mode === 'invalid' ? { feedHtml: '' } : {
     feedHtml: html(1200), landscapeHtml: html(900),
   })
-  const output = process.argv[process.argv.indexOf('--output-last-message') + 1]
+  const output = process.argv[outputIndex + 1]
   writeFileSync(output, result)
 }

@@ -1,6 +1,6 @@
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { nativeImage } from 'electron'
+import { copyFileSync, existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
+import { nativeImage, net } from 'electron'
 import {
   renderSourceProject,
   stageValue,
@@ -15,12 +15,14 @@ import { runAgent } from './cli'
 import { captureStoryboard } from './render'
 import { sceneHtml } from './storyboard'
 import { workflowCommand } from './process'
+import { prepareImageRecovery, recoverImageDownload } from './image2-recovery'
 
 export function image2Failure(failure: unknown): Error {
   const detail = (failure instanceof Error ? failure.message : String(failure))
     .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [已隐藏]')
     .replace(/(?:OPENAI_API_KEY|api[_-]?key)\s*[=:]\s*[^\s"']+/gi, 'API_KEY=[已隐藏]')
     .replace(/sk-[A-Za-z0-9_-]{8,}/g, '[已隐藏]')
+    .replace(/https?:\/\/[^\s"'<>]+/g, '[图片下载地址已隐藏]')
     .slice(0, 4000)
   const summary = /Failed to download generated image/i.test(detail)
     ? 'Image2 图片已生成，但下载失败，请检查图片下载网络'
@@ -155,6 +157,18 @@ export async function generatePublicationCover(input: {
       throw new Error('请先在执行环境配置 Image2 脚本和 Bun；脚本使用本机已有图片 API 配置')
     const promptPath = join(cwd, 'cover-prompt.txt')
     const imagePath = join(cwd, 'image2-cover.png')
+    const recoveryDirectory = join(
+      files.root,
+      'cache',
+      'video-cover-recovery',
+      project.id,
+      basename(cwd),
+    )
+    const recovery = prepareImageRecovery(recoveryDirectory, {
+      projectId: project.id,
+      renderId: project.stages.render!.id,
+      publishId: project.stages.publish?.id,
+    })
     writeFileSync(promptPath, prompt)
     const reference = await files.verify(
       project.id,
@@ -167,6 +181,8 @@ export async function generatePublicationCover(input: {
       await workflowCommand(
         runtime.bunPath,
         [
+          '--import',
+          recovery.preload,
           runtime.image2Path,
           '--provider',
           'openai',
@@ -197,7 +213,25 @@ export async function generatePublicationCover(input: {
       )
     } catch (failure) {
       signal.throwIfAborted()
-      throw image2Failure(failure)
+      if (existsSync(recovery.resultPath)) {
+        phase('图片已生成，改用应用网络恢复下载同一图片，不重复生图')
+        try {
+          const restored = await recoverImageDownload(
+            recoveryDirectory,
+            (url, options) => net.fetch(url, options),
+            signal,
+          )
+          if (!restored) throw new Error('生成结果没有可下载的图片')
+          copyFileSync(restored, imagePath)
+        } catch (downloadFailure) {
+          signal.throwIfAborted()
+          throw image2Failure(
+            new Error(
+              `${failure instanceof Error ? failure.message : String(failure)}\n应用网络恢复下载失败：${downloadFailure instanceof Error ? downloadFailure.message : String(downloadFailure)}\n生成结果恢复目录：${recoveryDirectory}；请勿重复生图。`,
+            ),
+          )
+        }
+      } else throw image2Failure(failure)
     }
     signal.throwIfAborted()
     let data: Buffer
@@ -206,6 +240,7 @@ export async function generatePublicationCover(input: {
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 16 * 1024 * 1024)
         throw new Error('invalid')
       data = readFileSync(imagePath)
+      if (!existsSync(recovery.imagePath)) writeFileSync(recovery.imagePath, data, { mode: 0o600 })
     } catch {
       throw new Error('Image2 未生成有效图片文件，原封面已保留')
     }

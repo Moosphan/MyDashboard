@@ -33,7 +33,7 @@ import { PublishingAccounts, publishingAccountHome } from './bilibili-accounts'
 import { assertCoverSource, verifyCoverImages } from './covers'
 
 type SubmissionRow = { record: string; request_fingerprint: string }
-const RETRYABLE = ['failed', 'needs_auth', 'cancelled']
+const RETRYABLE = ['failed', 'needs_auth', 'cancelled', 'missed']
 
 export class PlatformPublishingService {
   private running = new Map<string, { controller: AbortController; promise: Promise<void> }>()
@@ -43,6 +43,8 @@ export class PlatformPublishingService {
   private stopped = false
   private accountReads = 0
   private readonly boundAccounts: PublishingAccounts
+  private readonly scheduleTimer: ReturnType<typeof setInterval>
+  private schedulesPaused = false
   private get table() {
     return this.platform === 'bilibili' ? 'video_bilibili_submissions' : 'video_douyin_submissions'
   }
@@ -84,6 +86,19 @@ export class PlatformPublishingService {
             : '应用退出前的投稿结果待核查，请先检查创作中心',
       })
     }
+    // A restart must not silently publish plans whose time passed while the app was closed.
+    for (const record of this.scheduled()) {
+      if (
+        !Number.isFinite(Date.parse(record.scheduledAt ?? '')) ||
+        Date.parse(record.scheduledAt!) <= Date.now()
+      )
+        this.update(record, {
+          state: 'missed',
+          error: '应用未运行，已错过定时时间；请重新安排发布',
+        })
+    }
+    this.scheduleTimer = setInterval(() => this.checkScheduled(), 15000)
+    this.scheduleTimer.unref()
   }
   private client(id = this.boundAccounts.state().selectedId ?? this.defaultAccount) {
     return new CatbusPublishingClient(this.root, { ...this.runtime() }, id, this.platform)
@@ -306,6 +321,15 @@ export class PlatformPublishingService {
         throw new Error('请求 ID 已用于不同投稿')
       return JSON.parse(previous.record)
     }
+    if (
+      input.scheduleAt !== undefined &&
+      (typeof input.scheduleAt !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(input.scheduleAt) ||
+        !Number.isFinite(Date.parse(input.scheduleAt)) ||
+        Date.parse(input.scheduleAt) < Date.now() + 60000 ||
+        Date.parse(input.scheduleAt) > Date.now() + 30 * 86400000)
+    )
+      throw new Error('定时时间须为未来 1 分钟至 30 天内的有效时间')
     if (!validPublishingUid(this.platform, input.accountUid))
       throw new Error(`请先连接并确认${this.label}账号`)
     if (
@@ -371,9 +395,10 @@ export class PlatformPublishingService {
       id: randomUUID(),
       projectId: project.id,
       requestId: input.requestId,
-      state: 'queued',
-      phase:
-        this.platform === 'bilibili'
+      state: input.scheduleAt ? 'scheduled' : 'queued',
+      phase: input.scheduleAt
+        ? '计划已保存，等待定时时间'
+        : this.platform === 'bilibili'
           ? '核对账号、分区与已审核文件'
           : '核对账号、可见性与已审核文件',
       snapshot,
@@ -385,6 +410,7 @@ export class PlatformPublishingService {
       submittedAt: null,
       verifiedAt: null,
       cliVersion: '0.2.1',
+      ...(input.scheduleAt ? { scheduledAt: new Date(input.scheduleAt).toISOString() } : {}),
     }
     this.db
       .prepare(`INSERT INTO ${this.table} VALUES(?,?,?,?,?,?,?)`)
@@ -397,19 +423,79 @@ export class PlatformPublishingService {
         record.state,
         JSON.stringify(record),
       )
+    if (record.state === 'scheduled') {
+      this.changed(project.id)
+      return record
+    }
+    this.launch(record)
+    return record
+  }
+  private launch(record: BilibiliSubmission) {
     const controller = new AbortController()
     const promise = Promise.resolve()
       .then(() => this.execute(record, controller.signal))
       .finally(() => this.running.delete(record.id))
     this.running.set(record.id, { controller, promise })
-    this.changed(project.id)
-    return record
+    this.changed(record.projectId)
+  }
+  private scheduled() {
+    return (
+      this.db
+        .prepare(
+          `SELECT record FROM ${this.table} WHERE state='scheduled' ORDER BY json_extract(record,'$.scheduledAt'),rowid`,
+        )
+        .all() as SubmissionRow[]
+    ).map((row) => JSON.parse(row.record) as BilibiliSubmission)
+  }
+  checkScheduled(now = Date.now()) {
+    if (this.stopped || this.schedulesPaused) return
+    for (const record of this.scheduled()) {
+      const due = Date.parse(record.scheduledAt ?? '')
+      if (!Number.isFinite(due) || now - due > 300000) {
+        this.update(record, {
+          state: 'missed',
+          error: '已错过定时时间，未自动补发；请重新安排发布',
+        })
+        continue
+      }
+      if (due > now || this.busy()) continue
+      // Commit the claim before starting asynchronous account/file checks.
+      const claimed = this.db
+        .prepare(
+          `UPDATE ${this.table} SET state='queued',record=? WHERE id=? AND state='scheduled'`,
+        )
+        .run(
+          JSON.stringify({
+            ...record,
+            state: 'queued',
+            phase: '定时时间已到，核对账号与已审核文件',
+            updatedAt: new Date().toISOString(),
+          }),
+          record.id,
+        )
+      if (claimed.changes) this.launch(this.get(record.projectId, record.id))
+    }
+  }
+  pauseSchedules() {
+    this.schedulesPaused = true
+  }
+  resumeSchedules(now = Date.now()) {
+    if (this.stopped) return
+    for (const record of this.scheduled()) {
+      if (Date.parse(record.scheduledAt ?? '') <= now)
+        this.update(record, {
+          state: 'missed',
+          error: '电脑休眠期间已错过定时时间；请重新安排发布',
+        })
+    }
+    this.schedulesPaused = false
   }
   private async execute(record: BilibiliSubmission, signal: AbortSignal) {
     let started = false
     try {
       const selected = this.boundAccounts.state().selectedId
       if (
+        !record.scheduledAt &&
         this.boundAccounts.hasIndex() &&
         (!selected || this.boundAccounts.get(selected).uid !== record.snapshot.accountUid)
       )
@@ -469,6 +555,8 @@ export class PlatformPublishingService {
   async cancel(projectId: string, id: string) {
     const record = this.get(projectId, id),
       active = this.running.get(id)
+    if (record.state === 'scheduled')
+      return this.update(record, { state: 'cancelled', phase: '已取消定时发布', error: null })
     if (!active) return record
     active.controller.abort()
     await active.promise
@@ -540,6 +628,7 @@ export class PlatformPublishingService {
   }
   async dispose() {
     this.stopped = true
+    clearInterval(this.scheduleTimer)
     this.reads.abort()
     this.login?.controller.abort()
     for (const active of this.running.values()) active.controller.abort()

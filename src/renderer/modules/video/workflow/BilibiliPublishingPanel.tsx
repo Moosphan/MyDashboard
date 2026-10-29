@@ -9,11 +9,17 @@ import {
   type BilibiliConnection,
   type BilibiliSubmission,
 } from '@shared/bilibili-publishing'
-import type { PublicationSubmission, VideoPlatform, VideoProject } from '@shared/video-workflow'
+import {
+  stageValue,
+  type PublicationSubmission,
+  type VideoPlatform,
+  type VideoProject,
+} from '@shared/video-workflow'
 import { PUBLISHING_PLATFORMS } from '@shared/platform-publishing'
 import { workflowCall } from './useWorkflow'
 import { WorkflowDialog } from './WorkflowDialog'
 import { PlatformAccountsDialog } from './BilibiliAccountsDialog'
+import { ScheduledPublishing } from './ScheduledPublishing'
 
 export function PlatformPublishingPanel({
   platform = 'bilibili',
@@ -84,6 +90,19 @@ export function PlatformPublishingPanel({
     alive = useRef(true),
     publishButton = useRef<HTMLButtonElement>(null)
   const active = records.some((record) => BILIBILI_ACTIVE.includes(record.state))
+  const hasPlan = records.some((record) => record.state === 'scheduled')
+  const cannotPublish =
+    busy ||
+    active ||
+    disabled ||
+    dirty ||
+    !approved ||
+    connection.state !== 'connected' ||
+    (platform === 'bilibili' &&
+      (!category || !categories.some((item) => item.id === category && item.parentId))) ||
+    !visibility ||
+    !copyright ||
+    (copyright === 'repost' && !source.trim())
   useEffect(() => {
     try {
       localStorage.setItem(storageKey, JSON.stringify({ category, visibility, copyright, source }))
@@ -142,7 +161,7 @@ export function PlatformPublishingPanel({
     }
   }, [connection.state, connection.uid, platform, call])
   const perform = async (action: () => Promise<unknown>, message = '') => {
-    if (lock.current) return
+    if (lock.current) return false
     lock.current = true
     setBusy(true)
     setError('')
@@ -151,8 +170,10 @@ export function PlatformPublishingPanel({
       await action()
       await refresh()
       if (alive.current) setNotice(message)
+      return true
     } catch (failure) {
       if (alive.current) setError((failure as Error).message)
+      return false
     } finally {
       lock.current = false
       if (alive.current) setBusy(false)
@@ -304,23 +325,43 @@ export function PlatformPublishingPanel({
       <Button
         ref={publishButton}
         size="sm"
-        disabled={
-          busy ||
-          active ||
-          disabled ||
-          dirty ||
-          !approved ||
-          connection.state !== 'connected' ||
-          (platform === 'bilibili' &&
-            (!category || !categories.some((item) => item.id === category && item.parentId))) ||
-          !visibility ||
-          !copyright ||
-          (copyright === 'repost' && !source.trim())
-        }
+        disabled={cannotPublish || hasPlan}
         onClick={() => void publish()}
       >
         {active ? '正在上传与提交…' : `一键发布到 ${label}`}
       </Button>
+      <ScheduledPublishing
+        label={label}
+        accountUid={connection.uid}
+        title={stageValue(project, 'publish')?.platforms[platform].title ?? project.title}
+        renderVersion={project.stages.render?.version}
+        publishVersion={project.stages.publish?.version}
+        disabled={cannotPublish}
+        busy={busy}
+        hasPlan={hasPlan}
+        error={error}
+        onSchedule={(scheduleAt) =>
+          perform(async () => {
+            const record = await call<BilibiliSubmission>('Publish', {
+              projectId: project.id,
+              expectedRevision: project.revision,
+              requestId: crypto.randomUUID(),
+              accountUid: connection.uid,
+              category,
+              visibility,
+              copyright,
+              source,
+              scheduleAt,
+            })
+            if (record.state !== 'scheduled')
+              throw new Error(
+                `未创建定时计划：该版本已有“${BILIBILI_STATE_LABELS[record.state]}”记录，请核对下方发布记录。`,
+              )
+            if (record.scheduledAt !== scheduleAt)
+              throw new Error('该版本已有其他时间的定时计划，请先取消原计划后重新安排。')
+          }, '定时发布计划已保存，到点自动核对并投稿。')
+        }
+      />
       {error && (
         <p className="workflow-error" role="alert">
           {error}
@@ -349,6 +390,12 @@ export function PlatformPublishingPanel({
               {record.snapshot.visibility === 'public' ? '公开' : '私密'}
             </p>
             <p className="workflow-muted">{record.snapshot.metadata.title}</p>
+            {record.scheduledAt && (
+              <p className="workflow-muted">
+                计划开始：{new Date(record.scheduledAt).toLocaleString()} · 本机时区{' '}
+                {Intl.DateTimeFormat().resolvedOptions().timeZone}
+              </p>
+            )}
           </div>
           {record.error && <p className="workflow-error">{record.error}</p>}
           {record.url && (
@@ -360,7 +407,24 @@ export function PlatformPublishingPanel({
               打开作品 {record.externalId}
             </Button>
           )}
-          {BILIBILI_ACTIVE.includes(record.state) ? (
+          {record.state === 'scheduled' ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={busy}
+              onClick={() =>
+                void perform(async () => {
+                  const result = await call<BilibiliSubmission>('Cancel', project.id, record.id)
+                  if (result.state !== 'cancelled')
+                    throw new Error(
+                      `计划已开始处理，当前为“${BILIBILI_STATE_LABELS[result.state]}”；请核查下方记录及平台结果，尚不能确认取消。`,
+                    )
+                }, '已取消定时发布')
+              }
+            >
+              取消定时发布
+            </Button>
+          ) : BILIBILI_ACTIVE.includes(record.state) ? (
             <Button
               size="sm"
               variant="secondary"

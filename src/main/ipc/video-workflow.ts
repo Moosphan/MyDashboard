@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, powerMonitor, protocol, shell } from 'electron'
 import { join } from 'node:path'
 import { getDatabase } from '../database/connection'
 import { getVoiceoverService } from '../services/tts-service'
@@ -269,5 +269,19 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
       .publications.find((item) => item.id === publicationId)
     if (!record) throw new Error('发布包不存在')
     shell.showItemInFolder(join(record.exportPath, 'video.mp4'))
+  })
+  // Restore timers at application startup, even if the user never opens Video.
+  try {
+    getVideoWorkflow()
+  } catch (error) {
+    console.error('[VideoWorkflow] 无法恢复定时发布，打开视频工作流后可查看配置错误：', error)
+  }
+  powerMonitor.on('suspend', () => {
+    service?.publishing.pauseSchedules()
+    service?.douyinPublishing.pauseSchedules()
+  })
+  powerMonitor.on('resume', () => {
+    service?.publishing.resumeSchedules()
+    service?.douyinPublishing.resumeSchedules()
   })
 }

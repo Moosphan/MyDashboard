@@ -12,6 +12,8 @@ writeFileSync(
   JSON.stringify({
     ffmpegPath: '/opt/homebrew/bin/ffmpeg',
     ffprobePath: '/opt/homebrew/bin/ffprobe',
+    nodePath: execFileSync('which', ['node'], { encoding: 'utf8' }).trim(),
+    catbusPath: join(__dirname, 'fixtures/catbus.mjs'),
   }),
 )
 const video = join(root, '外部AI成片.mp4'),
@@ -33,6 +35,11 @@ writeFileSync(invalid, 'not a video')
 let selected = null
 dialog.showOpenDialog = async () => ({ canceled: !selected, filePaths: selected ? [selected] : [] })
 process.env.MYDASHBOARD_USER_DATA = root
+const badAccountIndex = process.env.MYDASHBOARD_TEST_BAD_PUBLISHING_INDEX === '1'
+if (badAccountIndex) {
+  mkdirSync(join(root, 'config/publishing'), { recursive: true })
+  writeFileSync(join(root, 'config/publishing/douyin-accounts.json'), '{invalid')
+}
 require('../out/main/index.js')
 console.log('Import UI artifacts:', root)
 app.whenReady().then(async () => {
@@ -82,6 +89,15 @@ app.whenReady().then(async () => {
     win.setMinimumSize(720, 640)
     win.setSize(1440, 1000)
     await wait('document.querySelector("nav")', 'app ready')
+    if (badAccountIndex) {
+      const result = await evaluate('window.electronAPI.invoke("workflow:list")')
+      assert.equal(result.success, false)
+      assert.match(result.error, /账号索引无法读取/)
+      assert.ok(!win.isDestroyed())
+      console.log('SCHEDULED_PUBLISHING_BAD_ACCOUNT_STARTUP_OK')
+      app.exit(0)
+      return
+    }
     await evaluate(
       "window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))",
     )
@@ -192,6 +208,10 @@ app.whenReady().then(async () => {
       "(()=>{const b=[...document.querySelectorAll('button')].find(el=>el.textContent.trim()==='导入并进入发布');b.click();b.click()})()",
     )
     await wait('document.querySelector("[data-bilibili-publishing]")', 'direct publication')
+    assert.equal(
+      await evaluate('document.querySelector("[data-scheduled-publishing]")?.open'),
+      false,
+    )
     let projects = await call('list')
     assert.equal(projects.length, 1)
     const project = projects[0]
@@ -219,6 +239,14 @@ app.whenReady().then(async () => {
     )
     await evaluate('document.querySelector("input[value=douyin]").click()')
     await wait('document.querySelector("[data-douyin-publishing]")', 'douyin page')
+    await click('投稿可见性')
+    await evaluate(
+      '[...document.querySelectorAll("[role=option]")].find(el=>el.textContent.includes("公开投稿")).click()',
+    )
+    await click('稿件类型')
+    await evaluate(
+      '[...document.querySelectorAll("[role=option]")].find(el=>el.textContent.includes("自制")).click()',
+    )
     await input('input[maxlength="30"]', '城市交通')
     await click('保存草稿')
     await click('确认保存新版本')
@@ -226,6 +254,10 @@ app.whenReady().then(async () => {
     await click('审核通过此版本')
     await click('确认审核通过')
     await wait('!document.querySelector("[role=dialog]")', 'metadata approved')
+    await wait(
+      'document.querySelector("[data-douyin-publishing]").textContent.includes("已连接：")',
+      'fixture account connected',
+    )
     assert.equal((await call('get', project.id)).stages.publish.status, 'approved')
     assert.equal(
       await evaluate(
@@ -237,8 +269,118 @@ app.whenReady().then(async () => {
       await evaluate(
         '[...document.querySelectorAll("button")].find(el=>el.textContent.trim()==="一键发布到 抖音").disabled',
       ),
+      false,
+    )
+    await evaluate('document.querySelector("[data-scheduled-publishing] summary").focus()')
+    await key('Space')
+    await input('#scheduled-publish-time', '')
+    assert.equal(
+      await evaluate(
+        '[...document.querySelectorAll("button")].find(el=>el.textContent.trim()==="设置定时发布").disabled',
+      ),
       true,
     )
+    const scheduleAt = new Date(Date.now() + 3600000)
+    const localTime = new Date(scheduleAt.getTime() - scheduleAt.getTimezoneOffset() * 60000)
+      .toISOString()
+      .slice(0, 16)
+    await input('#scheduled-publish-time', localTime)
+    await click('设置定时发布')
+    await wait('document.querySelector("[role=dialog]")', 'schedule confirmation')
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[role=dialog]").textContent.includes("MS4wLjABAAAA_test_123")',
+      ),
+    )
+    await key('Escape')
+    assert.equal(await evaluate('document.activeElement.textContent.trim()'), '设置定时发布')
+    await click('设置定时发布')
+    writeFileSync(
+      join(root, 'scheduled-confirmation.png'),
+      (await win.webContents.capturePage()).toPNG(),
+    )
+    win.webContents.setZoomFactor(2)
+    await key('Tab')
+    await key('Tab', ['shift'])
+    assert.ok(
+      await evaluate('document.querySelector("[role=dialog]").contains(document.activeElement)'),
+    )
+    writeFileSync(
+      join(root, 'scheduled-confirmation-200percent.png'),
+      (await win.webContents.capturePage()).toPNG(),
+    )
+    win.webContents.setZoomFactor(1)
+    await click('确认定时发布')
+    await wait('document.querySelector("[data-douyin-submission=scheduled]")', 'schedule persisted')
+    await wait('!document.querySelector("[role=dialog]")', 'schedule confirmation closes')
+    assert.equal((await call('douyinSubmissions', project.id))[0].state, 'scheduled')
+    assert.equal(
+      await evaluate(
+        '[...document.querySelectorAll("button")].find(el=>el.textContent.trim()==="一键发布到 抖音").disabled',
+      ),
+      true,
+    )
+    for (const theme of ['light', 'dark']) {
+      await evaluate(`document.documentElement.classList.toggle('dark',${theme === 'dark'})`)
+      for (const width of [1440, 1024]) {
+        win.setSize(width, 1000)
+        await evaluate(
+          'document.querySelector("[data-scheduled-publishing]").scrollIntoView({block:"center"})',
+        )
+        await delay(200)
+        writeFileSync(
+          join(root, `scheduled-${theme}-${width}.png`),
+          (await win.webContents.capturePage()).toPNG(),
+        )
+        assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth'))
+      }
+    }
+    win.webContents.debugger.attach('1.3')
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      features: [
+        { name: 'forced-colors', value: 'active' },
+        { name: 'prefers-reduced-motion', value: 'reduce' },
+      ],
+    })
+    assert.ok(
+      await evaluate(
+        'matchMedia("(forced-colors: active)").matches && matchMedia("(prefers-reduced-motion: reduce)").matches',
+      ),
+    )
+    await evaluate(
+      'document.querySelector("[data-scheduled-publishing]").scrollIntoView({block:"center"})',
+    )
+    await delay(200)
+    writeFileSync(
+      join(root, 'scheduled-high-contrast-reduced-motion.png'),
+      (await win.webContents.capturePage()).toPNG(),
+    )
+    await win.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', { features: [] })
+    win.webContents.debugger.detach()
+    await click('取消定时发布')
+    await wait('document.querySelector("[data-douyin-submission=cancelled]")', 'schedule cancelled')
+    assert.equal((await call('douyinSubmissions', project.id))[0].state, 'cancelled')
+    await click('一键发布到 抖音')
+    await wait(
+      'document.querySelector("[data-douyin-submission=reviewing]")',
+      'fixture submission completed',
+    )
+    await click('设置定时发布')
+    await click('确认定时发布')
+    await wait(
+      'document.querySelector("[role=dialog] [role=alert]")',
+      'existing submission scheduling error',
+    )
+    assert.ok(
+      await evaluate(
+        'document.querySelector("[role=dialog] [role=alert]").textContent.includes("未创建定时计划")',
+      ),
+    )
+    assert.ok(
+      !(await call('douyinSubmissions', project.id)).some((record) => record.state === 'scheduled'),
+    )
+    await key('Escape')
+    win.setSize(1440, 1000)
     writeFileSync(
       join(root, 'import-publish-ready.png'),
       (await win.webContents.capturePage()).toPNG(),

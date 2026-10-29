@@ -128,15 +128,21 @@ export class VideoWorkflowService {
       () => this.runtime.get(),
       changed,
     )
-    this.douyinPublishing = new PlatformPublishingService(
-      root,
-      db,
-      this.repository,
-      this.files,
-      () => this.runtime.get(),
-      changed,
-      'douyin',
-    )
+    try {
+      this.douyinPublishing = new PlatformPublishingService(
+        root,
+        db,
+        this.repository,
+        this.files,
+        () => this.runtime.get(),
+        changed,
+        'douyin',
+      )
+    } catch (error) {
+      // A failed second platform must not leave the first scheduler running unowned.
+      void this.publishing.dispose()
+      throw error
+    }
   }
   async importFinishedVideo(title: string, path: string, description: string, requestId: string) {
     if (this.stopped) throw new Error('工作流正在退出')

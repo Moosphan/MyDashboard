@@ -186,3 +186,5 @@
 ## 8. V3.2 自绘控件迁移
 
 生产优先建立共享Select/Combobox/DatePicker/TimePicker/ColorPicker，再替换页面调用；不得只美化select触发器却留下系统弹层。先覆盖设计工作台顶部密度与Dialog中的嵌套表单，再覆盖业务页面。Checkbox等原生input保留键盘语义，统一appearance与状态；原生语义不等于允许平台默认外观。验收包含表单值、IME、disabled/indeterminate、Escape分层关闭、焦点返回与视口避让。日期范围、12小时制、透明度等预留变体在生产实现时另验，不视为本轮已完成。
+
+`VIDEO-WORKFLOW-001` 应用内定时发布（2026-10-29 用户授权并确认错过不补发）：`ScheduledPublishing.tsx` 与 `BilibiliPublishingPanel.tsx` 沿用原生 details、VoiceInput、Button、WorkflowDialog 和既有主题，在原立即发布动作后添加默认收起的定时块。保留原主栏、审核栏和动作顺序；确认显示时间/时区、账号和版本，错误留在弹窗，取消等待计划无需改变审核。无新依赖、图标或全局样式；负责人为项目维护者，退出里程碑仍为 Video 工作流 HeroUI 3.2.6 生产迁移。日期字段及折叠块属于该局部兼容例外，未宣称完成 HeroUI 迁移。状态、键盘、主题和 Electron 证据见 [定时发布验证](video-workflow-scheduled-publishing-verification.md)。

@@ -24,6 +24,284 @@ import { stageUnlocked, stageValue, validatePayload } from '../src/shared/video-
 import { publicationPrompt } from '../src/main/services/video-workflow/publish'
 import { coverPrompt } from '../src/main/services/video-workflow/covers'
 import { setTimeout as delay } from 'node:timers/promises'
+import type { BilibiliPublishRequest } from '../src/shared/bilibili-publishing'
+import { PublishingAccounts } from '../src/main/services/video-workflow/bilibili-accounts'
+
+async function scheduledFixture() {
+  const f = await fixture()
+  const cli = join(f.root, 'dist/cli/main.mjs')
+  mkdirSync(join(f.root, 'dist/cli'), { recursive: true })
+  copyFileSync(join(import.meta.dirname, 'fixtures/catbus.mjs'), cli)
+  f.service.runtime.set({ ...f.service.runtime.get(), nodePath: process.execPath, catbusPath: cli })
+  let project = await f.service.importFinishedVideo('定时成片', f.source, '', randomUUID())
+  project = await f.service.save(
+    project.id,
+    'publish',
+    {
+      platforms: {
+        bilibili: { title: '审核标题', description: '', tags: ['交通'] },
+        douyin: { title: '另一平台', description: '', tags: [] },
+      },
+    },
+    project.revision,
+    randomUUID(),
+  )
+  project = await f.service.approve(
+    project.id,
+    'publish',
+    project.stages.publish!.id,
+    project.revision,
+    randomUUID(),
+  )
+  const request: BilibiliPublishRequest = {
+    projectId: project.id,
+    expectedRevision: project.revision,
+    requestId: randomUUID(),
+    accountUid: '123',
+    category: '17',
+    visibility: 'public',
+    copyright: 'original',
+    scheduleAt: new Date(Date.now() + 120000).toISOString(),
+  }
+  return { ...f, project, request }
+}
+
+test('scheduled publishing waits until due, uses frozen media and never submits twice on concurrent ticks', async () => {
+  const f = await scheduledFixture()
+  try {
+    for (const platform of ['bilibili', 'douyin'] as const) {
+      const publishing = platform === 'bilibili' ? f.service.publishing : f.service.douyinPublishing
+      const request = {
+        ...f.request,
+        requestId: randomUUID(),
+        accountUid: platform === 'bilibili' ? '123' : 'MS4wLjABAAAA_test_123',
+        category: platform === 'bilibili' ? '17' : '',
+      }
+      const record = publishing.start(request)
+      assert.equal(record.state, 'scheduled')
+      assert.equal(record.scheduledAt, request.scheduleAt)
+      assert.equal(publishing.start(request).id, record.id)
+      await delay(80)
+      assert.equal(publishing.list(f.project.id)[0].state, 'scheduled')
+      publishing.checkScheduled(Date.parse(request.scheduleAt!) - 1)
+      assert.equal(publishing.list(f.project.id)[0].state, 'scheduled')
+      publishing.checkScheduled(Date.parse(request.scheduleAt!))
+      publishing.checkScheduled(Date.parse(request.scheduleAt!))
+      for (
+        let i = 0;
+        i < 200 &&
+        ['queued', 'uploading', 'submitting'].includes(publishing.list(f.project.id)[0].state);
+        i++
+      )
+        await delay(30)
+      const finished = publishing.list(f.project.id)[0]
+      assert.equal(finished.state, 'reviewing', finished.error ?? '')
+      assert.equal(finished.snapshot.video.sha256, stageValue(f.project, 'render')!.file.sha256)
+      assert.equal(publishing.start({ ...request, requestId: randomUUID() }).id, record.id)
+    }
+    assert.equal(readFileSync(join(f.root, 'calls'), 'utf8').trim().split('\n').length, 2)
+  } finally {
+    await f.close()
+  }
+})
+
+test('validates scheduling, persists and cancels plans; restart never silently catches up missed times', async () => {
+  const f = await scheduledFixture()
+  try {
+    for (const scheduleAt of [
+      'invalid',
+      new Date(Date.now() - 1).toISOString(),
+      new Date(Date.now() + 31000).toISOString(),
+      new Date(Date.now() + 31 * 86400000).toISOString(),
+    ])
+      assert.throws(
+        () => f.service.publishing.start({ ...f.request, requestId: randomUUID(), scheduleAt }),
+        /定时|时间/,
+      )
+    const record = f.service.publishing.start(f.request)
+    await f.service.dispose()
+    const reopened = new VideoWorkflowService(f.root, f.db, () => {
+      throw new Error('No voice')
+    })
+    try {
+      assert.equal(reopened.publishing.list(f.project.id)[0].state, 'scheduled')
+      assert.equal((await reopened.publishing.cancel(f.project.id, record.id)).state, 'cancelled')
+      reopened.publishing.checkScheduled(Date.parse(f.request.scheduleAt!))
+      assert.equal(reopened.publishing.list(f.project.id)[0].state, 'cancelled')
+      const missed = reopened.publishing.start({ ...f.request, requestId: randomUUID() })
+      const row = { ...missed, scheduledAt: new Date(Date.now() - 10000).toISOString() }
+      f.db
+        .prepare('UPDATE video_bilibili_submissions SET record=? WHERE id=?')
+        .run(JSON.stringify(row), missed.id)
+    } finally {
+      await reopened.dispose()
+    }
+    const restarted = new VideoWorkflowService(f.root, f.db, () => {
+      throw new Error('No voice')
+    })
+    try {
+      assert.equal(restarted.publishing.list(f.project.id)[0].state, 'missed')
+      assert.match(restarted.publishing.list(f.project.id)[0].error ?? '', /错过/)
+    } finally {
+      await restarted.dispose()
+    }
+    assert.ok(!readdirSync(f.root).includes('calls'))
+  } finally {
+    await f.close()
+  }
+})
+
+test('scheduled plans retain the original account after selection changes and never compensate after system sleep', async () => {
+  const f = await scheduledFixture()
+  try {
+    await f.service.publishing.connection(true)
+    const plan = f.service.publishing.start(f.request)
+    await f.service.dispose()
+    const accounts = new PublishingAccounts(f.root)
+    accounts.remember(`account-${randomUUID()}`, { uid: '456', name: '另一个账号' })
+    const reopened = new VideoWorkflowService(f.root, f.db, () => {
+      throw new Error('No voice')
+    })
+    try {
+      reopened.publishing.checkScheduled(Date.parse(f.request.scheduleAt!))
+      for (
+        let i = 0;
+        i < 200 &&
+        ['queued', 'uploading', 'submitting'].includes(
+          reopened.publishing.list(f.project.id)[0].state,
+        );
+        i++
+      )
+        await delay(30)
+      assert.equal(reopened.publishing.list(f.project.id)[0].state, 'reviewing')
+      assert.equal(
+        reopened.publishing.list(f.project.id)[0].snapshot.accountUid,
+        plan.snapshot.accountUid,
+      )
+      const sleeping = reopened.douyinPublishing.start({
+        ...f.request,
+        requestId: randomUUID(),
+        accountUid: 'MS4wLjABAAAA_test_123',
+        category: '',
+      })
+      reopened.douyinPublishing.pauseSchedules()
+      reopened.douyinPublishing.checkScheduled(Date.parse(f.request.scheduleAt!))
+      assert.equal(reopened.douyinPublishing.list(f.project.id)[0].state, 'scheduled')
+      reopened.douyinPublishing.resumeSchedules(Date.parse(f.request.scheduleAt!) + 1)
+      assert.equal(reopened.douyinPublishing.list(f.project.id)[0].state, 'missed')
+      assert.equal(reopened.douyinPublishing.list(f.project.id)[0].id, sleeping.id)
+      assert.equal(readFileSync(join(f.root, 'calls'), 'utf8').trim().split('\n').length, 1)
+    } finally {
+      await reopened.dispose()
+    }
+  } finally {
+    await f.close()
+  }
+})
+
+test('scheduled publishing stops on archive, changed approval, media tampering and excessive delay', async () => {
+  for (const failure of [
+    'archived',
+    'changed',
+    'tampered',
+    'late',
+    'wrong-account',
+    'removed-account',
+  ] as const) {
+    const f = await scheduledFixture()
+    try {
+      const record = f.service.publishing.start(f.request)
+      if (failure === 'removed-account') {
+        await f.service.publishing.connection(true)
+        await f.service.publishing.removeAccount('mydashboard-bili')
+      }
+      if (failure === 'wrong-account') writeFileSync(join(f.root, 'mode'), 'wrong-account')
+      if (failure === 'archived')
+        f.service.repository.archive(f.project.id, true, f.project.revision)
+      if (failure === 'changed')
+        await f.service.save(
+          f.project.id,
+          'publish',
+          stageValue(f.project, 'publish'),
+          f.project.revision,
+          randomUUID(),
+        )
+      if (failure === 'tampered')
+        writeFileSync(f.service.files.path(record.snapshot.video), 'changed bytes')
+      f.service.publishing.checkScheduled(
+        Date.parse(f.request.scheduleAt!) + (failure === 'late' ? 301000 : 0),
+      )
+      for (
+        let i = 0;
+        i < 200 &&
+        ['queued', 'uploading', 'submitting'].includes(
+          f.service.publishing.list(f.project.id)[0].state,
+        );
+        i++
+      )
+        await delay(30)
+      const stopped = f.service.publishing.list(f.project.id)[0]
+      assert.equal(
+        stopped.state,
+        failure === 'late'
+          ? 'missed'
+          : ['wrong-account', 'removed-account'].includes(failure)
+            ? 'needs_auth'
+            : 'failed',
+        stopped.error ?? '',
+      )
+      assert.ok(!readdirSync(f.root).includes('calls'))
+    } finally {
+      await f.close()
+    }
+  }
+})
+
+test('scheduled dispatch defers during account operations and never retries uncertain submissions', async () => {
+  const f = await scheduledFixture()
+  try {
+    const plan = f.service.publishing.start(f.request)
+    const checking = f.service.publishing.connection(true)
+    f.service.publishing.checkScheduled(Date.parse(f.request.scheduleAt!))
+    assert.equal(f.service.publishing.list(f.project.id)[0].state, 'scheduled')
+    await checking
+    writeFileSync(join(f.root, 'mode'), 'network')
+    f.service.publishing.checkScheduled(Date.parse(f.request.scheduleAt!) + 15000)
+    for (
+      let i = 0;
+      i < 200 &&
+      ['queued', 'uploading', 'submitting'].includes(
+        f.service.publishing.list(f.project.id)[0].state,
+      );
+      i++
+    )
+      await delay(30)
+    assert.equal(f.service.publishing.list(f.project.id)[0].state, 'unknown')
+    for (let i = 1; i <= 5; i++)
+      f.service.publishing.checkScheduled(Date.parse(f.request.scheduleAt!) + i * 60000)
+    assert.equal(f.service.publishing.start({ ...f.request, requestId: randomUUID() }).id, plan.id)
+    assert.equal(readFileSync(join(f.root, 'calls'), 'utf8').trim().split('\n').length, 1)
+  } finally {
+    await f.close()
+  }
+})
+
+test('cancelling a dispatched schedule preserves uncertain platform outcomes', async () => {
+  const f = await scheduledFixture()
+  try {
+    writeFileSync(join(f.root, 'mode'), 'slow')
+    const plan = f.service.publishing.start(f.request)
+    f.service.publishing.checkScheduled(Date.parse(f.request.scheduleAt!))
+    for (let i = 0; i < 200 && !readdirSync(f.root).includes('calls'); i++) await delay(10)
+    assert.ok(readdirSync(f.root).includes('calls'))
+    const result = await f.service.publishing.cancel(f.project.id, plan.id)
+    assert.equal(result.state, 'unknown')
+    f.service.publishing.checkScheduled(Date.parse(f.request.scheduleAt!) + 30000)
+    assert.equal(readFileSync(join(f.root, 'calls'), 'utf8').trim().split('\n').length, 1)
+  } finally {
+    await f.close()
+  }
+})
 
 async function fixture(width = 360, height = 640) {
   const root = mkdtempSync(join(tmpdir(), 'finished-video-'))

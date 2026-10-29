@@ -2,6 +2,8 @@ import type { PlatformMetadata, WorkflowFile } from './video-workflow'
 
 export const BILIBILI_ACCOUNT = 'mydashboard-bili'
 export type BilibiliPublishState =
+  | 'scheduled'
+  | 'missed'
   | 'queued'
   | 'uploading'
   | 'submitting'
@@ -15,6 +17,8 @@ export type BilibiliPublishState =
   | 'failed'
   | 'cancelled'
 export const BILIBILI_STATE_LABELS: Record<BilibiliPublishState, string> = {
+  scheduled: '等待定时发布',
+  missed: '已错过定时时间',
   queued: '准备投稿',
   uploading: '上传与提交中',
   submitting: '提交中',
@@ -38,6 +42,7 @@ export interface BilibiliPublishRequest {
   visibility: 'public' | 'private'
   copyright: 'original' | 'repost'
   source?: string
+  scheduleAt?: string
 }
 export interface BilibiliPublishSnapshot {
   renderRevisionId: string
@@ -66,6 +71,7 @@ export interface BilibiliSubmission {
   submittedAt: string | null
   verifiedAt: string | null
   cliVersion: string
+  scheduledAt?: string
 }
 export interface BilibiliConnection {
   state: 'disconnected' | 'checking' | 'connecting' | 'connected' | 'error'

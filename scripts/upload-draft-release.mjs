@@ -1,6 +1,13 @@
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { lstatSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import {
+  renameSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs'
 import { resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -85,7 +92,14 @@ export function uploadDraftAssets(env, directory, platform, run = gh) {
     const stat = lstatSync(file)
     if (!stat.isFile() || stat.isSymbolicLink() || !stat.size)
       throw new Error('Installer must be a non-empty regular file')
-    return file
+    // GitHub replaces spaces in asset filenames with dots. Normalize first so
+    // the checksum manifest uses the exact filenames users will download.
+    const normalized = join(directory, matches[0].replaceAll(' ', '.'))
+    if (normalized !== file) {
+      if (existsSync(normalized)) throw new Error('Installer filename collision')
+      renameSync(file, normalized)
+    }
+    return normalized
   })
   const checksum = join(directory, `SHA256SUMS-${platform}.txt`)
   writeFileSync(

@@ -164,10 +164,13 @@ test('matches actual Windows and Linux builder names without mixing platform ass
         (args) => (args[0] === 'api' ? JSON.stringify(release) : ''),
       )
       assert.equal(result.assets.length, 3)
+      const remoteNames = names.map((name) => name.replaceAll(' ', '.'))
       assert.deepEqual(
         result.assets.slice(0, 2),
-        names.map((name) => join(f.directory, name)),
+        remoteNames.map((name) => join(f.directory, name)),
       )
+      const checksums = readFileSync(join(f.directory, `SHA256SUMS-${platform}.txt`), 'utf8')
+      for (const name of remoteNames) assert.ok(checksums.includes(`  ${name}\n`))
     } finally {
       f.close()
     }

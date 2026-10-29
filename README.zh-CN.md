@@ -126,6 +126,10 @@ SQLite 初始化时会启用 WAL 模式和外键约束。
 
 ## 快速开始
 
+### 下载 macOS 安装包
+
+打开 `main` 分支最近一次成功的 [Build & Release 构建](https://github.com/Moosphan/MyDashboard/actions/workflows/build.yml)，登录 GitHub 后，在 **Artifacts** 中下载 **macos-build**。压缩包包含 Apple Silicon（`arm64`）与 Intel（`x64`）的 DMG、ZIP 安装包，以及 `SHA256SUMS.txt` 校验文件。产物保留 30 天，也可通过 **Run workflow** 手动构建。这些 CI 安装包未签名、未经过 Apple 公证。
+
 ### 环境要求
 
 - Node.js `>= 18`

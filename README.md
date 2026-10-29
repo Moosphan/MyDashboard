@@ -161,6 +161,10 @@ SQLite is initialized with WAL mode and foreign-key support enabled.
 
 ## Getting Started
 
+### Download macOS installers
+
+Open the latest successful [Build & Release run](https://github.com/Moosphan/MyDashboard/actions/workflows/build.yml) on `main` and download **macos-build** under **Artifacts** (GitHub sign-in required). The archive contains DMG and ZIP packages for Apple Silicon (`arm64`) and Intel (`x64`), plus `SHA256SUMS.txt`. Artifacts are retained for 30 days; builds also support manual runs with **Run workflow**. These CI builds are unsigned and are not notarized by Apple.
+
 ### Prerequisites
 
 - Node.js `>= 18`

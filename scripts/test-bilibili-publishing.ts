@@ -759,6 +759,28 @@ test('stops before upload when account ownership or approved media changes', asy
   }
 })
 
+test('douyin preserves safe upstream reasons and status codes without exposing credentials or republishing', async () => {
+  for (const mode of ['upstream-rejected', 'upstream-upload', 'upstream-secret']) {
+    const context = await fixture('douyin')
+    try {
+      writeFileSync(join(context.root, 'mode'), mode)
+      const result = await context.finish(context.service.start(context.request).id)
+      assert.equal(result.state, 'unknown')
+      assert.match(result.error ?? '', /10001/)
+      if (mode === 'upstream-rejected') assert.match(result.error ?? '', /作品描述不符合要求/)
+      if (mode === 'upstream-upload') assert.match(result.error ?? '', /视频上传申请失败/)
+      assert.doesNotMatch(JSON.stringify(result), /SECRET|cookie=|example\.com/)
+      assert.equal(
+        context.service.start({ ...context.request, requestId: randomUUID() }).id,
+        result.id,
+      )
+      assert.equal(readFileSync(join(context.root, 'calls'), 'utf8').trim().split('\n').length, 1)
+    } finally {
+      await context.close()
+    }
+  }
+})
+
 test('preserves unknown outcomes and sanitized errors instead of automatically republishing', async () => {
   const context = await fixture()
   try {

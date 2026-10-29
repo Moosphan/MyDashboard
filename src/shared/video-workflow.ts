@@ -8,6 +8,8 @@ export function videoFormatLabel(format: VideoFormat = 'landscape') {
   return format === 'portrait' ? '竖版 9:16 · 1080×1920' : '横版 16:9 · 1920×1080'
 }
 export function projectVideoFormat(project: VideoProject, referenceText = ''): VideoFormat {
+  const render = stageValue(project, 'render')
+  if (render?.imported) return render.width < render.height ? 'portrait' : 'landscape'
   const brief = stageValue(project, 'brief')
   if (brief?.format) return brief.format
   const requirements = [
@@ -167,6 +169,7 @@ export interface RenderMusic {
   playbackRate: number
 }
 export interface RenderPayload {
+  imported?: { filename: string; description: string }
   file: WorkflowFile
   duration: number
   width: number
@@ -393,10 +396,22 @@ export function renderSourceProject(
   }
   return { ...project, stages }
 }
+export function isImportedVideo(project: VideoProject) {
+  return Boolean(stageValue(project, 'render')?.imported)
+}
+export function workflowDependencies(
+  project: VideoProject,
+  stage: VideoStage,
+): readonly VideoStage[] {
+  return isImportedVideo(project) && stage === 'publish'
+    ? ['render']
+    : VIDEO_STAGES.slice(0, VIDEO_STAGES.indexOf(stage))
+}
 export function stageUnlocked(project: VideoProject, stage: VideoStage) {
   return (
     !project.archived &&
-    VIDEO_STAGES.slice(0, VIDEO_STAGES.indexOf(stage)).every(
+    (!isImportedVideo(project) || stage === 'publish') &&
+    workflowDependencies(project, stage).every(
       (item) => project.stages[item]?.status === 'approved',
     )
   )
@@ -639,6 +654,49 @@ export function validatePayload<Stage extends VideoStage>(
       ...(input.voice ? { voice: input.voice as WorkflowVoice } : {}),
     }
   } else if (stage === 'roughcut' || stage === 'render') {
+    const imported = input.imported === undefined ? undefined : record(input.imported)
+    if (imported) {
+      if (
+        stage !== 'render' ||
+        !Number.isInteger(input.width) ||
+        !Number.isInteger(input.height) ||
+        Number(input.width) < 16 ||
+        Number(input.height) < 16 ||
+        Number(input.width) > 8192 ||
+        Number(input.height) > 8192 ||
+        !Array.isArray(input.compositionFiles) ||
+        input.compositionFiles.length !== 0 ||
+        !Array.isArray(input.compositionNames) ||
+        input.compositionNames.length !== 0 ||
+        input.music ||
+        input.motion ||
+        input.sourceRoughcut ||
+        input.sourceStoryboard ||
+        input.sourceAudio ||
+        input.sourceNarration
+      )
+        throw new Error('外部成片规格无效或混入合成工程')
+      const video = file(input.file),
+        cover = file(input.cover)
+      if (video.mime !== 'video/mp4' || cover.mime !== 'image/png')
+        throw new Error('导入成片需要 MP4 与 PNG 封面')
+      const external: RenderPayload = {
+        file: video,
+        cover,
+        duration: seconds(input.duration),
+        width: Number(input.width),
+        height: Number(input.height),
+        compositionFiles: [],
+        compositionNames: [],
+        manifestHash: text(input.manifestHash, '文件指纹', 64),
+        checks: text(input.checks, '导入检查', 20000),
+        imported: {
+          filename: text(imported.filename, '原视频文件名', 300),
+          description: optionalText(imported.description, '视频内容说明', 5000) ?? '',
+        },
+      }
+      return external as StagePayloads[Stage]
+    }
     const profile = input.renderProfile === undefined ? undefined : record(input.renderProfile)
     if (profile && (!['looks', 'delivery'].includes(String(profile.quality)) || profile.fps !== 30))
       throw new Error('无效渲染参数')

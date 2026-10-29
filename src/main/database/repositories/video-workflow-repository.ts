@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import {
   VIDEO_STAGES,
   stageUnlocked,
+  workflowDependencies,
   validatePayload,
   type VideoProject,
   type VideoStage,
@@ -136,6 +137,72 @@ export class VideoWorkflowRepository {
       .run(id, title.trim(), now, now)
     return this.get(id)
   }
+  completeVideoImport(id: string, value: unknown, requestId: string, requestValue: unknown) {
+    return this.db.transaction(() => {
+      const project = this.current(id, 1)
+      if (project.history.length) throw new Error('仅新项目可以导入外部成片')
+      const render = validatePayload('render', value)
+      if (!render.imported) throw new Error('缺少外部成片导入来源')
+      if (this.request(id, requestId, requestValue)) return this.get(id)
+      const renderId = randomUUID(),
+        now = new Date().toISOString()
+      this.db
+        .prepare(
+          'INSERT INTO video_workflow_revisions(id,project_id,stage,version,payload,dependencies,status,approved_at,note,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          renderId,
+          id,
+          'render',
+          1,
+          JSON.stringify(render),
+          fingerprint([]),
+          'approved',
+          now,
+          '用户导入外部成品视频，跳过创作阶段；发布资料仍需审核',
+          now,
+        )
+      const publish = validatePayload('publish', {
+        platforms: {
+          bilibili: {
+            title: project.title.slice(0, 80),
+            description: render.imported.description.slice(0, 2000),
+            tags: [],
+          },
+          douyin: {
+            title: project.title.slice(0, 30),
+            description: render.imported.description.slice(0, 2000),
+            tags: [],
+          },
+        },
+      })
+      this.db
+        .prepare(
+          'INSERT INTO video_workflow_revisions(id,project_id,stage,version,payload,dependencies,status,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+        )
+        .run(
+          randomUUID(),
+          id,
+          'publish',
+          1,
+          JSON.stringify(publish),
+          fingerprint([renderId]),
+          'review',
+          '基于外部成片创建，等待人工审核',
+          now,
+        )
+      this.bump(id)
+      return this.get(id)
+    })()
+  }
+  discardIncompleteImport(id: string) {
+    this.db.transaction(() => {
+      const project = this.current(id, 1)
+      if (project.history.length || project.jobs.length) throw new Error('不能移除已完成的项目')
+      this.db.prepare('DELETE FROM video_workflow_files WHERE project_id=?').run(id)
+      this.db.prepare('DELETE FROM video_projects WHERE id=?').run(id)
+    })()
+  }
   list(archived = false): VideoProject[] {
     return (
       this.db
@@ -209,9 +276,7 @@ export class VideoWorkflowRepository {
   }
   private dependencies(project: VideoProject, stage: VideoStage) {
     if (!stageUnlocked(project, stage)) throw new Error('前置步骤尚未审核通过或已经过期')
-    return fingerprint(
-      VIDEO_STAGES.slice(0, VIDEO_STAGES.indexOf(stage)).map((item) => project.stages[item]!.id),
-    )
+    return fingerprint(workflowDependencies(project, stage).map((item) => project.stages[item]!.id))
   }
   private request(id: string, requestId: string, value: unknown) {
     if (typeof requestId !== 'string' || !requestId || requestId.length > 120)
@@ -244,6 +309,11 @@ export class VideoWorkflowRepository {
   ): VideoProject {
     return this.db.transaction(() => {
       const payload = validatePayload(stage, value)
+      if (
+        (stage === 'render' || stage === 'roughcut') &&
+        (payload as StagePayloads['render']).imported
+      )
+        throw new Error('外部成片只能通过专用导入流程创建')
       if (this.request(id, requestId, ['save', stage, payload])) return this.get(id)
       const project = this.current(id, expected)
       const dependencies = this.dependencies(project, stage)

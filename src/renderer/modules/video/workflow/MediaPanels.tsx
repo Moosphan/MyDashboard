@@ -1200,8 +1200,9 @@ export function PublishingPanel({
           </div>
           <div>
             <strong className="text-body-sm">
-              共用成片 · {render.width < render.height ? '竖版' : '横版'} {render.width}×
-              {render.height}
+              共用成片 ·{' '}
+              {render.imported ? '原视频' : render.width < render.height ? '竖版' : '横版'}{' '}
+              {render.width}×{render.height}
             </strong>
             <p className="workflow-muted mt-2">{render.duration.toFixed(1)} 秒 · Bilibili / 抖音</p>
           </div>
@@ -1275,9 +1276,15 @@ export function PublishingPanel({
                       {platform === 'bilibili' ? 'Bilibili' : '抖音'}发布资料
                     </h4>
                     <p className="workflow-muted mt-2" data-publish-sources>
-                      基于内容文案 v{project.stages.copy?.version ?? '—'} · HTML 分镜 v
-                      {project.stages.storyboard?.version ?? '—'} · 口播 v
-                      {project.stages.narration?.version ?? '—'}
+                      {render?.imported ? (
+                        `基于外部成品视频 · ${render.imported.filename}`
+                      ) : (
+                        <>
+                          基于内容文案 v{project.stages.copy?.version ?? '—'} · HTML 分镜 v
+                          {project.stages.storyboard?.version ?? '—'} · 口播 v
+                          {project.stages.narration?.version ?? '—'}
+                        </>
+                      )}
                     </p>
                   </div>
                   <Button

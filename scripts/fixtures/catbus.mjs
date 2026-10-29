@@ -81,6 +81,24 @@ else if (action === 'publish') {
     )
   }
   if (mode === 'slow') await new Promise((resolve) => setTimeout(resolve, 900))
+  if (mode.startsWith('upstream-')) {
+    console.log(
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: 'UPSTREAM',
+          message:
+            mode === 'upstream-secret'
+              ? '发布失败：cookie=SECRET https://example.com/?token=SECRET'
+              : mode === 'upstream-upload'
+                ? 'ApplyUploadInner 失败'
+                : '发布失败：作品描述不符合要求',
+          detail: { status_code: 10001, cookie: 'SECRET', error: { Code: 'SECRET' } },
+        },
+      }),
+    )
+    process.exit(6)
+  }
   if (['network', 'risk'].includes(mode)) {
     console.log(
       JSON.stringify({

@@ -3,7 +3,12 @@ import { join } from 'node:path'
 import { getDatabase } from '../database/connection'
 import { getVoiceoverService } from '../services/tts-service'
 import { VideoWorkflowService, type WorkflowGeneration } from '../services/video-workflow/service'
-import type { VideoStage, VideoPlatform, WorkflowFile, MusicSearchResult } from '../../shared/video-workflow'
+import type {
+  VideoStage,
+  VideoPlatform,
+  WorkflowFile,
+  MusicSearchResult,
+} from '../../shared/video-workflow'
 import { workflowMediaResponse } from '../services/video-workflow/media'
 import type { BilibiliPublishRequest } from '../../shared/bilibili-publishing'
 import { publishingVideoUrl } from '../services/video-workflow/catbus'
@@ -82,6 +87,19 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     getVideoWorkflow().repository.list(archived === true),
   )
   handle('workflow:create', (title: string) => getVideoWorkflow().repository.create(title))
+  handle('workflow:selectFinishedVideo', async () => {
+    const result = await dialog.showOpenDialog(mainWindow()!, {
+      title: '选择成品视频',
+      properties: ['openFile'],
+      filters: [{ name: '成品视频', extensions: ['mp4'] }],
+    })
+    return result.canceled ? null : result.filePaths[0]
+  })
+  handle(
+    'workflow:createFromVideo',
+    (title: string, path: string, description: string, requestId: string) =>
+      getVideoWorkflow().importFinishedVideo(title, path, description, requestId),
+  )
   handle('workflow:get', (id: string) => getVideoWorkflow().repository.get(id))
   handle(
     'workflow:save',

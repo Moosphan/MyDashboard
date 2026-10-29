@@ -177,6 +177,12 @@
 
 优先迁移16px操作图标、12px按钮水平内距、neutral次要按钮；其次同步输入边界、36×20开关、16px滑块、inset Tabs和独立connected按钮组。规范页3项核心参数与折叠规格属于文档呈现，不改变生产表单结构。36×20开关的命中区由label行提供，不放大图形代替扩大可点范围。
 
+`VIDEO-WORKFLOW-001` 外部成品视频导入增量（2026-10-29 用户授权）：在既有新建弹窗内追加默认收起的导入区，沿用 Button、Input、VoiceTextArea、WorkflowDialog 与原生 details 语义，无新依赖、图标或全局样式。保留项目名称、底部动作、项目列表信息顺序及发布页布局；导入后仅展示适用的发布步骤，复用原平台资料、封面、审核、导出和投稿引擎。导入任务期间锁定重复提交及关闭，失败保留输入；系统选择取消不覆盖已有选择。沿用 React 18/Radix 局部例外，负责人及 HeroUI 迁移退出里程碑沿用 VIDEO-WORKFLOW-001。验证及未解决基线见 [成品视频导入验证](video-workflow-import-verification.md)。
+
+`VIDEO-WORKFLOW-001` 导入路径补充（2026-10-29 用户截图授权）：`WorkflowStudio.tsx` 在系统选择按钮后复用已有 Input 提供带标签的完整视频路径输入，复用同一受管文件导入及校验，保持底部动作与其他信息顺序。支持外围空白/成对引号清理、空项目名补全、取消选择同步和失败保留输入；没有新样式或依赖。例外负责人和退出里程碑沿用上条；路径导入、选择器切换、明暗、1440/1024、缩放及键盘证据见 [导入验证补充](video-workflow-import-verification.md)。
+
+`VIDEO-WORKFLOW-001` 导入字段样式修订（2026-10-29 用户最新截图授权）：项目名/路径改用已存在的 `voiceover-field`，直接复用内容说明的边界、圆角、背景、主题及焦点，避免胶囊输入外观；单行高度沿用现有 40px。移除可见路径标题，保留可访问名称；按钮到路径间距使用既有 16px 布局间距。不修改共享 Input 或全局样式，保留原逻辑、字段顺序与动作位置。例外负责人/退出里程碑沿用 VIDEO-WORKFLOW-001，验证追加于 [成品导入记录](video-workflow-import-verification.md)。
+
 ## 8. V3.2 自绘控件迁移
 
 生产优先建立共享Select/Combobox/DatePicker/TimePicker/ColorPicker，再替换页面调用；不得只美化select触发器却留下系统弹层。先覆盖设计工作台顶部密度与Dialog中的嵌套表单，再覆盖业务页面。Checkbox等原生input保留键盘语义，统一appearance与状态；原生语义不等于允许平台默认外观。验收包含表单值、IME、disabled/indeterminate、Escape分层关闭、焦点返回与视口避让。日期范围、12小时制、透明度等预留变体在生产实现时另验，不视为本轮已完成。

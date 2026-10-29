@@ -43,8 +43,8 @@ export function coverOptions(value: CoverGeneration | undefined): CoverGeneratio
 
 export function coverPrompt(project: VideoProject, options: CoverGeneration) {
   const source = renderSourceProject(project, stageValue(project, 'render'))
-  const storyboard = stageValue(source, 'storyboard')!
-  const samples = storyboard.scenes
+  const storyboard = stageValue(source, 'storyboard')
+  const samples = storyboard?.scenes
     .filter((_scene, index) =>
       [0, Math.floor(storyboard.scenes.length / 2), storyboard.scenes.length - 1].includes(index),
     )
@@ -66,8 +66,9 @@ ${
 视频标题：${JSON.stringify(project.title)}
 当前 B 站发布资料：${JSON.stringify(stageValue(project, 'publish')?.platforms.bilibili ? { ...stageValue(project, 'publish')!.platforms.bilibili, cover: undefined } : null)}
 视频简报：${JSON.stringify(stageValue(source, 'brief'))}
-视频文案：${JSON.stringify(stageValue(source, 'copy')).slice(0, 20000)}
+视频文案：${JSON.stringify(stageValue(source, 'copy') ?? null).slice(0, 20000)}
 实际成片分镜风格样本：${JSON.stringify(samples)}
+${stageValue(project, 'render')?.imported ? `外部成片内容说明：${JSON.stringify(stageValue(project, 'render')!.imported)}。未提供分镜和口播，不得宣称已观看视频；仅根据用户说明、发布资料和可用参考封面设计，不编造内容。` : ''}
 当前封面修改历史：${JSON.stringify(stageValue(project, 'publish')?.platforms.bilibili.cover?.feedback ?? '')}
 本次修改建议：${JSON.stringify(options.feedback ?? '')}`
 }

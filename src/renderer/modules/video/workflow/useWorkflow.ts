@@ -4,6 +4,7 @@ import {
   VIDEO_STAGES,
   stageValue,
   projectVideoFormat,
+  isImportedVideo,
   type VideoProject,
   type VideoStage,
   type StagePayloads,
@@ -16,6 +17,7 @@ export function mediaUrl(projectId: string, file: WorkflowFile) {
   return `video-workflow://${projectId}/${file.id}`
 }
 export function nextStage(project: VideoProject): VideoStage {
+  if (isImportedVideo(project)) return 'publish'
   return VIDEO_STAGES.find((stage) => project.stages[stage]?.status !== 'approved') ?? 'publish'
 }
 export function useWorkflowProjects() {

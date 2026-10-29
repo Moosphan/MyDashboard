@@ -28,16 +28,42 @@ const MESSAGES: Record<string, string> = {
   TOPIC_INVALID: '抖音话题名称不能包含空格、# 或 @，请修改标签并重新审核',
   TOPIC_UNSUPPORTED: '当前 Catbus 文件不兼容抖音话题适配，已停止投稿，请配置原版 Catbus 0.2.1',
 }
+function upstreamDetail(error: Record<string, unknown>) {
+  const detail =
+    error.detail && typeof error.detail === 'object' && !Array.isArray(error.detail)
+      ? (error.detail as Record<string, unknown>)
+      : {}
+  const status = detail.status_code ?? detail.code
+  const statusText =
+    typeof status === 'number' && Number.isSafeInteger(status) && Math.abs(status) < 1e9
+      ? `状态码 ${status}`
+      : ''
+  const message = typeof error.message === 'string' ? error.message.trim() : ''
+  const phases: Record<string, string> = {
+    'ApplyUploadInner 失败': '视频上传申请失败',
+    'CommitUploadInner 失败': '视频上传确认失败',
+    'ApplyImageUpload 失败': '封面上传申请失败',
+    'CommitImageUpload 失败': '封面上传确认失败',
+  }
+  const reason =
+    phases[message] ??
+    (message.length <= 240 &&
+    /^[\p{Script=Han}\d\s，。：；！？、（）《》“”‘’「」【】.,:;!?()-]+$/u.test(message)
+      ? message.replace(/\s+/g, ' ')
+      : '')
+  return [reason, statusText].filter(Boolean).join('；')
+}
 export class CatbusFailure extends Error {
   constructor(
     readonly code: string,
     platform: VideoPlatform = 'bilibili',
+    detail = '',
   ) {
     super(
       (MESSAGES[code] ?? 'Catbus 操作失败，请检查运行环境和平台状态').replaceAll(
         'B 站',
         PUBLISHING_PLATFORMS[platform].label,
-      ),
+      ) + (detail ? `；平台信息：${detail}` : ''),
     )
   }
 }
@@ -157,13 +183,14 @@ export class CatbusPublishingClient {
     } catch {
       throw new CatbusFailure('INVALID_RESPONSE')
     }
-    if (envelope.ok !== true || result.code !== 0)
+    if (envelope.ok !== true || result.code !== 0) {
+      const error = object(envelope.error)
       throw new CatbusFailure(
-        typeof object(envelope.error).code === 'string'
-          ? String(object(envelope.error).code)
-          : 'INVALID_RESPONSE',
+        typeof error.code === 'string' ? error.code : 'INVALID_RESPONSE',
         this.platform,
+        error.code === 'UPSTREAM' ? upstreamDetail(error) : '',
       )
+    }
     if (
       args[0] === this.platform &&
       (envelope.platform !== this.platform ||

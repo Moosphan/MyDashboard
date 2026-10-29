@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { VoiceTextArea } from '../components/voiceover/VoiceControls'
 import { Badge } from '@/components/ui/badge'
 import {
   Select,
@@ -22,6 +23,7 @@ import {
   stageValue,
   projectVideoFormat,
   videoFormatLabel,
+  isImportedVideo,
   type VideoProject,
   type VideoStage,
   type StagePayloads,
@@ -50,6 +52,12 @@ export function WorkflowStudio({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [creating, setCreating] = useState(false)
+  const [importFile, setImportFile] = useState('')
+  const videoPath = importFile.trim().replace(/^(['"])(.*)\1$/s, '$2')
+  const [importDescription, setImportDescription] = useState('')
+  const [selectingVideo, setSelectingVideo] = useState(false)
+  const createLock = useRef(false)
+  const importRequest = useRef({ key: '', id: '' })
   const [history, setHistory] = useState(false)
   const [restored, setRestored] = useState<{
     key: number
@@ -66,18 +74,51 @@ export function WorkflowStudio({
   }
   const create = async (event: React.FormEvent) => {
     event.preventDefault()
+    if (createLock.current || selectingVideo) return
+    createLock.current = true
     setBusy(true)
     setError('')
     try {
-      const project = await workflowCall<VideoProject>('create', title)
+      const key = JSON.stringify([title, videoPath, importDescription])
+      if (importRequest.current.key !== key)
+        importRequest.current = { key, id: crypto.randomUUID() }
+      const project = importFile
+        ? await workflowCall<VideoProject>(
+            'createFromVideo',
+            title,
+            videoPath,
+            importDescription,
+            importRequest.current.id,
+          )
+        : await workflowCall<VideoProject>('create', title)
       setCreating(false)
       setTitle('')
+      setImportFile('')
+      setImportDescription('')
       open(project)
       await state.refresh()
     } catch (failure) {
       setError((failure as Error).message)
     } finally {
+      createLock.current = false
       setBusy(false)
+    }
+  }
+  const selectVideo = async () => {
+    if (selectingVideo || busy) return
+    setSelectingVideo(true)
+    setError('')
+    try {
+      const path = await workflowCall<string | null>('selectFinishedVideo')
+      if (path) {
+        setImportFile(path)
+        if (!title.trim())
+          setTitle((path.split(/[\\/]/).at(-1) ?? '').replace(/\.mp4$/i, '').slice(0, 120))
+      }
+    } catch (failure) {
+      setError((failure as Error).message)
+    } finally {
+      setSelectingVideo(false)
     }
   }
   const archive = async (project: VideoProject) => {
@@ -150,9 +191,15 @@ export function WorkflowStudio({
               </Button>
               <h1 className="workflow-page-title">{state.project.title}</h1>
               <div className="workflow-facts">
-                <span>{videoFormatLabel(projectVideoFormat(state.project))}</span>
                 <span>
-                  目标 {stageValue(state.project, 'brief')?.duration ?? '—'} 秒 · 最长 5 分钟
+                  {isImportedVideo(state.project)
+                    ? `原视频 · ${stageValue(state.project, 'render')!.width}×${stageValue(state.project, 'render')!.height}`
+                    : videoFormatLabel(projectVideoFormat(state.project))}
+                </span>
+                <span>
+                  {isImportedVideo(state.project)
+                    ? `时长 ${stageValue(state.project, 'render')!.duration.toFixed(1)} 秒`
+                    : `目标 ${stageValue(state.project, 'brief')?.duration ?? '—'} 秒 · 最长 5 分钟`}
                 </span>
                 <span>Bilibili / 抖音</span>
               </div>
@@ -249,6 +296,9 @@ export function WorkflowStudio({
                 onClick={() => {
                   setError('')
                   setTitle('')
+                  setImportFile('')
+                  setImportDescription('')
+                  importRequest.current = { key: '', id: '' }
                   setCreating(true)
                 }}
               >
@@ -373,12 +423,18 @@ export function WorkflowStudio({
                       </div>
                       <div className="workflow-project-info">
                         <div className="workflow-facts">
-                          <span>视频创作</span>
+                          <span>{isImportedVideo(project) ? '外部成片' : '视频创作'}</span>
                           <span>
-                            {stageValue(project, 'audio')?.duration.toFixed(0) ??
+                            {stageValue(project, 'render')?.duration.toFixed(0) ??
+                              stageValue(project, 'audio')?.duration.toFixed(0) ??
                               stageValue(project, 'brief')?.duration ??
                               '—'}{' '}
-                            秒 · {projectVideoFormat(project) === 'portrait' ? '竖版' : '横版'}
+                            秒 ·{' '}
+                            {isImportedVideo(project)
+                              ? `${stageValue(project, 'render')!.width}×${stageValue(project, 'render')!.height}`
+                              : projectVideoFormat(project) === 'portrait'
+                                ? '竖版'
+                                : '横版'}
                           </span>
                         </div>
                         <h3>{project.title}</h3>
@@ -396,7 +452,7 @@ export function WorkflowStudio({
                               (item) => project.stages[item]?.status === 'approved',
                             ).length
                           }{' '}
-                          / 8 步已审核
+                          / {isImportedVideo(project) ? 2 : 8} 步已审核
                         </span>
                       </div>
                       <div className="workflow-project-actions">
@@ -445,16 +501,18 @@ export function WorkflowStudio({
           )}
           <WorkflowDialog
             open={creating}
-            onOpenChange={setCreating}
+            onOpenChange={(open) => {
+              if (!busy && !selectingVideo) setCreating(open)
+            }}
             title="新建视频项目"
-            description="先命名这支视频，接着整理创作目标与参考资料。"
+            description="命名后从创作简报开始，也可导入已有成品视频，直接准备发布。"
             returnFocus={createButton}
             footer={
               <>
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={busy}
+                  disabled={busy || selectingVideo}
                   onClick={() => setCreating(false)}
                 >
                   取消
@@ -463,9 +521,15 @@ export function WorkflowStudio({
                   size="sm"
                   type="submit"
                   form="workflow-create-project"
-                  disabled={busy || !title.trim()}
+                  disabled={busy || selectingVideo || !title.trim()}
                 >
-                  {busy ? '正在创建…' : '创建项目'}
+                  {busy
+                    ? importFile
+                      ? '正在导入…'
+                      : '正在创建…'
+                    : importFile
+                      ? '导入并进入发布'
+                      : '创建项目'}
                 </Button>
               </>
             }
@@ -477,14 +541,93 @@ export function WorkflowStudio({
               >
                 项目名称
               </label>
-              <Input
+              <input
                 autoFocus
                 id="video-project-name"
+                className="voiceover-field"
+                disabled={busy || selectingVideo}
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 maxLength={120}
                 placeholder="例如：5 分钟讲清一个技术概念"
               />
+              <details className="workflow-divider mt-5" data-finished-video-import>
+                <summary className="workflow-muted cursor-pointer">
+                  导入成品视频（跳过创作，直接发布）
+                </summary>
+                <div className="workflow-section mt-3">
+                  <p className="workflow-muted">
+                    支持 MP4（H.264 / AAC，可无音轨），最长 5 分钟、最大 1
+                    GB。原视频将复制到项目并自动抽取封面，保持原始尺寸和内容。导入后仍需确认发布资料、选择账号并审核，不会自动投稿。
+                  </p>
+                  <div className="flex items-center flex-wrap gap-4">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      disabled={busy || selectingVideo}
+                      onClick={() => void selectVideo()}
+                    >
+                      {selectingVideo ? '正在选择…' : importFile ? '重新选择视频' : '选择成品视频'}
+                    </Button>
+                    <div className="flex-1 min-w-[200px]">
+                      <input
+                        id="video-import-path"
+                        className="voiceover-field"
+                        aria-label="视频文件路径"
+                        value={importFile}
+                        disabled={busy || selectingVideo}
+                        onChange={(event) => {
+                          setImportFile(event.target.value)
+                          setError('')
+                        }}
+                        onBlur={() => {
+                          if (!title.trim() && videoPath)
+                            setTitle(
+                              (videoPath.split(/[\\/]/).at(-1) ?? '')
+                                .replace(/\.mp4$/i, '')
+                                .slice(0, 120),
+                            )
+                        }}
+                        autoComplete="off"
+                        spellCheck={false}
+                        placeholder="/Users/你的用户名/Movies/成品视频.mp4"
+                      />
+                    </div>
+                    {importFile && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        disabled={busy || selectingVideo}
+                        onClick={() => setImportFile('')}
+                      >
+                        取消导入选择
+                      </Button>
+                    )}
+                  </div>
+                  {importFile && (
+                    <p className="workflow-muted break-all" role="status">
+                      当前文件：{videoPath.split(/[\\/]/).at(-1)}
+                    </p>
+                  )}
+                  <VoiceTextArea
+                    id="video-import-description"
+                    label="视频内容说明（选填）"
+                    rows={3}
+                    value={importDescription}
+                    maxLength={5000}
+                    disabled={busy || selectingVideo}
+                    onChange={(event) => setImportDescription(event.target.value)}
+                    placeholder="介绍视频主题、主要内容和来源，供后续 AI 生成标题、简介与标签。系统不会自动识别视频内容。"
+                  />
+                </div>
+              </details>
+              {busy && importFile && (
+                <p className="workflow-muted mt-3" role="status" aria-live="polite">
+                  正在复制视频、检测规格并抽取封面，请稍候…
+                </p>
+              )}
             </form>
             {error && (
               <p role="alert" className="workflow-error">

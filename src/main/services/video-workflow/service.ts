@@ -14,6 +14,7 @@ import {
   videoFrame,
   renderSourceProject,
   stageUnlocked,
+  isImportedVideo,
   validatePayload,
   type VideoStage,
   type StoryboardPayload,
@@ -63,6 +64,7 @@ import type { BilibiliCategory } from '../../../shared/bilibili-publishing'
 import { coverOptions, generatePublicationCover, verifyCoverImages } from './covers'
 import { downloadOpenverseMusic, searchOpenverse } from './music'
 import type { MusicSearchResult } from '../../../shared/video-workflow'
+import { importFinishedVideo } from './import-video'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -100,6 +102,14 @@ export class VideoWorkflowService {
   readonly douyinPublishing: PlatformPublishingService
   private running = new Map<string, { controller: AbortController; promise: Promise<void> }>()
   private stopped = false
+  private videoImports = new Map<
+    string,
+    {
+      key: string
+      controller: AbortController
+      promise: Promise<import('../../../shared/video-workflow').VideoProject>
+    }
+  >()
   constructor(
     readonly root: string,
     db: Database.Database,
@@ -127,6 +137,33 @@ export class VideoWorkflowService {
       changed,
       'douyin',
     )
+  }
+  async importFinishedVideo(title: string, path: string, description: string, requestId: string) {
+    if (this.stopped) throw new Error('工作流正在退出')
+    const key = fingerprint([title, path, description])
+    const existing = this.videoImports.get(requestId)
+    if (existing) {
+      if (existing.key !== key) throw new Error('请求 ID 已用于不同操作')
+      return existing.promise
+    }
+    const controller = new AbortController()
+    const promise = importFinishedVideo(
+      this.repository,
+      this.files,
+      this.runtime.get(),
+      title,
+      path,
+      description,
+      requestId,
+      controller.signal,
+    )
+      .then((project) => {
+        this.changed(project.id)
+        return project
+      })
+      .finally(() => this.videoImports.delete(requestId))
+    this.videoImports.set(requestId, { key, controller, promise })
+    return promise
   }
   private notify(id: string) {
     this.changed(id)
@@ -169,6 +206,8 @@ export class VideoWorkflowService {
     expected: number,
     requestId: string,
   ) {
+    if (isImportedVideo(this.repository.get(projectId)) && stage !== 'publish')
+      throw new Error('外部成片项目仅编辑发布资料，无需创作阶段')
     if (!['brief', 'copy', 'storyboard', 'narration', 'publish'].includes(stage))
       throw new Error('媒体步骤需通过生成或导入创建')
     let validated = validatePayload(stage, payload)
@@ -368,6 +407,8 @@ export class VideoWorkflowService {
     )
       throw new Error('该步骤需要 CLI 或人工导入')
     const project = this.repository.get(input.projectId)
+    if (isImportedVideo(project) && input.stage !== 'publish')
+      throw new Error('外部成片项目仅支持发布资料和封面生成')
     const music = input.music === undefined ? undefined : validateRenderMusic(input.music)
     if (music && input.stage !== 'render') throw new Error('配乐设置仅用于正式成片阶段')
     if (music) await this.files.verify(project.id, music.file)
@@ -971,6 +1012,8 @@ export class VideoWorkflowService {
   }
   async dispose() {
     this.stopped = true
+    for (const item of this.videoImports.values()) item.controller.abort()
+    await Promise.allSettled([...this.videoImports.values()].map((item) => item.promise))
     await Promise.all([this.publishing.dispose(), this.douyinPublishing.dispose()])
     for (const item of this.running.values()) item.controller.abort()
     await Promise.allSettled([...this.running.values()].map((item) => item.promise))
@@ -1141,7 +1184,7 @@ export class VideoWorkflowService {
       throw new Error('请先审核最终成片与发布信息')
     await this.verifyInputs(projectId, 'publish', true)
     const render = stageValue(project, 'render')!,
-      audio = stageValue(project, 'audio')!,
+      audio = stageValue(project, 'audio'),
       metadata = stageValue(project, 'publish')!.platforms[platform]
     const directory = join(destination, `${platform}-${randomUUID().slice(0, 8)}`)
     mkdirSync(directory, { recursive: true })
@@ -1149,7 +1192,7 @@ export class VideoWorkflowService {
       for (const [name, file] of [
         ['video.mp4', render.file],
         ['cover.png', metadata.cover?.file ?? render.cover],
-        ['subtitles.srt', audio.subtitles],
+        ...(audio ? [['subtitles.srt', audio.subtitles] as const] : []),
       ] as const)
         copyFileSync(await this.files.verify(projectId, file), join(directory, name))
       if (metadata.cover)
@@ -1176,7 +1219,10 @@ export class VideoWorkflowService {
       )
       writeFileSync(
         join(directory, 'README.txt'),
-        '请手动上传 video.mp4，并使用 cover.png、metadata.json 和 subtitles.srt。' +
+        '请手动上传 video.mp4，并使用 cover.png、metadata.json' +
+          (audio
+            ? ' 和 subtitles.srt。'
+            : '。外部成片未提供独立字幕文件，视频内已有字幕随原视频保留。') +
           (metadata.cover
             ? '\ncover.png 为 1600×900（16:9）个人空间封面；cover-4x3.png 为 1600×1200（4:3）首页推荐封面，请在创作中心分别设置。\n'
             : '') +

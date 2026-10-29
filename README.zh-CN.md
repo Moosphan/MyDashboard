@@ -126,9 +126,11 @@ SQLite 初始化时会启用 WAL 模式和外键约束。
 
 ## 快速开始
 
-### 下载 macOS 安装包
+### 下载内部安装包
 
-打开 `main` 分支最近一次成功的 [Build & Release 构建](https://github.com/Moosphan/MyDashboard/actions/workflows/build.yml)，登录 GitHub 后，在 **Artifacts** 中下载 **macos-build**。压缩包包含 Apple Silicon（`arm64`）与 Intel（`x64`）的 DMG、ZIP 安装包，以及 `SHA256SUMS.txt` 校验文件。产物保留 30 天，也可通过 **Run workflow** 手动构建。这些 CI 安装包未签名、未经过 Apple 公证。
+使用具有仓库写权限的 GitHub 账号打开 [Releases](https://github.com/Moosphan/MyDashboard/releases)，进入对应构建的 **MyDashboard CI #…** 草稿。每次主线推送或手动运行主线构建，都会创建草稿，将构建成功的 macOS、Windows、Linux 安装包及各平台 SHA-256 校验文件上传到草稿。Mac 包含 Apple Silicon（`arm64`）和 Intel（`x64`）的 DMG/ZIP。CI 不会将草稿正式发布；部分平台失败时，草稿可能只有部分安装包，请查看草稿关联的构建状态。
+
+草稿及其安装包仅对有仓库写权限的协作者可见；源码和 Actions 日志仍公开。后续安装包不再上传 Actions Artifacts；此前已上传的产物保持原可见性，直到过期或删除。这些 CI 安装包未签名，Mac 包未经 Apple 公证。
 
 ### 环境要求
 

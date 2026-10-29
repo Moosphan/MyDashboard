@@ -1,0 +1,37 @@
+name: Validate Installer Builds
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: dist:mac
+          - os: windows-latest
+            script: dist:win
+          - os: ubuntu-latest
+            script: dist:linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --test scripts/test-draft-release.mjs
+      - run: pnpm ${{ matrix.script }} --publish never

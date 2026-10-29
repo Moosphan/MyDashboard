@@ -161,9 +161,11 @@ SQLite is initialized with WAL mode and foreign-key support enabled.
 
 ## Getting Started
 
-### Download macOS installers
+### Download internal installers
 
-Open the latest successful [Build & Release run](https://github.com/Moosphan/MyDashboard/actions/workflows/build.yml) on `main` and download **macos-build** under **Artifacts** (GitHub sign-in required). The archive contains DMG and ZIP packages for Apple Silicon (`arm64`) and Intel (`x64`), plus `SHA256SUMS.txt`. Artifacts are retained for 30 days; builds also support manual runs with **Run workflow**. These CI builds are unsigned and are not notarized by Apple.
+Open [Releases](https://github.com/Moosphan/MyDashboard/releases) while signed in with repository write access, then open the draft named **MyDashboard CI #…** for the desired build. Every main-branch push or manual main build creates a draft and uploads successful macOS, Windows and Linux installer packages with platform SHA-256 checksums. macOS includes Apple Silicon (`arm64`) and Intel (`x64`) DMG/ZIP files. CI never publishes the draft; failed platforms may leave a partial draft, so check the linked build status.
+
+Draft releases and their files are visible only to collaborators with write access. Source code and Actions logs remain public; future installers are not uploaded to Actions Artifacts. Previously uploaded artifacts retain their original visibility until they expire or are deleted. These CI builds are unsigned; macOS packages are not notarized by Apple.
 
 ### Prerequisites
 

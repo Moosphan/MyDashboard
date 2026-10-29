@@ -3,16 +3,42 @@ name: Build & Release
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  prepare-release:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.draft.outputs.release-id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify draft-only publishing
+        run: node --test scripts/test-draft-release.mjs
+      - name: Prepare internal draft release
+        id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/upload-draft-release.mjs prepare > "$RUNNER_TEMP/draft-release.json"
+          echo "release-id=$(node -p 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).id' "$RUNNER_TEMP/draft-release.json")" >> "$GITHUB_OUTPUT"
+          echo 'Installers will be uploaded to a draft under the repository Releases page. Only collaborators with write access can see it.' >> "$GITHUB_STEP_SUMMARY"
+
   build-macos:
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success'
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
-      contents: read
+      contents: write
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -27,84 +53,57 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build macOS installers (Apple Silicon and Intel)
         run: pnpm dist:mac --publish never
-      - name: Record installer checksums
-        run: |
-          cd dist
-          shasum -a 256 *.dmg *.zip > SHA256SUMS.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: macos-build
-          path: |
-            dist/*.dmg
-            dist/*.zip
-            dist/SHA256SUMS.txt
-          if-no-files-found: error
-          retention-days: 30
-      - name: Explain artifact download
-        run: |
-          echo '### macOS installers' >> "$GITHUB_STEP_SUMMARY"
-          echo 'Download **macos-build** from this run’s Artifacts section. It contains DMG and ZIP packages for Apple Silicon (arm64) and Intel (x64), plus SHA256SUMS.txt.' >> "$GITHUB_STEP_SUMMARY"
-          echo 'These CI builds are unsigned and are not notarized by Apple.' >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload macOS installers to internal draft
+        if: needs.prepare-release.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRAFT_RELEASE_ID: ${{ needs.prepare-release.outputs.release-id }}
+        run: node scripts/upload-draft-release.mjs upload macos
 
   build-windows:
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success'
     runs-on: windows-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm dist:win
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-build
-          path: |
-            dist/*.exe
-            dist/*.zip
-          retention-days: 7
-
-  build-linux:
-    runs-on: ubuntu-latest
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm build
-      - run: pnpm dist:linux
-      - uses: actions/upload-artifact@v4
-        with:
-          name: linux-build
-          path: |
-            dist/*.AppImage
-            dist/*.deb
-          retention-days: 7
-
-  release:
-    needs: [build-macos, build-windows, build-linux]
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
         with:
-          path: dist
-      - uses: softprops/action-gh-release@v2
+          version: 9
+      - uses: actions/setup-node@v4
         with:
-          files: dist/**/*
-          generate_release_notes: true
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm dist:win --publish never
+      - name: Upload windows installers to internal draft
+        if: needs.prepare-release.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRAFT_RELEASE_ID: ${{ needs.prepare-release.outputs.release-id }}
+        run: node scripts/upload-draft-release.mjs upload windows
+
+  build-linux:
+    needs: prepare-release
+    if: needs.prepare-release.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm dist:linux --publish never
+      - name: Upload linux installers to internal draft
+        if: needs.prepare-release.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRAFT_RELEASE_ID: ${{ needs.prepare-release.outputs.release-id }}
+        run: node scripts/upload-draft-release.mjs upload linux

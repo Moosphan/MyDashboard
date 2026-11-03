@@ -16,6 +16,7 @@ interface FileIndex {
   offset: number
   sourceId: string
   events: CodexSessionTokenEvent[]
+  provisionalEvents: CodexSessionTokenEvent[]
   anchor: Buffer
 }
 const READ_CONCURRENCY = 2
@@ -92,7 +93,7 @@ export class CodexSessionScanner {
     const failure = readers.find((value) => value.status === 'rejected')
     if (failure?.status === 'rejected') throw failure.reason
     const summary = buildCodexSessionUsageSummary(
-      [...next.values()].flatMap((value) => value.events),
+      [...next.values()].flatMap((value) => [...value.events, ...value.provisionalEvents]),
       { asOf: new Date(now).toISOString().slice(0, 10) },
     )
     this.index = next
@@ -129,8 +130,15 @@ export class CodexSessionScanner {
     // Same-size writes are replacements, even if their boundary happens to match.
     if (previous && stat.size === previous.stat.size) reuse = false
     const result: FileIndex = reuse
-      ? { ...previous!, stat, events: [...previous!.events] }
-      : { stat, offset: 0, sourceId: path, events: [], anchor: Buffer.alloc(0) }
+      ? { ...previous!, stat, events: [...previous!.events], provisionalEvents: [] }
+      : {
+          stat,
+          offset: 0,
+          sourceId: path,
+          events: [],
+          provisionalEvents: [],
+          anchor: Buffer.alloc(0),
+        }
     if (stat.size === result.offset) return result
     let pending: Buffer[] = []
     let pendingLength = 0
@@ -163,6 +171,13 @@ export class CodexSessionScanner {
         pending.push(tail)
         pendingLength += tail.length
       }
+    }
+    // Count a complete final record without advancing the committed newline boundary.
+    // A later append reparses this tail; unchanged files reuse only its compact counters.
+    if (pendingLength) {
+      const provisional: FileIndex = { ...result, events: [] }
+      this.parse(Buffer.concat(pending, pendingLength).toString('utf8'), provisional, diagnostics)
+      result.provisionalEvents = provisional.events
     }
     // Unfinished lines stay on disk; the next scan reads them again, including split UTF-8 bytes.
     return result

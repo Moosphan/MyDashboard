@@ -169,3 +169,38 @@ test('candidate filtering accepts escaped JSON type names', async () => {
     await rm(directory, { recursive: true, force: true })
   }
 })
+
+for (const useWorker of [false, true]) {
+  test(`${useWorker ? 'built worker' : 'scanner'} counts complete EOF tails without committing partial lines`, async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'usage-eof-'))
+    const scanner = new CodexSessionScanner()
+    const service = useWorker
+      ? createCodexSessionUsageService({
+          directory,
+          workerPath:
+            process.env.CODEX_USAGE_TEST_WORKER ??
+            join(process.cwd(), 'out/main/codex-session-usage-worker.js'),
+        })
+      : null
+    const scan = async () => (service ? service.get(true) : (await scanner.scan(directory)).summary)
+    try {
+      const path = join(directory, 'session.jsonl')
+      await writeFile(path, meta('synthetic-eof') + event(10).trimEnd())
+      assert.equal((await scan()).totalTokens, 12, 'complete EOF record is counted')
+      assert.equal((await scan()).totalTokens, 12, 'unchanged EOF record stays counted once')
+      await appendFile(path, '\n' + event(20, 1).trimEnd())
+      assert.equal((await scan()).totalTokens, 22, 'newline commits the previous tail once')
+      const partial = event(30, 2).trimEnd()
+      await appendFile(path, '\n' + partial.slice(0, -4))
+      assert.equal((await scan()).totalTokens, 22, 'incomplete JSON contributes no counter')
+      assert.equal((await scan()).totalTokens, 22, 'unchanged incomplete JSON stays ignored')
+      await appendFile(path, partial.slice(-4))
+      assert.equal((await scan()).totalTokens, 32, 'completed partial JSON is counted at EOF')
+      await appendFile(path, '\n' + event(35, 3))
+      assert.equal((await scan()).totalTokens, 37, 'committing completed tail avoids duplicates')
+    } finally {
+      await service?.dispose()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+}

@@ -1,113 +1,123 @@
-import { createReadStream, promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { createInterface } from 'node:readline'
-import {
-  buildCodexSessionUsageSummary,
-  type CodexSessionTokenEvent,
-  type CodexSessionUsageSummary,
-} from '../../shared/codex-session-usage'
+import { Worker } from 'node:worker_threads'
+import type { CodexSessionUsageSummary } from '../../shared/codex-session-usage'
+import type { ScanDiagnostics } from './codex-session-scanner'
 
 const CACHE_DURATION_MS = 60_000
-const SESSIONS_DIR = join(homedir(), '.codex', 'sessions')
-
-let cachedSummary: { at: number; summary: CodexSessionUsageSummary } | null = null
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+const SCAN_TIMEOUT_MS = 120_000
+interface ScanResult {
+  ok: boolean
+  summary?: CodexSessionUsageSummary
+  diagnostics?: ScanDiagnostics
 }
 
-function asCount(value: unknown): number {
-  const parsed = Number(value)
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.round(parsed) : 0
-}
-
-function parseTokenEvent(line: string, sourceId: string): CodexSessionTokenEvent | null {
-  try {
-    const root = asRecord(JSON.parse(line))
-    const payload = asRecord(root?.payload)
-    const info = asRecord(payload?.info)
-    const total = asRecord(info?.total_token_usage)
-    const timestamp = typeof root?.timestamp === 'string' ? root.timestamp : null
-    if (!root || root.type !== 'event_msg' || payload?.type !== 'token_count' || !total || !timestamp) return null
-    const totalTokens = asCount(total.total_tokens)
-    const inputTokens = asCount(total.input_tokens)
-    const outputTokens = asCount(total.output_tokens)
-    if (totalTokens === 0 && inputTokens === 0 && outputTokens === 0) return null
-    return {
-      sourceId,
-      timestamp,
-      usage: {
-        inputTokens,
-        cachedInputTokens: asCount(total.cached_input_tokens ?? total.cache_read_input_tokens),
-        outputTokens,
-        totalTokens: totalTokens || inputTokens + outputTokens,
-      },
+/** One shared worker and request per service; callers cannot cancel work needed by another consumer. */
+export function createCodexSessionUsageService(options: {
+  directory: string
+  workerPath?: string
+}) {
+  let worker: Worker | null = null
+  let cached: { at: number; summary: CodexSessionUsageSummary } | null = null
+  let inFlight: Promise<CodexSessionUsageSummary> | null = null
+  let rejectPending: ((error: Error) => void) | null = null
+  let disposed = false
+  let diagnostics: ScanDiagnostics = {
+    scans: 0,
+    bytesRead: 0,
+    parsedLines: 0,
+    maxConcurrentReads: 0,
+  }
+  const resetWorker = () => {
+    const old = worker
+    worker = null
+    if (old) void old.terminate()
+  }
+  const getWorker = () => {
+    if (!worker) {
+      // The separately bundled entry lives beside index.js in dev, build and app.asar.
+      worker = new Worker(options.workerPath ?? join(__dirname, 'codex-session-usage-worker.js'), {
+        workerData: { directory: options.directory },
+      })
+      const created = worker
+      created.on('error', () => {
+        if (worker === created) {
+          rejectPending?.(new Error('Codex 用量后台统计失败'))
+          resetWorker()
+        }
+      })
+      created.on('exit', () => {
+        if (worker === created) {
+          worker = null
+          rejectPending?.(new Error('Codex 用量后台统计已退出'))
+        }
+      })
     }
-  } catch {
-    return null
+    return worker
   }
-}
-
-function parseSessionId(line: string): string | null {
-  try {
-    const root = asRecord(JSON.parse(line))
-    const payload = asRecord(root?.payload)
-    if (!root || root.type !== 'session_meta' || !payload) return null
-    const sessionId = payload.session_id ?? payload.id
-    return typeof sessionId === 'string' && sessionId ? sessionId : null
-  } catch {
-    return null
+  const service = {
+    get diagnostics() {
+      return diagnostics
+    },
+    get(forceRefresh = false): Promise<CodexSessionUsageSummary> {
+      if (disposed) return Promise.reject(new Error('Codex 用量统计已停止'))
+      if (inFlight) return inFlight
+      if (!forceRefresh && cached && Date.now() - cached.at < CACHE_DURATION_MS)
+        return Promise.resolve(cached.summary)
+      inFlight = new Promise<CodexSessionUsageSummary>((resolve, reject) => {
+        const current = getWorker()
+        current.ref()
+        const timeout = setTimeout(() => {
+          rejectPending?.(new Error('Codex 用量后台统计超时'))
+          resetWorker()
+        }, SCAN_TIMEOUT_MS)
+        const cleanup = () => {
+          clearTimeout(timeout)
+          current.off('message', onMessage)
+          current.unref()
+          rejectPending = null
+        }
+        const onMessage = (message: ScanResult) => {
+          cleanup()
+          if (!message.ok || !message.summary || !message.diagnostics) {
+            reject(new Error('Codex 用量后台统计失败'))
+            return
+          }
+          diagnostics = message.diagnostics
+          cached = { at: Date.now(), summary: message.summary }
+          resolve(message.summary)
+        }
+        rejectPending = (error) => {
+          cleanup()
+          reject(error)
+        }
+        current.once('message', onMessage)
+        current.postMessage('scan')
+      })
+        .catch((error) => {
+          if (cached) {
+            cached.at = Date.now()
+            return cached.summary
+          }
+          throw error
+        })
+        .finally(() => {
+          inFlight = null
+        })
+      return inFlight
+    },
+    async dispose() {
+      disposed = true
+      rejectPending?.(new Error('Codex 用量统计已停止'))
+      const old = worker
+      worker = null
+      if (old) await old.terminate()
+    },
   }
+  return service
 }
-
-async function findRecentSessionFiles(directory: string, since: number): Promise<string[]> {
-  let entries: Awaited<ReturnType<typeof fs.readdir>>
-  try {
-    entries = await fs.readdir(directory, { withFileTypes: true })
-  } catch {
-    return []
-  }
-
-  const files: string[] = []
-  for (const entry of entries) {
-    const path = join(directory, entry.name)
-    if (entry.isDirectory()) {
-      files.push(...await findRecentSessionFiles(path, since))
-    } else if (entry.isFile() && entry.name.endsWith('.jsonl')) {
-      try {
-        if ((await fs.stat(path)).mtimeMs >= since) files.push(path)
-      } catch {
-        // A session may be rotated while it is being read.
-      }
-    }
-  }
-  return files
-}
-
-async function readTokenEvents(path: string): Promise<CodexSessionTokenEvent[]> {
-  const events: CodexSessionTokenEvent[] = []
-  const lines = createInterface({ input: createReadStream(path, { encoding: 'utf8' }), crlfDelay: Infinity })
-  let sourceId = path
-  try {
-    for await (const line of lines) {
-      sourceId = parseSessionId(line) ?? sourceId
-      const event = parseTokenEvent(line, sourceId)
-      if (event) events.push(event)
-    }
-  } catch {
-    // A partially-written session line is ignored and retried on the next refresh.
-  }
-  return events
-}
-
-export async function getRecentCodexSessionUsage(forceRefresh = false): Promise<CodexSessionUsageSummary> {
-  const now = Date.now()
-  if (!forceRefresh && cachedSummary && now - cachedSummary.at < CACHE_DURATION_MS) return cachedSummary.summary
-
-  const files = await findRecentSessionFiles(SESSIONS_DIR, now - 8 * 86_400_000)
-  const eventGroups = await Promise.all(files.map(readTokenEvents))
-  const summary = buildCodexSessionUsageSummary(eventGroups.flat())
-  cachedSummary = { at: now, summary }
-  return summary
-}
+const defaultService = createCodexSessionUsageService({
+  directory: join(homedir(), '.codex', 'sessions'),
+})
+export const getRecentCodexSessionUsage = (forceRefresh = false) => defaultService.get(forceRefresh)
+export const stopCodexSessionUsage = () => defaultService.dispose()

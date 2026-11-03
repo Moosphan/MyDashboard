@@ -44,6 +44,12 @@ import { WorkflowDialog } from './WorkflowDialog'
 import { VideoPreviewButton } from './VideoPreviewButton'
 import { PublicationCoverPanel } from './PublicationCoverPanel'
 import { renderSceneTimeline, renderSceneAtTime } from './render-timeline'
+import {
+  useWorkflowHistory,
+  useWorkflowRevision,
+  useWorkflowAssets,
+  useRenderContext,
+} from './useWorkflowHistory'
 
 export function AudioPanel({
   project,
@@ -71,13 +77,16 @@ export function AudioPanel({
       .catch((failure) => setError(failure.message))
   }, [])
   useEffect(() => setVersionId('current'), [project.revision])
-  const audioVersions = project.history.filter((revision) => revision.stage === 'audio')
+  const history = useWorkflowHistory(project, 'audio')
+  const audioVersions = history.items
   const currentAudioVersion = project.stages.audio
-  const selectedVersion =
-    versionId === 'current'
-      ? currentAudioVersion
-      : audioVersions.find((revision) => revision.id === versionId)
+  const historicalVersion = useWorkflowRevision(
+    project,
+    versionId === 'current' ? undefined : versionId,
+  )
+  const selectedVersion = versionId === 'current' ? currentAudioVersion : historicalVersion.revision
   const audio = selectedVersion?.payload as AudioPayload | undefined
+  const audioContext = useRenderContext(project, selectedVersion?.id)
   const viewingHistory = versionId !== 'current'
   const latestJob = project.jobs.find((job) => job.stage === 'audio')
   const pendingJob =
@@ -90,14 +99,18 @@ export function AudioPanel({
       : undefined
   const visiblePendingJob = viewingHistory ? undefined : pendingJob
   const progress = visiblePendingJob?.audioProgress
-  const tracks = visiblePendingJob ? (progress?.tracks ?? []) : (audio?.tracks ?? [])
+  const tracks = visiblePendingJob
+    ? (progress?.tracks ?? [])
+    : viewingHistory && !audioContext.ready
+      ? []
+      : (audio?.tracks ?? [])
   const total = progress?.total ?? stageValue(project, 'narration')?.scenes.length ?? 0
   const regenerateDisabledReason = viewingHistory
     ? '当前正在查看历史版本，请先切换为当前版本。'
     : disabled || project.jobs.some((job) => job.state === 'running')
       ? '任务执行中，请等待或取消后再重新生成。'
       : !stageUnlocked(project, 'audio') || project.stages.audio?.status === 'stale'
-        ? canReuseAudio(project, project.stages.audio)
+        ? audioContext.ready && canReuseAudio(audioContext.project, project.stages.audio)
           ? '口播内容未变，可先在右侧沿用并审核此版配音，再重新生成单段。'
           : '请先审核前置步骤并生成当前完整配音。'
         : pendingJob || !audio
@@ -184,6 +197,16 @@ export function AudioPanel({
             ]}
           />
           <div className="workflow-actions">
+            {history.cursor && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={history.loading}
+                onClick={() => void history.more()}
+              >
+                加载更早版本
+              </Button>
+            )}
             {selectedVersion && (
               <span className="workflow-muted">
                 生成于 {new Date(selectedVersion.createdAt).toLocaleString('zh-CN')}
@@ -195,7 +218,10 @@ export function AudioPanel({
                 size="sm"
                 variant="secondary"
                 disabled={
-                  disabled || Boolean(pendingJob) || !canReuseAudio(project, selectedVersion)
+                  disabled ||
+                  Boolean(pendingJob) ||
+                  !audioContext.ready ||
+                  !canReuseAudio(audioContext.project, selectedVersion)
                 }
                 onClick={() => selectedVersion && onRestoreVersion(selectedVersion.id)}
               >
@@ -204,6 +230,27 @@ export function AudioPanel({
             )}
           </div>
         </div>
+      )}
+      {(history.error || historicalVersion.error || audioContext.error) && (
+        <p role="alert" className="workflow-error">
+          {history.error || historicalVersion.error || audioContext.error}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void history.retry()
+              historicalVersion.retry()
+              audioContext.retry()
+            }}
+          >
+            重试
+          </Button>
+        </p>
+      )}
+      {viewingHistory && (historicalVersion.loading || audioContext.loading) && (
+        <p role="status" className="workflow-muted">
+          正在读取历史配音及来源…
+        </p>
       )}
       {error && (
         <p className="workflow-error" role="alert">
@@ -277,7 +324,7 @@ export function AudioPanel({
             : '尚未生成音频。也可按分镜顺序导入外部配音文件。'}
         </div>
       )}
-      {audio && (
+      {audio && (!viewingHistory || audioContext.ready) && (
         <details className="workflow-divider">
           <summary className="workflow-muted cursor-pointer">
             {visiblePendingJob ? '此前完整配音与总时长' : '完整配音与总时长'}
@@ -442,10 +489,10 @@ function MusicPanel({
   const [imported, setImported] = useState<RenderMusic[]>([])
   const manageButton = useRef<HTMLButtonElement>(null)
   const renderFileId = useRef(render.file.id)
+  const historicalMusic = useWorkflowAssets<RenderMusic>(project, 'music')
   const choices = new Map<string, RenderMusic>()
-  for (const revision of project.history) {
-    if (revision.stage !== 'render') continue
-    const previous = (revision.payload as RenderPayload).music
+  for (const revision of historicalMusic.items) {
+    const previous = revision.value
     if (previous) choices.set(previous.file.id, previous)
   }
   if (render.music) choices.set(render.music.file.id, render.music)
@@ -622,9 +669,9 @@ function MusicPanel({
           )}
         </div>
       )}
-      {error && !open && (
+      {(error || historicalMusic.error) && !open && (
         <p className="workflow-error" role="alert">
-          {error}
+          {error || historicalMusic.error}
         </p>
       )}
       <WorkflowDialog
@@ -870,20 +917,32 @@ export function RenderPanel({
 }) {
   const [versionId, setVersionId] = useState('current')
   const [time, setTime] = useState(0)
-  const versions = project.history.filter(
-    (revision) => revision.stage === (final ? 'render' : 'roughcut'),
+  const history = useWorkflowHistory(project, final ? 'render' : 'roughcut')
+  const versions = history.items
+  const historicalVersion = useWorkflowRevision(
+    project,
+    versionId === 'current' ? undefined : versionId,
   )
   const selectedVersion =
     versionId === 'current'
       ? project.stages[final ? 'render' : 'roughcut']
-      : versions.find((revision) => revision.id === versionId)
+      : historicalVersion.revision
   const render = selectedVersion?.payload as RenderPayload | undefined
-  const storyboard = (project.history.find((revision) => revision.id === render?.sourceStoryboard)
-    ?.payload ?? stageValue(project, 'storyboard')) as StoryboardPayload | undefined
-  const audio = (project.history.find((revision) => revision.id === render?.sourceAudio)?.payload ??
-    stageValue(project, 'audio')) as AudioPayload | undefined
-  const narration = (project.history.find((revision) => revision.id === render?.sourceNarration)
-    ?.payload ?? stageValue(project, 'narration')) as StagePayloads['narration'] | undefined
+  const context = useRenderContext(project, selectedVersion?.id)
+  const previewReady = versionId === 'current' || context.ready
+  const sourceHistory = previewReady ? context.project.history : []
+  const storyboard = (sourceHistory.find((revision) => revision.id === render?.sourceStoryboard)
+    ?.payload ?? (versionId === 'current' ? stageValue(project, 'storyboard') : undefined)) as
+    | StoryboardPayload
+    | undefined
+  const audio = (sourceHistory.find((revision) => revision.id === render?.sourceAudio)?.payload ??
+    (versionId === 'current' ? stageValue(project, 'audio') : undefined)) as
+    | AudioPayload
+    | undefined
+  const narration = (sourceHistory.find((revision) => revision.id === render?.sourceNarration)
+    ?.payload ?? (versionId === 'current' ? stageValue(project, 'narration') : undefined)) as
+    | StagePayloads['narration']
+    | undefined
   const [activeScene, setActiveScene] = useState(0)
   const player = useRef<HTMLVideoElement>(null)
   const timeline = renderSceneTimeline(storyboard?.scenes ?? [], audio?.tracks ?? [])
@@ -930,6 +989,27 @@ export function RenderPanel({
     )
   return (
     <div className="workflow-section">
+      {(history.error || historicalVersion.error || context.error) && (
+        <p role="alert" className="workflow-error">
+          {history.error || historicalVersion.error || context.error}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              void history.retry()
+              historicalVersion.retry()
+              context.retry()
+            }}
+          >
+            重试
+          </Button>
+        </p>
+      )}
+      {versionId !== 'current' && (historicalVersion.loading || context.loading) && (
+        <p role="status" className="workflow-muted">
+          正在读取历史视频及来源…
+        </p>
+      )}
       {render ? (
         <>
           {failedPlan && (
@@ -982,124 +1062,142 @@ export function RenderPanel({
                   value: 'current',
                   label: `当前 v${project.stages[final ? 'render' : 'roughcut']!.version}`,
                 },
-                ...versions.slice(1).map((revision) => ({
-                  value: revision.id,
-                  label: `历史 v${revision.version} · ${new Date(revision.createdAt).toLocaleString('zh-CN')}`,
-                })),
+                ...versions
+                  .filter(
+                    (revision) => revision.id !== project.stages[final ? 'render' : 'roughcut']?.id,
+                  )
+                  .map((revision) => ({
+                    value: revision.id,
+                    label: `历史 v${revision.version} · ${new Date(revision.createdAt).toLocaleString('zh-CN')}`,
+                  })),
               ]}
             />
           )}
-          <video
-            key={render.file.id}
-            ref={player}
-            className="workflow-media"
-            controls
-            preload="metadata"
-            src={mediaUrl(project.id, render.file)}
-            poster={mediaUrl(project.id, render.cover)}
-            aria-label={final ? '最终成片预览' : '粗剪预览'}
-            style={
-              render.width < render.height
-                ? { aspectRatio: '16 / 9', objectFit: 'contain' }
-                : undefined
-            }
-            onTimeUpdate={(event) => syncPlayback(event.currentTarget)}
-            onSeeked={(event) => syncPlayback(event.currentTarget)}
-          />
-          <div className="workflow-toolbar">
-            <span>
-              {render.duration.toFixed(1)} 秒 · {render.width} × {render.height} · 30 fps
-            </span>
-            <div className="workflow-actions">
-              <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
-              {final && selectedVersion && (
+          {history.cursor && (
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={history.loading}
+              onClick={() => void history.more()}
+            >
+              加载更早版本
+            </Button>
+          )}
+          {previewReady && (
+            <>
+              <video
+                key={render.file.id}
+                ref={player}
+                className="workflow-media"
+                controls
+                preload="metadata"
+                src={mediaUrl(project.id, render.file)}
+                poster={mediaUrl(project.id, render.cover)}
+                aria-label={final ? '最终成片预览' : '粗剪预览'}
+                style={
+                  render.width < render.height
+                    ? { aspectRatio: '16 / 9', objectFit: 'contain' }
+                    : undefined
+                }
+                onTimeUpdate={(event) => syncPlayback(event.currentTarget)}
+                onSeeked={(event) => syncPlayback(event.currentTarget)}
+              />
+              <div className="workflow-toolbar">
+                <span>
+                  {render.duration.toFixed(1)} 秒 · {render.width} × {render.height} · 30 fps
+                </span>
+                <div className="workflow-actions">
+                  <span className="workflow-muted">工程 {render.manifestHash.slice(0, 12)}</span>
+                  {final && selectedVersion && (
+                    <>
+                      <FinalRenderComparison project={context.project} revision={selectedVersion} />
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        aria-label="打开视频所在文件夹"
+                        title="打开视频所在文件夹"
+                        onClick={() =>
+                          void run(() =>
+                            workflowCall(
+                              'showFile',
+                              project.id,
+                              (selectedVersion.payload as RenderPayload).file,
+                            ),
+                          )
+                        }
+                      >
+                        <FolderOpenIcon aria-hidden="true" className="size-5" />
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </div>
+              {final && (
+                <MusicPanel
+                  project={project}
+                  render={render}
+                  disabled={disabled || versionId !== 'current'}
+                  onApply={applyMusic}
+                />
+              )}
+              {storyboard && (
                 <>
-                  <FinalRenderComparison project={project} revision={selectedVersion} />
-                  <Button
-                    type="button"
-                    size="icon"
-                    variant="ghost"
-                    aria-label="打开视频所在文件夹"
-                    title="打开视频所在文件夹"
-                    onClick={() =>
-                      void run(() =>
-                        workflowCall(
-                          'showFile',
-                          project.id,
-                          (selectedVersion.payload as RenderPayload).file,
-                        ),
-                      )
-                    }
-                  >
-                    <FolderOpenIcon aria-hidden="true" className="size-5" />
-                  </Button>
+                  <div className="workflow-scenes" role="group" aria-label="视频分镜定位">
+                    {storyboard.scenes.map((item, index) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className="workflow-scene"
+                        aria-pressed={activeScene === index}
+                        onClick={() => {
+                          setActiveScene(index)
+                          if (player.current && audio) {
+                            const time = timeline[index].seek
+                            player.current.currentTime = time
+                            setTime(time)
+                          }
+                        }}
+                      >
+                        <ScenePreview
+                          projectId={project.id}
+                          value={storyboard}
+                          scene={item}
+                          thumbnail
+                        />
+                        <span>
+                          {String(index + 1).padStart(2, '0')} · {item.title}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {scene && (
+                    <div className="workflow-scene-notes">
+                      <div>
+                        <p className="workflow-muted">屏幕文字</p>
+                        <p className="text-body-sm font-semibold mt-1">{scene.title}</p>
+                      </div>
+                      <div>
+                        <p className="workflow-muted">对应口播</p>
+                        <p className="text-body-sm leading-relaxed mt-1">
+                          {narration?.scenes.find((item) => item.id === scene.id)?.text}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
-            </div>
-          </div>
-          {final && (
-            <MusicPanel
-              project={project}
-              render={render}
-              disabled={disabled || versionId !== 'current'}
-              onApply={applyMusic}
-            />
-          )}
-          {storyboard && (
-            <>
-              <div className="workflow-scenes" role="group" aria-label="视频分镜定位">
-                {storyboard.scenes.map((item, index) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    className="workflow-scene"
-                    aria-pressed={activeScene === index}
-                    onClick={() => {
-                      setActiveScene(index)
-                      if (player.current && audio) {
-                        const time = timeline[index].seek
-                        player.current.currentTime = time
-                        setTime(time)
-                      }
-                    }}
-                  >
-                    <ScenePreview
-                      projectId={project.id}
-                      value={storyboard}
-                      scene={item}
-                      thumbnail
-                    />
-                    <span>
-                      {String(index + 1).padStart(2, '0')} · {item.title}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              {scene && (
-                <div className="workflow-scene-notes">
-                  <div>
-                    <p className="workflow-muted">屏幕文字</p>
-                    <p className="text-body-sm font-semibold mt-1">{scene.title}</p>
-                  </div>
-                  <div>
-                    <p className="workflow-muted">对应口播</p>
-                    <p className="text-body-sm leading-relaxed mt-1">
-                      {narration?.scenes.find((item) => item.id === scene.id)?.text}
-                    </p>
-                  </div>
-                </div>
-              )}
+              <RenderActions
+                project={project}
+                final={final}
+                sceneId={scene?.id}
+                sceneTitle={scene?.title}
+                time={time}
+                disabled={disabled || versionId !== 'current'}
+                run={run}
+              />
             </>
           )}
-          <RenderActions
-            project={project}
-            final={final}
-            sceneId={scene?.id}
-            sceneTitle={scene?.title}
-            time={time}
-            disabled={disabled || versionId !== 'current'}
-            run={run}
-          />
           {final ? (
             <div className="workflow-facts">
               <span>MP4 · H.264 / AAC</span>

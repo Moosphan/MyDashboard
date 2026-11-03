@@ -129,7 +129,7 @@ app.whenReady().then(async () => {
     window.setSize(1440, 1100)
     await waitFor('document.querySelector("nav")', 'app loaded')
     await evaluate(
-      `window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))`,
+      `location.hash='/video'`,
     )
     await waitFor('document.querySelector(".workflow-project-row")', 'project list')
     await click('继续创作')
@@ -491,7 +491,7 @@ app.whenReady().then(async () => {
     assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth'))
     window.webContents.setZoomFactor(1)
     await evaluate(
-      `window.history.pushState({},'', '/toolbox');window.dispatchEvent(new PopStateEvent('popstate'))`,
+      `location.hash='/toolbox'`,
     )
     await waitFor(
       '[...document.querySelectorAll("button")].some(button => button.textContent.includes("管理工具") && !button.disabled)',

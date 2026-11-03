@@ -86,5 +86,5 @@ test('routes manual refresh and wake recovery through the resilient usage schedu
   assert.match(aiIpcSource, /refreshChatGPTUsageNow/)
   assert.match(schedulerSource, /powerMonitor\.on\('resume'/)
   assert.match(schedulerSource, /export function refreshChatGPTUsageNow/)
-  assert.match(schedulerSource, /if \(options\.rebuildSession\) activeRefreshController\?\.abort\(\)/)
+  assert.match(schedulerSource, /usageRefresh\.refresh\(options\.rebuildSession === true\)/)
 })

@@ -132,7 +132,7 @@ app.whenReady().then(async () => {
     window.setSize(1440, 1100)
     await waitFor(`document.querySelector('nav')`, 'video navigation')
     await evaluate(
-      `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+      `location.hash='/video'`,
     )
     await waitFor('document.getElementById("workflow-project-search")', 'project list')
     const filterMetrics = await evaluate(`(()=>{
@@ -608,7 +608,7 @@ app.whenReady().then(async () => {
     window.setSize(1440, 1100)
     for (const theme of ['dark', 'light']) {
       await evaluate(
-        "(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()",
+        "location.hash='/settings'",
       )
       await waitFor(
         `[...document.querySelectorAll("button")].some(item=>item.textContent.includes("${theme}_mode"))`,
@@ -618,7 +618,7 @@ app.whenReady().then(async () => {
         `[...document.querySelectorAll("button")].find(item=>item.textContent.includes("${theme}_mode")).click()`,
       )
       await evaluate(
-        "(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()",
+        "location.hash='/video'",
       )
       await waitFor(
         'document.getElementById("workflow-project-search")',
@@ -850,7 +850,7 @@ app.whenReady().then(async () => {
     window.webContents.setZoomFactor(1)
     window.setSize(1440, 1100)
     await evaluate(
-      `(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+      `location.hash='/settings'`,
     )
     await waitFor(
       '[...document.querySelectorAll("button")].some(item=>item.textContent.includes("dark_mode"))',
@@ -861,7 +861,7 @@ app.whenReady().then(async () => {
     )
     await waitFor('document.documentElement.classList.contains("dark")', 'live dark theme')
     await evaluate(
-      `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+      `location.hash='/video'`,
     )
     await waitFor('document.getElementById("workflow-project-search")', 'return to list')
     const project = await evaluate(
@@ -1062,7 +1062,7 @@ app.whenReady().then(async () => {
     window.setSize(1440, 1100)
     for (const theme of ['light', 'dark']) {
       await evaluate(
-        `(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+        `location.hash='/settings'`,
       )
       await waitFor(
         `[...document.querySelectorAll("button")].some(item=>item.textContent.includes("${theme}_mode"))`,
@@ -1076,7 +1076,7 @@ app.whenReady().then(async () => {
         'narration theme applied',
       )
       await evaluate(
-        `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+        `location.hash='/video'`,
       )
       await waitFor(
         'document.getElementById("workflow-project-search")',
@@ -1175,7 +1175,7 @@ app.whenReady().then(async () => {
       const originalAudio = state.stages.audio
       for (const theme of ['dark', 'light']) {
         await evaluate(
-          `(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+          `location.hash='/settings'`,
         )
         await waitFor(
           `[...document.querySelectorAll('button')].some(item=>item.textContent.includes('${theme}_mode'))`,
@@ -1204,7 +1204,7 @@ app.whenReady().then(async () => {
         )
         window.webContents.send('workflow:updated', state.id)
         await evaluate(
-          `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+          `location.hash='/video'`,
         )
         await waitFor(
           'document.getElementById("workflow-project-search")',
@@ -1590,7 +1590,7 @@ app.whenReady().then(async () => {
       for (const theme of ['dark', 'light']) {
         if (theme === 'light') {
           await evaluate(
-            `(()=>{window.history.pushState({},'', '/settings');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+            `location.hash='/settings'`,
           )
           await waitFor(
             '[...document.querySelectorAll("button")].some(item=>item.textContent.includes("light_mode"))',
@@ -1601,7 +1601,7 @@ app.whenReady().then(async () => {
           )
           await waitFor('!document.documentElement.classList.contains("dark")', 'live light theme')
           await evaluate(
-            `(()=>{window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))})()`,
+            `location.hash='/video'`,
           )
           await waitFor(
             'document.getElementById("workflow-project-search")',

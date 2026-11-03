@@ -12,7 +12,10 @@ function sameComposition(left: RenderPayload, right: RenderPayload) {
   )
 }
 
-export function compareFinalRender(project: VideoProject, revision: WorkflowRevision) {
+export function compareFinalRender(
+  project: Pick<VideoProject, 'history'>,
+  revision: WorkflowRevision,
+) {
   const output = revision.payload as RenderPayload
   const roughcuts = project.history.filter((item) => item.stage === 'roughcut')
   const source = output.sourceRoughcut

@@ -81,7 +81,7 @@ app.whenReady().then(async () => {
     window.setMinimumSize(720, 640)
     window.setSize(1440, 1100)
     await waitFor('document.querySelector("nav")', 'app ready')
-    await evaluate("window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))")
+    await evaluate("location.hash='/video'")
     await waitFor('document.querySelector(".workflow-project-row")', 'project list')
     await click('继续创作')
     await waitFor('document.querySelector("[data-publication-cover]")', 'cover panel')

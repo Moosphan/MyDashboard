@@ -12,7 +12,7 @@ const CACHE_DURATION_MS = 10 * 60 * 1000
 const REQUEST_TIMEOUT_MS = 10_000
 
 let cachedSnapshot: ResetRadarSnapshot | null = null
-let cachedAt = 0
+let publicCachedAt = 0
 
 function getHistoryRepository(): ResetRadarRepository {
   return new ResetRadarRepository(getDatabase())
@@ -58,8 +58,9 @@ export async function getChatGPTAccountStatus(waitForSession = false): Promise<'
   }
 }
 
-async function addAccountStatus(snapshot: ResetRadarSnapshot, waitForSession = false): Promise<ResetRadarSnapshot> {
+async function addAccountStatus(snapshot: ResetRadarSnapshot, waitForSession = false, signal?: AbortSignal): Promise<ResetRadarSnapshot> {
   const status = await getChatGPTAccountStatus(waitForSession)
+  if (signal?.aborted) throw new Error('Reset Radar refresh cancelled')
   const historyRepository = getHistoryRepository()
   const persistedAccountSnapshot = historyRepository.getAccountSnapshot()
   const cachedAccountSnapshot = cachedSnapshot
@@ -179,7 +180,6 @@ export function ingestChatGPTAccountUsage(
   }
 
   cachedSnapshot = nextSnapshot
-  cachedAt = Date.now()
   historyRepository.saveAccountSnapshot({
     plan: nextSnapshot.account.plan,
     email: nextSnapshot.account.email,
@@ -221,17 +221,21 @@ function createUnavailableSnapshot(message: string): ResetRadarSnapshot {
   }
 }
 
-export async function getResetRadarSnapshot(forceRefresh = false): Promise<ResetRadarSnapshot> {
+export async function getResetRadarSnapshot(forceRefresh = false, signal?: AbortSignal): Promise<ResetRadarSnapshot> {
+  if (signal?.aborted) throw new Error('Reset Radar refresh cancelled')
   const now = Date.now()
-  if (!forceRefresh && cachedSnapshot && now - cachedAt < CACHE_DURATION_MS) {
-    return addAccountStatus(cachedSnapshot, forceRefresh)
+  if (!forceRefresh && cachedSnapshot && now - publicCachedAt < CACHE_DURATION_MS) {
+    return addAccountStatus(cachedSnapshot, forceRefresh, signal)
   }
 
   const controller = new AbortController()
+  const cancel = () => controller.abort()
+  signal?.addEventListener('abort', cancel, { once: true })
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
 
   try {
     const publicSnapshot = await fetchPublicResetRadarSnapshot(controller.signal)
+    if (signal?.aborted) throw new Error('Reset Radar refresh cancelled')
     persistPublicSignals(publicSnapshot)
     if (publicSnapshot.activeSignal?.confidence === 'high') {
       sendDedupedNotification(`reset-radar:${publicSnapshot.activeSignal.id}`, {
@@ -241,13 +245,16 @@ export async function getResetRadarSnapshot(forceRefresh = false): Promise<Reset
         target: { type: 'reset-radar', signalId: publicSnapshot.activeSignal.id },
       })
     }
-    const snapshot = await addAccountStatus(publicSnapshot, forceRefresh)
+    const snapshot = await addAccountStatus(publicSnapshot, forceRefresh, signal)
+    if (signal?.aborted) throw new Error('Reset Radar refresh cancelled')
     cachedSnapshot = snapshot
-    cachedAt = Date.now()
+    publicCachedAt = Date.now()
     return snapshot
   } catch (error) {
-    return addAccountStatus(createUnavailableSnapshot(error instanceof Error ? error.message : 'Public signal unavailable'), forceRefresh)
+    if (signal?.aborted) throw new Error('Reset Radar refresh cancelled')
+    return addAccountStatus(createUnavailableSnapshot('Public signal unavailable'), forceRefresh, signal)
   } finally {
     clearTimeout(timeout)
+    signal?.removeEventListener('abort', cancel)
   }
 }

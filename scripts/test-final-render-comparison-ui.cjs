@@ -215,7 +215,7 @@ app.whenReady().then(async () => {
       database.close()
     }
     await evaluate(
-      "window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))",
+      "location.hash='/video'",
     )
     await waitFor('document.querySelector(".workflow-project-card")')
     await evaluate(

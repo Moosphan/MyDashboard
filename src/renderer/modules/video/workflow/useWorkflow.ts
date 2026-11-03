@@ -9,7 +9,9 @@ import {
   type VideoStage,
   type StagePayloads,
   type WorkflowFile,
+  type VideoProjectSummary,
 } from '@shared/video-workflow'
+import { WorkflowRefreshQueue } from './refresh-queue'
 
 export const workflowCall = <Result>(action: string, ...args: unknown[]) =>
   ipcInvoke<Result>(`workflow:${action}`, ...args)
@@ -21,51 +23,102 @@ export function nextStage(project: VideoProject): VideoStage {
   return VIDEO_STAGES.find((stage) => project.stages[stage]?.status !== 'approved') ?? 'publish'
 }
 export function useWorkflowProjects() {
-  const [projects, setProjects] = useState<VideoProject[]>([])
+  const [projects, setProjects] = useState<VideoProjectSummary[]>([])
   const [project, setProject] = useState<VideoProject | null>(null)
   const [archived, setArchived] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const selected = useRef<string | null>(null),
     sequence = useRef(0)
-  const refresh = useCallback(async () => {
-    const request = ++sequence.current
-    try {
-      const [list, current] = await Promise.all([
-        workflowCall<VideoProject[]>('list', archived),
-        selected.current
-          ? workflowCall<VideoProject>('get', selected.current)
-          : Promise.resolve(null),
-      ])
-      if (request === sequence.current) {
-        setProjects(list)
-        setProject(current)
-        setError('')
+  const detailSequence = useRef(0)
+  const queue = useRef<WorkflowRefreshQueue | null>(null)
+  const refresh = useCallback(
+    () => queue.current?.refresh().catch(() => {}) ?? Promise.resolve(),
+    [],
+  )
+  useEffect(() => {
+    let alive = true
+    const coordinator = new WorkflowRefreshQueue(async (ids) => {
+      const selectedId = selected.current
+      const selection = sequence.current
+      try {
+        if (ids) {
+          for (const id of ids) {
+            const summary = await workflowCall<VideoProjectSummary | null>('summary', id)
+            if (!alive) return
+            setProjects((current) => {
+              const next = current.filter((item) => item.id !== id)
+              if (summary && summary.archived === archived) next.push(summary)
+              next.sort(
+                (left, right) =>
+                  right.updatedAt.localeCompare(left.updatedAt) || right.sortOrder - left.sortOrder,
+              )
+              return JSON.stringify(next) === JSON.stringify(current) ? current : next
+            })
+          }
+        } else {
+          const list = await workflowCall<VideoProjectSummary[]>('list', archived)
+          if (!alive) return
+          setProjects(list)
+        }
+        if (selectedId && (!ids || ids.includes(selectedId))) {
+          const detailRequest = ++detailSequence.current
+          const current = await workflowCall<VideoProject>('get', selectedId)
+          if (
+            alive &&
+            detailRequest === detailSequence.current &&
+            selection === sequence.current &&
+            selected.current === selectedId
+          )
+            setProject((previous) =>
+              !previous || current.revision >= previous.revision ? current : previous,
+            )
+        }
+        if (alive) setError('')
+      } catch (failure) {
+        if (alive) setError((failure as Error).message)
+        throw failure
+      } finally {
+        if (alive) setLoading(false)
       }
-    } catch (failure) {
-      if (request === sequence.current) setError((failure as Error).message)
-    } finally {
-      if (request === sequence.current) setLoading(false)
+    })
+    queue.current = coordinator
+    setLoading(true)
+    void coordinator.refresh().catch(() => {})
+    const unsubscribe = window.electronAPI.onVideoWorkflowUpdated((id) => coordinator.updated(id))
+    return () => {
+      alive = false
+      unsubscribe()
+      coordinator.dispose()
+      if (queue.current === coordinator) queue.current = null
     }
   }, [archived])
-  useEffect(() => {
-    setLoading(true)
-    void refresh()
-  }, [refresh])
-  useEffect(
-    () =>
-      window.electronAPI.onVideoWorkflowUpdated(() => {
-        void refresh()
-      }),
-    [refresh],
-  )
   const select = (value: VideoProject | null) => {
+    detailSequence.current++
     sequence.current++
     selected.current = value?.id ?? null
     setProject(value)
     setError('')
   }
-  return { projects, project, select, archived, setArchived, loading, error, refresh }
+  const open = async (id: string) => {
+    const request = ++sequence.current
+    selected.current = id
+    const detailRequest = ++detailSequence.current
+    setError('')
+    try {
+      const value = await workflowCall<VideoProject>('get', id)
+      if (request !== sequence.current || detailRequest !== detailSequence.current) return null
+      setProject(value)
+      return value
+    } catch (failure) {
+      if (request === sequence.current && detailRequest === detailSequence.current) {
+        selected.current = null
+        setError((failure as Error).message)
+      }
+      return null
+    }
+  }
+  return { projects, project, select, open, archived, setArchived, loading, error, refresh }
 }
 export function initialPayload(
   project: VideoProject,

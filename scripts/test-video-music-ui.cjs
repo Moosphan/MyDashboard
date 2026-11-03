@@ -85,7 +85,7 @@ app.whenReady().then(async () => {
     window.setSize(1440, 1100)
     await waitFor('document.querySelector("nav")', 'app')
     await evaluate(
-      "window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))",
+      "location.hash='/video'",
     )
     await waitFor('document.querySelector(".workflow-project-row")', 'projects')
     await click('继续创作')

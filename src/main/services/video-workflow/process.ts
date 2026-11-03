@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { delimiter, dirname } from 'node:path'
+import { mediaTaskBudget } from '../task-budget'
 
 export function workflowCommand(
   executable: string,
@@ -18,7 +19,7 @@ export function workflowCommand(
   if (!executable || executable.includes('\0'))
     return Promise.reject(new Error('请先配置可执行文件路径'))
   if (options.signal?.aborted) return Promise.reject(new Error('任务已取消'))
-  return new Promise((resolve, reject) => {
+  return mediaTaskBudget.run(() => new Promise<string>((resolve, reject) => {
     const child = spawn(executable, args, {
       cwd: options.cwd,
       shell: false,
@@ -114,5 +115,5 @@ export function workflowCommand(
     })
     options.signal?.addEventListener('abort', abort, { once: true })
     if (options.signal?.aborted) abort()
-  })
+  }), options.signal)
 }

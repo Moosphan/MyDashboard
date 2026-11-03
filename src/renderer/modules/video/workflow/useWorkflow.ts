@@ -107,11 +107,11 @@ export function useWorkflowProjects() {
     setError('')
     try {
       const value = await workflowCall<VideoProject>('get', id)
-      if (request !== sequence.current) return null
-      if (detailRequest === detailSequence.current) setProject(value)
+      if (request !== sequence.current || detailRequest !== detailSequence.current) return null
+      setProject(value)
       return value
     } catch (failure) {
-      if (request === sequence.current) {
+      if (request === sequence.current && detailRequest === detailSequence.current) {
         selected.current = null
         setError((failure as Error).message)
       }

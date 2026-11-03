@@ -69,17 +69,50 @@ app.whenReady().then(async () => {
     await win.loadFile(join(directory, 'index.html'))
     await take('workflow:list', [summary('a'), summary('b')])
     await wait('state.loading===false')
-    await evaluate('void state.open("a")')
+    await evaluate(
+      'window.openResult="pending";void state.open("a").then(value=>window.openResult=value)',
+    )
     await wait('requests.some(item=>item.channel==="workflow:get")')
     await evaluate(
       'window.oldOpen=requests.splice(requests.findIndex(item=>item.channel==="workflow:get"),1)[0];updated("a")',
     )
     await take('workflow:summary', summary('a'))
-    await take('workflow:get', project('a', 'new phase'))
+    await take('workflow:get', {
+      ...project('a', 'new phase'),
+      stages: { brief: { stage: 'brief', status: 'approved', payload: {} } },
+    })
     await wait('state.project?.jobs[0].phase==="new phase"')
     await evaluate(`oldOpen.resolve(${JSON.stringify(project('a', 'old phase'))})`)
     await delay(30)
     assert.equal(await evaluate('state.project.jobs[0].phase'), 'new phase')
+    assert.equal(await evaluate('state.project.stages.brief.status'), 'approved')
+    assert.equal(
+      await evaluate('openResult'),
+      null,
+      'superseded open must not return obsolete unapproved stages to caller',
+    )
+    await evaluate(
+      'window.failedOpenResult="pending";void state.open("a").then(value=>window.failedOpenResult=value)',
+    )
+    await wait('requests.some(item=>item.channel==="workflow:get")')
+    await evaluate(
+      'window.failedOpen=requests.splice(requests.findIndex(item=>item.channel==="workflow:get"),1)[0];updated("a")',
+    )
+    await take('workflow:summary', summary('a'))
+    await take('workflow:get', project('a', 'refreshed before old failure'))
+    await wait('state.project.jobs[0].phase==="refreshed before old failure"')
+    await evaluate('failedOpen.fail("Synthetic obsolete failure")')
+    await wait('failedOpenResult!=="pending"')
+    assert.equal(await evaluate('failedOpenResult'), null)
+    assert.equal(
+      await evaluate('state.error'),
+      '',
+      'superseded failure must not change current selection error',
+    )
+    await evaluate('updated("a")')
+    await take('workflow:summary', summary('a'))
+    await take('workflow:get', project('a', 'refreshed after old failure'))
+    await wait('state.project.jobs[0].phase==="refreshed after old failure"')
     await evaluate('void state.open("b");updated("a")')
     await take('workflow:get', project('b', 'selected'))
     await take('workflow:summary', summary('a'))

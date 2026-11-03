@@ -104,7 +104,7 @@ app.whenReady().then(async () => {
     assert.match(rejected.error, /超出 1080×1920/)
     await save('storyboard', portrait)
     await evaluate(
-      "window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))",
+      "location.hash='/video'",
     )
     await waitFor('document.querySelector(".workflow-project-row")')
     await click('继续创作')
@@ -122,7 +122,7 @@ app.whenReady().then(async () => {
         assert.equal(frame.width, '1080px')
         assert.equal(frame.height, '1920px')
         assert.ok(Math.abs(frame.ratio - 9 / 16) < 0.001)
-        assert.ok(frame.inside && frame.source)
+        assert.ok(frame.inside && frame.source, JSON.stringify(frame))
         assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth'))
         writeFileSync(
           join(root, `portrait-${theme}-${width}.png`),

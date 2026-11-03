@@ -91,6 +91,7 @@ app.whenReady().then(async () => {
     win.setMinimumSize(720, 640)
     win.setSize(1440, 1000)
     await wait('document.querySelector("nav")', 'app ready')
+    await wait('[...document.querySelectorAll("main h3")].some(el=>el.textContent==="Tasks")', 'file cold start dashboard before navigation')
     if (badAccountIndex) {
       const result = await evaluate('window.electronAPI.invoke("workflow:list")')
       assert.equal(result.success, false)
@@ -101,7 +102,7 @@ app.whenReady().then(async () => {
       return
     }
     await evaluate(
-      "window.history.pushState({},'', '/video');window.dispatchEvent(new PopStateEvent('popstate'))",
+      "location.hash='/video'",
     )
     await wait(
       '[...document.querySelectorAll("button")].some(el=>el.textContent.trim()==="新建视频项目")',
@@ -125,6 +126,7 @@ app.whenReady().then(async () => {
     await evaluate('document.querySelector("#video-import-path").focus()')
     await input('#video-import-path', ` "${video}" `)
     await key('Tab')
+    await evaluate('document.querySelector("#video-project-name").focus()')
     assert.equal(
       await evaluate('document.querySelector("#video-project-name").value'),
       '外部AI成片',

@@ -54,6 +54,7 @@ export default function App() {
                   element={<route.component />}
                 />
               ))}
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Routes>
           </ErrorBoundary>
         </Suspense>

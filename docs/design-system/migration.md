@@ -183,6 +183,8 @@
 
 `VIDEO-WORKFLOW-001` 导入字段样式修订（2026-10-29 用户最新截图授权）：项目名/路径改用已存在的 `voiceover-field`，直接复用内容说明的边界、圆角、背景、主题及焦点，避免胶囊输入外观；单行高度沿用现有 40px。移除可见路径标题，保留可访问名称；按钮到路径间距使用既有 16px 布局间距。不修改共享 Input 或全局样式，保留原逻辑、字段顺序与动作位置。例外负责人/退出里程碑沿用 VIDEO-WORKFLOW-001，验证追加于 [成品导入记录](video-workflow-import-verification.md)。
 
+应用本地文件路由修复（Issue #6）：`main.tsx` 按 file 协议使用 HashRouter，HTTP 开发入口继续使用 BrowserRouter；`App.tsx` 将未知路径回退至 Dashboard。沿用原导航、页面、主题、信息顺序与动作位置，无控件或布局变更。合成 Electron 冷启动在任何导航前验证真实首页，覆盖全部启用模块、前进/后退、重载、窗口重开、通知跳转、未知路径、本地 JS/CSS/字体/Logo、明暗主题、1440/1024 和 200% 键盘弹窗；成片导入及媒体预览回归通过。design:check、design:build 和应用构建通过；全量类型检查仍有既有错误，未声称通过。负责人为项目维护者，退出里程碑为后续导航回归持续纳入构建验证。
+
 ## 8. V3.2 自绘控件迁移
 
 生产优先建立共享Select/Combobox/DatePicker/TimePicker/ColorPicker，再替换页面调用；不得只美化select触发器却留下系统弹层。先覆盖设计工作台顶部密度与Dialog中的嵌套表单，再覆盖业务页面。Checkbox等原生input保留键盘语义，统一appearance与状态；原生语义不等于允许平台默认外观。验收包含表单值、IME、disabled/indeterminate、Escape分层关闭、焦点返回与视口避让。日期范围、12小时制、透明度等预留变体在生产实现时另验，不视为本轮已完成。

@@ -10,6 +10,7 @@ import { managedPath } from './media'
 import { prepareVoiceReference } from './reference-denoiser'
 import { runCommand } from './process'
 import { probeAudio } from './profile-store'
+import { mediaTaskBudget } from '../task-budget'
 
 export async function applyVoiceDesignTempo(
   output: VoiceOutput,
@@ -37,7 +38,7 @@ export function runVoiceWorker(
   signal: AbortSignal,
   phase: (message: string) => void = () => {},
 ): Promise<VoiceOutput> {
-  return new Promise((resolve, reject) => {
+  return mediaTaskBudget.run(() => new Promise<VoiceOutput>((resolve, reject) => {
     const child = spawn(python, [script], {
       shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -129,7 +130,7 @@ export function runVoiceWorker(
     signal.addEventListener('abort', abort, { once: true })
     if (signal.aborted) abort()
     else child.stdin.write(`${JSON.stringify({ ...request, protocolVersion: 1 })}\n`)
-  })
+  }), signal)
 }
 
 export function createPythonAdapter(

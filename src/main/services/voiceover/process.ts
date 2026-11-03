@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
+import { mediaTaskBudget } from '../task-budget'
 
 export function runCommand(executable: string, args: string[], signal?: AbortSignal, timeoutMs = 30000): Promise<string> {
-  return new Promise((resolve, reject) => {
+  return mediaTaskBudget.run(() => new Promise<string>((resolve, reject) => {
     const child = spawn(executable, args, { shell: false, env: { ...process.env, HF_HUB_OFFLINE: '1', TOKENIZERS_PARALLELISM: 'false' }, stdio: ['ignore', 'pipe', 'pipe'] })
     let output = ''
     let errors = ''
@@ -30,5 +31,5 @@ export function runCommand(executable: string, args: string[], signal?: AbortSig
     })
     signal?.addEventListener('abort', abort, { once: true })
     if (signal?.aborted) abort()
-  })
+  }), signal)
 }

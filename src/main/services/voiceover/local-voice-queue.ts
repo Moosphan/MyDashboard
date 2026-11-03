@@ -1,27 +1,15 @@
-export class LocalVoiceQueue {
-  private tail: Promise<unknown> = Promise.resolve()
+import { TaskBudget } from '../task-budget'
 
-  async drain() {
-    await this.tail
+export const LOCAL_VOICE_QUEUE_LIMIT = 20
+
+export class LocalVoiceQueue {
+  private readonly budget = new TaskBudget(1, LOCAL_VOICE_QUEUE_LIMIT)
+
+  drain() {
+    return this.budget.drain()
   }
 
   run<Result>(action: () => Promise<Result>, signal: AbortSignal): Promise<Result> {
-    const pending = this.tail.then(() => {
-      if (signal.aborted) throw cancellationReason(signal)
-      return action()
-    })
-    this.tail = pending.catch(() => {})
-    return new Promise((resolve, reject) => {
-      const abort = () => reject(cancellationReason(signal))
-      if (signal.aborted) abort()
-      else signal.addEventListener('abort', abort, { once: true })
-      pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
-    })
+    return this.budget.run(action, signal)
   }
-}
-
-function cancellationReason(signal: AbortSignal) {
-  return signal.reason instanceof Error && signal.reason.name !== 'AbortError'
-    ? signal.reason
-    : new Error('任务已取消')
 }

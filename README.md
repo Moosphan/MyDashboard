@@ -188,6 +188,23 @@ pnpm dev
 
 Renderer changes update through HMR. After changing main-process or preload code, save active drafts and restart Electron to load the new backend. For a launchd development session, run `pnpm dev:launchd` again to stop the old instance and start a fresh one.
 
+### Daily Local Use
+
+```bash
+pnpm daily:build
+pnpm daily:start
+pnpm daily:stop
+pnpm daily:restart
+```
+
+Daily mode loads production files directly without a Vite server. Build again after source or runtime-resource changes; start refuses stale output. Each successful build activates a separate version under the ignored `.daily-runtime/` directory, and a failed build keeps the previous release. Restart uses the latest successful build; it does not build automatically. Earlier release directories remain available while processes may use them.
+
+The launcher controls only this checkout through an authenticated local socket, preserving running tasks on other applications/checkouts. On macOS it retires a legacy launchd development service only when its recorded checkout matches. If another development or installed instance owns the same user profile, close it normally before starting daily mode; the app's single-instance lock prevents duplicate databases and publishing schedulers. Save active work before stopping. Existing local drafts persist; schedules missed while stopped remain missed and require rescheduling. A command interrupted during a build can leave `.daily-runtime/operation.lock`; remove that lock only after confirming no daily command is active.
+
+`pnpm dev` remains the HMR development entry. Daily mode is an uninstalled local build; use the collaborator-only draft Release installers described above for installed use. Daily commands do not publish releases or videos.
+
+Reproduce the isolated comparison with `node scripts/benchmark-daily-runtime.cjs` after a daily build. A synthetic empty-profile run (Electron 33, three samples per mode, median; later development samples share Vite cache) measured built/development startup at 703.8/561.9 ms, first Video navigation at 43.8/145.7 ms, warm navigation at 16.2/20.6 ms, and lightweight IPC P95 at 0.6/0.5 ms. Main-process idle CPU over 500 ms was 21.5/9.0 ms and RSS 126.8/128.3 MiB; these exclude renderer memory and are environment-dependent, not a guaranteed speed ratio. This comparison tests production versus development renderer loading using the same main bundle and synthetic data.
+
 ### Build
 
 Create production bundles:

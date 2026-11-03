@@ -45,6 +45,7 @@ import { getDatabase, closeDatabase } from './database/connection'
 import { runMigrations } from './database/migrations'
 import { AISubscriptionRepository } from './database/repositories/ai-repository'
 import { seedSocialData } from './database/seeds/social-seeds'
+import { startDailyRuntimeControl } from './services/daily-runtime-control'
 
 const isDev = !app.isPackaged
 if (process.env.MYDASHBOARD_USER_DATA) {
@@ -52,8 +53,18 @@ if (process.env.MYDASHBOARD_USER_DATA) {
   mkdirSync(isolatedData, { recursive: true })
   app.setPath('userData', isolatedData)
 }
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) app.exit(0)
 registerVideoWorkflowProtocol()
 let mainWindow: BrowserWindow | null = null
+let stopDailyRuntimeControl = () => {}
+app.on('second-instance', () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  }
+})
 
 function logLifecycle(event: string, details: Record<string, unknown> = {}): void {
   const line = `[Lifecycle] ${new Date().toISOString()} ${event} ${JSON.stringify(details)}`
@@ -191,6 +202,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  if (!primaryInstance) return
   logLifecycle('app:ready', {
     platform: process.platform,
     arch: process.arch,
@@ -273,6 +285,7 @@ app.whenReady().then(() => {
   startChatGPTUsageRefreshScheduler()
 
   createWindow()
+  stopDailyRuntimeControl = startDailyRuntimeControl(createWindow, () => app.quit())
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -303,6 +316,7 @@ app.on('before-quit', (event) => {
   stopChatGPTUsageRefreshScheduler()
   void stopCodexSessionUsage()
   stopToolbox()
+  stopDailyRuntimeControl()
   closeDatabase()
 })
 

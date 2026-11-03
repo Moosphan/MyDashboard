@@ -3,6 +3,7 @@ out/
 node_modules
 dist/
 .dev-logs/
+.daily-runtime/
 docs/
 !docs/
 docs/*

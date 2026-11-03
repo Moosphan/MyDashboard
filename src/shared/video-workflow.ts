@@ -11,14 +11,19 @@ export function projectVideoFormat(project: VideoProject, referenceText = ''): V
   const render = stageValue(project, 'render')
   if (render?.imported) return render.width < render.height ? 'portrait' : 'landscape'
   const brief = stageValue(project, 'brief')
-  if (brief?.format) return brief.format
-  const requirements = [
+  return inferVideoFormat(brief?.format, [
     referenceText,
     stageValue(project, 'storyboard')?.referenceText,
     brief?.text,
     stageValue(project, 'copy')?.requirements,
     stageValue(project, 'copy')?.text,
-  ]
+  ])
+}
+export function inferVideoFormat(
+  explicit: VideoFormat | undefined,
+  requirements: (string | undefined | null)[],
+): VideoFormat {
+  if (explicit) return explicit
   for (const value of requirements) {
     const match = value?.match(
       /竖(?:版|屏)|横(?:版|屏)|1080\s*[×xX*]\s*1920|1920\s*[×xX*]\s*1080|9\s*[:：/]\s*16|16\s*[:：/]\s*9/,
@@ -357,6 +362,30 @@ export interface VideoProject {
   history: WorkflowRevision[]
   jobs: WorkflowJob[]
   publications: PublicationRecord[]
+}
+export interface VideoProjectSummary {
+  id: string
+  title: string
+  revision: number
+  archived: boolean
+  updatedAt: string
+  sortOrder: number
+  stages: Partial<Record<VideoStage, WorkflowRevision['status']>>
+  nextStage: VideoStage
+  approvedCount: number
+  imported: boolean
+  format: VideoFormat
+  duration?: number
+  width?: number
+  height?: number
+  cover?: WorkflowFile
+  placeholderTitle?: string
+  running: boolean
+}
+export type WorkflowRevisionSummary = Omit<WorkflowRevision, 'payload'>
+export interface WorkflowHistoryPage {
+  items: WorkflowRevisionSummary[]
+  nextCursor: number | null
 }
 export interface WorkflowRuntime {
   nodePath: string

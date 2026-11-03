@@ -13,6 +13,7 @@ import {
 } from '@shared/video-workflow'
 import { mediaUrl, workflowCall } from './useWorkflow'
 import { WorkflowDialog } from './WorkflowDialog'
+import { useWorkflowAssets } from './useWorkflowHistory'
 
 export function PublicationCoverPanel({
   project,
@@ -46,12 +47,11 @@ export function PublicationCoverPanel({
   const previewButton = useRef<HTMLButtonElement>(null)
   const generateButton = useRef<HTMLButtonElement>(null)
   const submissionPending = useRef(false)
+  const historicalCovers = useWorkflowAssets<PublicationCover>(project, 'cover')
   const versions = useMemo(() => {
     const found = new Map<string, { cover: PublicationCover; version: number }>()
-    for (const revision of project.history
-      .filter((item) => item.stage === 'publish')
-      .sort((left, right) => left.version - right.version)) {
-      const cover = (revision.payload as PublishPayload).platforms.bilibili.cover
+    for (const revision of [...historicalCovers.items].reverse()) {
+      const cover = revision.value
       if (cover && !found.has(cover.file.id))
         found.set(cover.file.id, { cover, version: revision.version })
     }
@@ -61,7 +61,7 @@ export function PublicationCoverPanel({
         version: project.stages.publish?.version ?? 0,
       })
     return [...found.values()].sort((left, right) => right.version - left.version)
-  }, [value.cover, project.history, project.stages.publish?.version])
+  }, [value.cover, historicalCovers.items, project.stages.publish?.version])
   useEffect(() => {
     setSelectedId(value.cover?.file.id ?? 'render-frame')
   }, [value.cover?.file.id])
@@ -124,6 +124,11 @@ export function PublicationCoverPanel({
       aria-label="B 站投稿封面"
       data-publication-cover
     >
+      {historicalCovers.error && (
+        <p role="alert" className="workflow-error">
+          {historicalCovers.error}
+        </p>
+      )}
       <div className="workflow-stage-heading">
         <h4 className="text-body-sm font-semibold">B 站投稿封面</h4>
         <Button

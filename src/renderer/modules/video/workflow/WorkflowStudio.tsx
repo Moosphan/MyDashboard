@@ -27,11 +27,13 @@ import {
   type VideoProject,
   type VideoStage,
   type StagePayloads,
+  type VideoProjectSummary,
 } from '@shared/video-workflow'
 import { mediaUrl, nextStage, useWorkflowProjects, workflowCall } from './useWorkflow'
 import { StepView, revisionStatus } from './StepView'
 import { StageWorkspace } from './StageWorkspace'
 import { WorkflowDialog } from './WorkflowDialog'
+import { useWorkflowHistory, useWorkflowHistoryRestore } from './useWorkflowHistory'
 
 export function WorkflowStudio({
   onVoiceover,
@@ -59,6 +61,8 @@ export function WorkflowStudio({
   const createLock = useRef(false)
   const importRequest = useRef({ key: '', id: '' })
   const [history, setHistory] = useState(false)
+  const projectHistory = useWorkflowHistory(state.project, undefined, history)
+  const historyRestore = useWorkflowHistoryRestore(state.project, history)
   const [restored, setRestored] = useState<{
     key: number
     stage: VideoStage
@@ -121,7 +125,7 @@ export function WorkflowStudio({
       setSelectingVideo(false)
     }
   }
-  const archive = async (project: VideoProject) => {
+  const archive = async (project: VideoProjectSummary) => {
     setBusy(true)
     setError('')
     try {
@@ -138,8 +142,8 @@ export function WorkflowStudio({
       project.title.toLocaleLowerCase().includes(search.toLocaleLowerCase()) &&
       (filter === 'all' ||
         (filter === 'review'
-          ? Object.values(project.stages).some((item) => item?.status === 'review')
-          : project.stages.render?.status === 'approved')),
+          ? Object.values(project.stages).some((status) => status === 'review')
+          : project.stages.render === 'approved')),
   )
   const environment = (
     <Button
@@ -244,8 +248,8 @@ export function WorkflowStudio({
             description="历史版本与审核记录保留。作为新草稿会替换该阶段本地编辑，保存后才形成新版本并重新审核。"
             returnFocus={historyButton}
           >
-            {state.project.history.length ? (
-              state.project.history.map((item) => (
+            {projectHistory.items.length ? (
+              projectHistory.items.map((item) => (
                 <div key={item.id} className="workflow-history-row">
                   <strong>
                     {VIDEO_STAGE_LABELS[item.stage]} · v{item.version}
@@ -260,8 +264,15 @@ export function WorkflowStudio({
                         size="sm"
                         variant="ghost"
                         className="justify-self-start"
-                        onClick={() => {
-                          setRestored({ key: Date.now(), stage: item.stage, payload: item.payload })
+                        disabled={historyRestore.loading}
+                        onClick={async () => {
+                          const revision = await historyRestore.load(item.id)
+                          if (!revision) return
+                          setRestored({
+                            key: Date.now(),
+                            stage: item.stage,
+                            payload: revision.payload,
+                          })
                           setStage(item.stage)
                           setHistory(false)
                         }}
@@ -272,7 +283,27 @@ export function WorkflowStudio({
                 </div>
               ))
             ) : (
-              <p className="workflow-muted">尚未保存版本。</p>
+              <p className="workflow-muted">
+                {projectHistory.loading ? '正在读取版本…' : '尚未保存版本。'}
+              </p>
+            )}
+            {(projectHistory.error || historyRestore.error) && (
+              <p role="alert" className="workflow-error">
+                {projectHistory.error || historyRestore.error}
+                <Button size="sm" variant="ghost" onClick={() => void projectHistory.retry()}>
+                  重试
+                </Button>
+              </p>
+            )}
+            {projectHistory.cursor && (
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={projectHistory.loading}
+                onClick={() => void projectHistory.more()}
+              >
+                加载更早版本
+              </Button>
             )}
           </WorkflowDialog>
         </>
@@ -319,7 +350,7 @@ export function WorkflowStudio({
               <strong>
                 {
                   state.projects.filter((project) =>
-                    Object.values(project.stages).some((item) => item?.status === 'review'),
+                    Object.values(project.stages).some((status) => status === 'review'),
                   ).length
                 }
                 <small> 个项目</small>
@@ -328,10 +359,7 @@ export function WorkflowStudio({
             <div>
               <span className="workflow-muted">已完成成片</span>
               <strong>
-                {
-                  state.projects.filter((project) => project.stages.render?.status === 'approved')
-                    .length
-                }
+                {state.projects.filter((project) => project.stages.render === 'approved').length}
                 <small> 支视频</small>
               </strong>
             </div>
@@ -400,9 +428,8 @@ export function WorkflowStudio({
           ) : (
             <div className="workflow-project-list">
               {projects.map((project) => {
-                const current = nextStage(project)
-                const cover =
-                  stageValue(project, 'render')?.cover ?? stageValue(project, 'roughcut')?.cover
+                const current = project.nextStage
+                const cover = project.cover
                 return (
                   <Card key={project.id} className="workflow-project-card">
                     <div className="workflow-project-row">
@@ -411,28 +438,21 @@ export function WorkflowStudio({
                           <img src={mediaUrl(project.id, cover)} alt="成片封面" />
                         ) : (
                           <div className="workflow-project-placeholder" aria-hidden="true">
-                            <span>
-                              {stageValue(project, 'storyboard')?.scenes[0]?.title ?? project.title}
-                            </span>
+                            <span>{project.placeholderTitle ?? project.title}</span>
                             <small>
-                              {projectVideoFormat(project) === 'portrait' ? '9:16' : '16:9'} · VIDEO
-                              PROJECT
+                              {project.format === 'portrait' ? '9:16' : '16:9'} · VIDEO PROJECT
                             </small>
                           </div>
                         )}
                       </div>
                       <div className="workflow-project-info">
                         <div className="workflow-facts">
-                          <span>{isImportedVideo(project) ? '外部成片' : '视频创作'}</span>
+                          <span>{project.imported ? '外部成片' : '视频创作'}</span>
                           <span>
-                            {stageValue(project, 'render')?.duration.toFixed(0) ??
-                              stageValue(project, 'audio')?.duration.toFixed(0) ??
-                              stageValue(project, 'brief')?.duration ??
-                              '—'}{' '}
-                            秒 ·{' '}
-                            {isImportedVideo(project)
-                              ? `${stageValue(project, 'render')!.width}×${stageValue(project, 'render')!.height}`
-                              : projectVideoFormat(project) === 'portrait'
+                            {project.duration?.toFixed(0) ?? '—'} 秒 ·{' '}
+                            {project.imported
+                              ? `${project.width}×${project.height}`
+                              : project.format === 'portrait'
                                 ? '竖版'
                                 : '横版'}
                           </span>
@@ -447,16 +467,22 @@ export function WorkflowStudio({
                           {project.archived ? '已归档' : VIDEO_STAGE_LABELS[current]}
                         </Badge>
                         <span className="workflow-muted">
-                          {
-                            VIDEO_STAGES.filter(
-                              (item) => project.stages[item]?.status === 'approved',
-                            ).length
-                          }{' '}
-                          / {isImportedVideo(project) ? 2 : 8} 步已审核
+                          {project.approvedCount} / {project.imported ? 2 : 8} 步已审核
                         </span>
                       </div>
                       <div className="workflow-project-actions">
-                        <Button size="sm" variant="secondary" onClick={() => open(project)}>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={async () => {
+                            const value = await state.open(project.id)
+                            if (value) {
+                              setRestored(null)
+                              setStage(nextStage(value))
+                              setError('')
+                            }
+                          }}
+                        >
                           {project.archived ? '查看项目' : '继续创作'}
                         </Button>
                         <DropdownMenu>
@@ -479,11 +505,9 @@ export function WorkflowStudio({
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem
                               icon={project.archived ? 'unarchive' : 'archive'}
-                              disabled={busy || project.jobs.some((job) => job.state === 'running')}
+                              disabled={busy || project.running}
                               title={
-                                project.jobs.some((job) => job.state === 'running')
-                                  ? '请等待或取消正在执行的任务后再归档'
-                                  : undefined
+                                project.running ? '请等待或取消正在执行的任务后再归档' : undefined
                               }
                               className="data-[highlighted]:bg-surface-container-low data-[disabled]:opacity-50 data-[disabled]:cursor-not-allowed"
                               onSelect={() => void archive(project)}

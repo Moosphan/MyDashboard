@@ -8,6 +8,7 @@ import type {
   VideoPlatform,
   WorkflowFile,
   MusicSearchResult,
+  VideoProject,
 } from '../../shared/video-workflow'
 import { workflowMediaResponse } from '../services/video-workflow/media'
 import type { BilibiliPublishRequest } from '../../shared/bilibili-publishing'
@@ -70,7 +71,12 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
       )
         return { success: false, error: '工作流仅可在应用主窗口操作' }
       try {
-        return { success: true, data: await action(...(args as Arguments)) }
+        const result = await action(...(args as Arguments))
+        const data =
+          result && typeof result === 'object' && 'stages' in result && 'history' in result
+            ? getVideoWorkflow().repository.compact(result as VideoProject)
+            : result
+        return { success: true, data }
       } catch (error) {
         return { success: false, error: (error as Error).message }
       }
@@ -84,7 +90,20 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     return result.canceled ? null : result.filePaths[0]
   }
   handle('workflow:list', (archived: boolean) =>
-    getVideoWorkflow().repository.list(archived === true),
+    getVideoWorkflow().repository.listSummaries(archived === true),
+  )
+  handle('workflow:summary', (id: string) => getVideoWorkflow().repository.summary(id))
+  handle('workflow:history', (id: string, stage?: VideoStage, cursor?: number) =>
+    getVideoWorkflow().repository.historyPage(id, stage, cursor),
+  )
+  handle('workflow:revision', (id: string, revision: string) =>
+    getVideoWorkflow().repository.revision(id, revision),
+  )
+  handle('workflow:revisionContext', (id: string, revision: string) =>
+    getVideoWorkflow().repository.revisionContext(id, revision),
+  )
+  handle('workflow:historyAssets', (id: string, kind: 'cover' | 'music') =>
+    getVideoWorkflow().repository.historyAssets(id, kind),
   )
   handle('workflow:create', (title: string) => getVideoWorkflow().repository.create(title))
   handle('workflow:selectFinishedVideo', async () => {
@@ -100,7 +119,7 @@ export function registerVideoWorkflowHandlers(mainWindow: () => BrowserWindow | 
     (title: string, path: string, description: string, requestId: string) =>
       getVideoWorkflow().importFinishedVideo(title, path, description, requestId),
   )
-  handle('workflow:get', (id: string) => getVideoWorkflow().repository.get(id))
+  handle('workflow:get', (id: string) => getVideoWorkflow().repository.detail(id))
   handle(
     'workflow:save',
     (id: string, stage: VideoStage, payload: unknown, expected: number, request: string) =>

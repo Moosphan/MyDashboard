@@ -188,3 +188,5 @@
 生产优先建立共享Select/Combobox/DatePicker/TimePicker/ColorPicker，再替换页面调用；不得只美化select触发器却留下系统弹层。先覆盖设计工作台顶部密度与Dialog中的嵌套表单，再覆盖业务页面。Checkbox等原生input保留键盘语义，统一appearance与状态；原生语义不等于允许平台默认外观。验收包含表单值、IME、disabled/indeterminate、Escape分层关闭、焦点返回与视口避让。日期范围、12小时制、透明度等预留变体在生产实现时另验，不视为本轮已完成。
 
 `VIDEO-WORKFLOW-001` 应用内定时发布（2026-10-29 用户授权并确认错过不补发）：`ScheduledPublishing.tsx` 与 `BilibiliPublishingPanel.tsx` 沿用原生 details、VoiceInput、Button、WorkflowDialog 和既有主题，在原立即发布动作后添加默认收起的定时块。保留原主栏、审核栏和动作顺序；确认显示时间/时区、账号和版本，错误留在弹窗，取消等待计划无需改变审核。无新依赖、图标或全局样式；负责人为项目维护者，退出里程碑仍为 Video 工作流 HeroUI 3.2.6 生产迁移。日期字段及折叠块属于该局部兼容例外，未宣称完成 HeroUI 迁移。状态、键盘、主题和 Electron 证据见 [定时发布验证](video-workflow-scheduled-publishing-verification.md)。
+
+`VIDEO-WORKFLOW-001` 视频项目数据加载优化（Issue #5）：项目列表使用独立摘要，选中后读取详情；历史版本按需分页，选择历史版本后读取内容及冻结来源。保持现有信息顺序、桌面密度、主题与动作位置；分页沿用现有 Button，错误沿用既有告警样式，无新依赖、图标或全局样式。负责人和 HeroUI 迁移退出里程碑沿用 VIDEO-WORKFLOW-001。合成 Electron 回归覆盖列表、打开、创建、导入、历史选择、明暗主题、1440/1024 视口、等效缩放和键盘；design:check、design:build 与应用构建通过。工作流回归 74/74；历史摘要体积在增加 60 个合成 HTML 修订后仍为 351 字节。全量类型检查仍存在既有非工作流错误，未将其视为通过。

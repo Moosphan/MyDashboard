@@ -68,10 +68,12 @@ app.whenReady().then(async () => {
     win.webContents.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
     await delay(100)
   }
-  const input = async (selector, value) =>
-    evaluate(
+  const input = async (selector, value) => {
+    await evaluate(
       `(()=>{const el=document.querySelector(${JSON.stringify(selector)});Object.getOwnPropertyDescriptor(el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype,'value').set.call(el,${JSON.stringify(value)});el.dispatchEvent(new Event('input',{bubbles:true}))})()`,
     )
+    await delay(30)
+  }
   const call = async (action, ...args) => {
     const r = await evaluate(
       `window.electronAPI.invoke(${JSON.stringify('workflow:' + action)},...${JSON.stringify(args)})`,

@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { compareFinalRender } from '../../../shared/video-render-comparison'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   VIDEO_STAGES,
@@ -22,6 +23,10 @@ import {
   validateMotionPlan,
   type WorkflowOperation,
   type StagePayloads,
+  type VideoProjectSummary,
+  type WorkflowHistoryPage,
+  inferVideoFormat,
+  audioSourceRevisions,
 } from '../../../shared/video-workflow'
 
 function sceneChanges(
@@ -212,14 +217,226 @@ export class VideoWorkflowRepository {
         .all(archived ? 1 : 0) as { id: string }[]
     ).map((row) => this.get(row.id))
   }
-  get(id: string): VideoProject {
+  listSummaries(archived = false): VideoProjectSummary[] {
+    return this.summaryRows('p.archived=?', archived ? 1 : 0)
+  }
+  summary(id: string): VideoProjectSummary | null {
+    return this.summaryRows('p.id=?', id)[0] ?? null
+  }
+  private summaryRows(where: string, value: string | number): VideoProjectSummary[] {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT p.*, p.rowid AS sort_order,
+        json_object(${VIDEO_STAGES.map((stage) => `'${stage}',(SELECT status FROM video_workflow_revisions WHERE project_id=p.id AND stage='${stage}' ORDER BY rowid DESC LIMIT 1)`).join(',')}) AS statuses,
+        EXISTS(SELECT 1 FROM video_workflow_jobs j WHERE j.project_id=p.id AND j.state='running') AS running,
+        (SELECT json_object('imported',json_extract(payload,'$.imported') IS NOT NULL,'width',json_extract(payload,'$.width'),'height',json_extract(payload,'$.height'),'duration',json_extract(payload,'$.duration'),'cover',json_extract(payload,'$.cover')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='render' ORDER BY rowid DESC LIMIT 1) AS render,
+        (SELECT json_extract(payload,'$.cover') FROM video_workflow_revisions WHERE project_id=p.id AND stage='roughcut' ORDER BY rowid DESC LIMIT 1) AS rough_cover,
+        (SELECT json_extract(payload,'$.duration') FROM video_workflow_revisions WHERE project_id=p.id AND stage='audio' ORDER BY rowid DESC LIMIT 1) AS audio_duration,
+        (SELECT json_object('text',json_extract(payload,'$.text'),'duration',json_extract(payload,'$.duration'),'format',json_extract(payload,'$.format')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='brief' ORDER BY rowid DESC LIMIT 1) AS brief,
+        (SELECT json_object('text',json_extract(payload,'$.text'),'requirements',json_extract(payload,'$.requirements')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='copy' ORDER BY rowid DESC LIMIT 1) AS copy,
+        (SELECT json_object('title',json_extract(payload,'$.scenes[0].title'),'referenceText',json_extract(payload,'$.referenceText')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='storyboard' ORDER BY rowid DESC LIMIT 1) AS storyboard
+      FROM video_projects p WHERE ${where} ORDER BY p.updated_at DESC,p.rowid DESC
+    `,
+      )
+      .all(value) as (ProjectRow & {
+      sort_order: number
+      statuses: string
+      running: number
+      render: string | null
+      rough_cover: string | null
+      audio_duration: number | null
+      brief: string | null
+      copy: string | null
+      storyboard: string | null
+    })[]
+    return rows.map((row) => {
+      const stages = Object.fromEntries(
+        Object.entries(JSON.parse(row.statuses ?? '{}')).filter(([, status]) => status !== null),
+      ) as VideoProjectSummary['stages']
+      const render = JSON.parse(row.render ?? 'null') as {
+        imported: boolean
+        width: number
+        height: number
+        duration: number
+        cover?: WorkflowFile
+      } | null
+      const brief = JSON.parse(row.brief ?? 'null')
+      const copy = JSON.parse(row.copy ?? 'null')
+      const storyboard = JSON.parse(row.storyboard ?? 'null')
+      const format = render?.imported
+        ? render.width < render.height
+          ? 'portrait'
+          : 'landscape'
+        : inferVideoFormat(brief?.format, [
+            storyboard?.referenceText,
+            brief?.text,
+            copy?.requirements,
+            copy?.text,
+          ])
+      return {
+        id: row.id,
+        title: row.title,
+        revision: row.revision,
+        archived: Boolean(row.archived),
+        updatedAt: row.updated_at,
+        sortOrder: row.sort_order,
+        stages,
+        nextStage: render?.imported
+          ? 'publish'
+          : (VIDEO_STAGES.find((stage) => stages[stage] !== 'approved') ?? 'publish'),
+        approvedCount: Object.values(stages).filter((status) => status === 'approved').length,
+        imported: Boolean(render?.imported),
+        format,
+        duration: render?.duration ?? row.audio_duration ?? brief?.duration ?? undefined,
+        width: render?.width,
+        height: render?.height,
+        cover: render?.cover ?? JSON.parse(row.rough_cover ?? 'null') ?? undefined,
+        placeholderTitle: storyboard?.title ?? undefined,
+        running: Boolean(row.running),
+      }
+    })
+  }
+  historyPage(
+    id: string,
+    stage?: VideoStage,
+    cursor?: number | null,
+    limit = 20,
+  ): WorkflowHistoryPage {
+    if (stage !== undefined && !VIDEO_STAGES.includes(stage)) throw new Error('无效阶段')
+    const count = Math.max(1, Math.min(50, Number.isInteger(limit) ? limit : 20))
+    const rows = this.db
+      .prepare(
+        `SELECT rowid AS cursor,id,stage,version,dependencies,status,approved_at,note,created_at FROM video_workflow_revisions WHERE project_id=? ${stage ? 'AND stage=?' : ''} ${cursor ? 'AND rowid<?' : ''} ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(id, ...(stage ? [stage] : []), ...(cursor ? [cursor] : []), count + 1) as (Omit<
+      RevisionRow,
+      'payload'
+    > & { cursor: number })[]
+    return {
+      items: rows.slice(0, count).map((row) => ({
+        id: row.id,
+        stage: row.stage,
+        version: row.version,
+        dependencies: row.dependencies,
+        status: row.status,
+        approvedAt: row.approved_at,
+        note: row.note,
+        createdAt: row.created_at,
+      })),
+      nextCursor: rows.length > count ? rows[count - 1].cursor : null,
+    }
+  }
+  revision(id: string, revisionId: string): WorkflowRevision {
+    const row = this.db
+      .prepare('SELECT * FROM video_workflow_revisions WHERE project_id=? AND id=?')
+      .get(id, revisionId) as RevisionRow | undefined
+    if (!row) throw new Error('历史版本不存在')
+    return this.mapRevision(row)
+  }
+  revisionContext(id: string, revisionId: string): WorkflowRevision[] {
+    const revision = this.revision(id, revisionId)
+    const result = [revision]
+    if (revision.stage === 'audio') {
+      for (const stage of VIDEO_STAGES.slice(0, 4)) {
+        const row = this.db
+          .prepare(
+            'SELECT * FROM video_workflow_revisions WHERE project_id=? AND stage=? AND rowid<(SELECT rowid FROM video_workflow_revisions WHERE id=? AND project_id=?) ORDER BY rowid DESC LIMIT 1',
+          )
+          .get(id, stage, revisionId, id) as RevisionRow | undefined
+        if (row) result.push(this.mapRevision(row))
+      }
+    }
+    if (revision.stage === 'render' || revision.stage === 'roughcut') {
+      const render = revision.payload as StagePayloads['render']
+      for (const source of [
+        render.sourceStoryboard,
+        render.sourceNarration,
+        render.sourceAudio,
+        render.sourceRoughcut,
+      ])
+        if (source && !result.some((item) => item.id === source))
+          result.push(this.revision(id, source))
+      if (revision.stage === 'render' && !render.sourceRoughcut) {
+        const rows = this.db
+          .prepare(
+            "SELECT * FROM video_workflow_revisions WHERE project_id=? AND stage='roughcut' AND created_at<=? AND json_extract(payload,'$.manifestHash')=? ORDER BY version DESC",
+          )
+          .iterate(id, revision.createdAt, render.manifestHash)
+        for (const value of rows) {
+          const candidate = this.mapRevision(value as RevisionRow)
+          if (compareFinalRender({ history: [candidate] }, revision).source) {
+            result.push(candidate)
+            break
+          }
+        }
+      }
+    }
+    return result
+  }
+  historyAssets(id: string, kind: 'cover' | 'music') {
+    if (kind !== 'cover' && kind !== 'music') throw new Error('无效历史素材')
+    const stage = kind === 'cover' ? 'publish' : 'render'
+    const path = kind === 'cover' ? '$.platforms.bilibili.cover' : '$.music'
+    return this.db
+      .prepare(
+        'SELECT version,json_extract(payload,?) AS value FROM video_workflow_revisions WHERE project_id=? AND stage=? AND json_extract(payload,?) IS NOT NULL ORDER BY version DESC',
+      )
+      .all(path, id, stage, path)
+      .map((row) => {
+        const item = row as { version: number; value: string }
+        return { version: item.version, value: JSON.parse(item.value) }
+      })
+  }
+  detail(id: string): VideoProject {
+    return this.get(id, false)
+  }
+  compact(project: VideoProject): VideoProject {
+    const revisions = new Set(Object.values(project.stages).map((revision) => revision.id))
+    for (const revision of [project.stages.roughcut, project.stages.render]) {
+      const render = revision?.payload as StagePayloads['render'] | undefined
+      for (const source of [
+        render?.sourceStoryboard,
+        render?.sourceAudio,
+        render?.sourceNarration,
+        render?.sourceRoughcut,
+      ])
+        if (source) revisions.add(source)
+    }
+    if (project.stages.render) {
+      const source = compareFinalRender(project, project.stages.render).source
+      if (source) revisions.add(source.id)
+    }
+    if (project.stages.audio)
+      for (const source of audioSourceRevisions(project, project.stages.audio) ?? [])
+        revisions.add(source.id)
+    return { ...project, history: project.history.filter((revision) => revisions.has(revision.id)) }
+  }
+  private mapRevision(item: RevisionRow): WorkflowRevision {
+    return {
+      id: item.id,
+      stage: item.stage,
+      version: item.version,
+      payload: JSON.parse(item.payload),
+      dependencies: item.dependencies,
+      status: item.status,
+      approvedAt: item.approved_at,
+      note: item.note,
+      createdAt: item.created_at,
+    }
+  }
+  get(id: string, includeHistory = true): VideoProject {
     const row = this.db.prepare('SELECT * FROM video_projects WHERE id=?').get(id) as
       | ProjectRow
       | undefined
     if (!row) throw new Error('视频项目不存在')
     const history = (
       this.db
-        .prepare('SELECT * FROM video_workflow_revisions WHERE project_id=? ORDER BY rowid DESC')
+        .prepare(
+          includeHistory
+            ? 'SELECT * FROM video_workflow_revisions WHERE project_id=? ORDER BY rowid DESC'
+            : 'SELECT * FROM video_workflow_revisions WHERE rowid IN (SELECT MAX(rowid) FROM video_workflow_revisions WHERE project_id=? GROUP BY stage) ORDER BY rowid DESC',
+        )
         .all(id) as RevisionRow[]
     ).map((item) => ({
       id: item.id,
@@ -234,6 +451,41 @@ export class VideoWorkflowRepository {
     }))
     const stages: VideoProject['stages'] = {}
     for (const revision of history) if (!stages[revision.stage]) stages[revision.stage] = revision
+    if (!includeHistory) {
+      const sourceIds = new Set<string>()
+      for (const revision of [stages.roughcut, stages.render]) {
+        const payload = revision?.payload as StagePayloads['render'] | undefined
+        for (const source of [
+          payload?.sourceStoryboard,
+          payload?.sourceNarration,
+          payload?.sourceAudio,
+          payload?.sourceRoughcut,
+        ])
+          if (source) sourceIds.add(source)
+      }
+      for (const source of sourceIds)
+        if (!history.some((revision) => revision.id === source)) {
+          const row = this.db
+            .prepare('SELECT * FROM video_workflow_revisions WHERE project_id=? AND id=?')
+            .get(id, source) as RevisionRow | undefined
+          if (row) history.push(this.mapRevision(row))
+        }
+      if (stages.render)
+        for (const revision of this.revisionContext(id, stages.render.id))
+          if (!history.some((item) => item.id === revision.id)) history.push(revision)
+      if (stages.audio)
+        for (const revision of this.revisionContext(id, stages.audio.id))
+          if (!history.some((item) => item.id === revision.id)) history.push(revision)
+      if (history.length) {
+        const order = this.db
+          .prepare(
+            `SELECT id,rowid AS position FROM video_workflow_revisions WHERE project_id=? AND id IN (${history.map(() => '?').join(',')})`,
+          )
+          .all(id, ...history.map((revision) => revision.id)) as { id: string; position: number }[]
+        const positions = new Map(order.map((row) => [row.id, row.position]))
+        history.sort((left, right) => positions.get(right.id)! - positions.get(left.id)!)
+      }
+    }
     return {
       id: row.id,
       title: row.title,

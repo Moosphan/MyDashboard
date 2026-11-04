@@ -192,6 +192,7 @@ motion.blockers 仅列出本阶段实际未解决的动作、元素或素材缺�
 当前修改意见优先于旧要求中与其冲突的部分，其余创作要求继续保留。用户要求修改画面时必须返回实质改变后的完整 HTML；要求修改动效时必须更新对应 MG规划，不能原样返回旧分镜或只改无关文字。
 已审核简报：${JSON.stringify(stageValue(project, 'brief'))}
 已审核文案：${JSON.stringify(stageValue(project, 'copy') ?? null)}
+${stage === 'storyboard' && !sceneId && stageValue(project, 'storyboard') ? '这是整组重新设计：保留已审核事实、镜头顺序、稳定 ID、目标画幅和用户要求的系列风格，重新设计每镜的主体形象、空间关系和构图。旧 HTML 仅用于核对内容与动作目标，不可作为继续微调的画面底稿；不得只改坐标、间距、颜色、注释或随机种子冒充重新设计。旧版如果简陋或违背指定绘画技能，应从人物和物体结构重画，不能继续继承。' : ''}
 已有分镜：${JSON.stringify(stageValue(project, 'storyboard') ?? null)}
 自由创作要求：${settings.referenceText ?? ''}
 参考链接：${JSON.stringify(settings.references ?? [])}

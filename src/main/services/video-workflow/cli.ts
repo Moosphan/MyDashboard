@@ -12,6 +12,7 @@ import { homedir } from 'node:os'
 import type { WorkflowRuntime } from '../../../shared/video-workflow'
 import { workflowCommand } from './process'
 import { BilibiliCatbus } from './catbus'
+import { drawingSkillContext } from './drawing-skills'
 
 function findExecutable(name: string) {
   const versions = join(homedir(), '.nvm', 'versions', 'node')
@@ -139,14 +140,23 @@ export async function runAgent(
   cwd: string,
   prompt: string,
   signal: AbortSignal,
-  options: { timeout?: number; onProgress?: (message: string) => void } = {},
+  options: {
+    timeout?: number
+    onProgress?: (message: string) => void
+    drawingSkillRoots?: string[]
+  } = {},
 ): Promise<unknown> {
   if (prompt.length > 200000)
     throw new Error('创作输入超过 200000 字符，请精简分镜正文、HTML 或参考材料后重试')
   const output = join(cwd, 'agent-result.txt')
   const timeout = options.timeout ?? 900000
   const minutes = Math.ceil(timeout / 60000)
-  const taskPrompt = `这是宿主视频工作流中的非交互内容生成任务。只返回所要求的完整 JSON。可以读取用户明确指定的本地参考和绘图技能，按其视觉语言创作；不要启动浏览器、渲染器、预览服务或子代理，不修改文件，不执行后续工作流。宿主负责预览、画幅与动效校验，生成结果仍需用户审核。不要为工具不可用而等待或重复尝试。\n\n${prompt}`
+  const drawingContext = drawingSkillContext(prompt, options.drawingSkillRoots)
+  const taskPrompt = `这是宿主视频工作流中的非交互内容生成任务。只返回所要求的完整 JSON。可以读取用户明确指定的本地参考和绘图技能，按其视觉语言创作；不要启动浏览器、渲染器、预览服务或子代理，不修改文件，不执行后续工作流。宿主负责预览、画幅与动效校验，生成结果仍需用户审核。不要为工具不可用而等待或重复尝试。\n\n${drawingContext}\n\n${prompt}`
+  if (taskPrompt.length > 200000)
+    throw new Error(
+      '加载绘画技能后的创作输入超过 200000 字符，请精简参考材料或使用单镜修改；原版本已保留',
+    )
   const started = Date.now()
   const progress = () =>
     options.onProgress?.(
@@ -155,6 +165,8 @@ export async function runAgent(
   const timer = options.onProgress ? setInterval(progress, 15000) : undefined
   try {
     progress()
+    if (drawingContext)
+      options.onProgress?.('已加载 chinese-ink-elements 绘画技能及人物、笔墨、山水、器物与质检参考')
     if (executor === 'codex') {
       const integrations: unknown = JSON.parse(
         await workflowCommand(

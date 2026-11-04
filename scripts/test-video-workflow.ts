@@ -22,7 +22,7 @@ import {
   projectVideoFormat,
   videoFrame,
 } from '../src/shared/video-workflow'
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { WorkflowFiles } from '../src/main/services/video-workflow/files'
@@ -4051,6 +4051,121 @@ test('Codex generation disables unrelated integrations and delegates preview to 
     assert.match(invocation.prompt, /不要.*浏览器/)
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('explicit drawing skill requirements reach both CLI adapters as actual reference content', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'workflow-drawing-skill-'))
+  try {
+    const executable = join(root, 'fake-agent')
+    const capture = join(root, 'prompt.txt')
+    writeFileSync(
+      executable,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');if(process.argv[2]==='mcp'){process.stdout.write('[]');process.exit(0)}let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync(${JSON.stringify(capture)},prompt);const output=JSON.stringify({text:'通过'});const index=process.argv.indexOf('--output-last-message');if(index>=0)fs.writeFileSync(process.argv[index+1],output);else process.stdout.write(JSON.stringify({result:output}));});\n`,
+    )
+    chmodSync(executable, 0o700)
+    const skill = join(root, 'skills', 'chinese-ink-elements')
+    mkdirSync(join(skill, 'references'), { recursive: true })
+    writeFileSync(join(skill, 'SKILL.md'), 'INK_SKILL_MAIN：按用户要求画水墨人物。')
+    const documents = [
+      'style-system',
+      'figure-painting',
+      'motif-recipes',
+      'objects-and-materials',
+      'living-animals',
+      'craft-and-constructed-scenes',
+      'quality-review',
+    ]
+    for (const name of documents)
+      writeFileSync(
+        join(skill, 'references', name + '.md'),
+        `INK_REFERENCE_${name}：形体结构与笔墨。`,
+      )
+    const runtime = {
+      ...new WorkflowRuntimeManager(root).get(),
+      codexPath: executable,
+      claudePath: executable,
+    }
+    for (const executor of ['codex', 'claude'] as const) {
+      await runAgent(
+        executor,
+        runtime,
+        root,
+        '使用 chinese-ink-elements 绘制人物、山水和器物分镜',
+        new AbortController().signal,
+        { drawingSkillRoots: [join(root, 'skills')] },
+      )
+      const prompt = readFileSync(capture, 'utf8')
+      assert.ok(prompt.includes('INK_SKILL_MAIN'), 'Skill must be loaded, not merely named')
+      for (const name of documents) assert.ok(prompt.includes(`INK_REFERENCE_${name}`), name)
+      assert.match(prompt, /内联 SVG/)
+      assert.match(prompt, /不得.*几何/)
+      assert.match(prompt, /逐个人物.*肩.*肘.*腕.*髋.*膝.*踝/)
+      assert.match(prompt, /手掌.*拇指.*指节/)
+      assert.match(prompt, /眉眼.*鼻翼.*口唇.*耳廓.*下颌/)
+      assert.match(prompt, /不得.*长袖.*缺失/)
+      assert.match(prompt, /不得.*视觉验收/)
+    }
+    writeFileSync(join(skill, 'references', 'style-system.md'), 'x'.repeat(210000))
+    await assert.rejects(
+      runAgent(
+        'codex',
+        runtime,
+        root,
+        '使用 chinese-ink-elements 绘画',
+        new AbortController().signal,
+        {
+          drawingSkillRoots: [join(root, 'skills')],
+        },
+      ),
+      /加载绘画技能后的创作输入超过/,
+    )
+    writeFileSync(join(skill, 'references', 'style-system.md'), 'INK_REFERENCE_style-system')
+    rmSync(join(skill, 'references', 'figure-painting.md'))
+    await assert.rejects(
+      runAgent(
+        'codex',
+        runtime,
+        root,
+        '使用 chinese-ink-elements 绘画',
+        new AbortController().signal,
+        { drawingSkillRoots: [join(root, 'skills')] },
+      ),
+      /绘画技能.*不完整/,
+    )
+    await assert.rejects(
+      runAgent(
+        'codex',
+        runtime,
+        root,
+        '使用 chinese-ink-elements 绘画',
+        new AbortController().signal,
+        { drawingSkillRoots: [join(root, 'missing')] },
+      ),
+      /未找到.*chinese-ink-elements/,
+    )
+    assert.deepEqual(
+      await runAgent('claude', runtime, root, '普通技术分镜', new AbortController().signal, {
+        drawingSkillRoots: [join(root, 'missing')],
+      }),
+      { text: '通过' },
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('full storyboard regeneration requests a new composition while single-scene edits preserve their scope', () => {
+  const { db, state } = visualFixture()
+  try {
+    const full = agentPrompt(state, 'storyboard', { template: 'history' }, '')
+    assert.match(full, /整组重新设计/)
+    assert.match(full, /旧 HTML.*不可作为/)
+    const single = agentPrompt(state, 'storyboard', { template: 'history' }, '', 'one', '调整衣纹')
+    assert.doesNotMatch(single, /整组重新设计/)
+    assert.match(single, /仅重绘 ID=one/)
+  } finally {
+    db.close()
   }
 })
 

@@ -91,6 +91,8 @@ workspace instead of a loose collection of tabs and services.
 
 Visual-template storyboard planning recognizes Markdown headings (levels 1–6), keeps their context across paragraphs, and accepts plain text without headings. Display titles stay within 32 Unicode characters; long headings remain intact in scene bodies. Paragraphs split into scenes of up to 90 characters without dropping text, with a maximum of 60 scenes. Generated storyboards still require review.
 
+When a generation request names `chinese-ink-elements`, the host loads its installed `SKILL.md` and painting references into the prompt for both Codex and Claude. It searches skills under `CODEX_HOME` (default `~/.codex`), `~/.agents`, and `~/.claude`; missing or incomplete references produce an error instead of silently falling back. Full storyboard regeneration requests new compositions while preserving facts, scene order, IDs, and the requested series style. These instructions do not replace visual review or guarantee illustration quality.
+
 ### Insights
 
 - RSS subscriptions and article reading

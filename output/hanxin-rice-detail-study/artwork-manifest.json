@@ -1,0 +1,24 @@
+{
+  "id": "hanxin-rice-detail-study",
+  "width": 1600,
+  "height": 1000,
+  "transparent": true,
+  "source": "original editable SVG",
+  "sceneWidth": 1920,
+  "sceneHeight": 1080,
+  "groups": [
+    "old-woman-head",
+    "old-woman-body",
+    "old-woman-legs",
+    "old-woman-left-arm",
+    "old-woman-right-arm",
+    "youth-head",
+    "youth-body",
+    "youth-legs",
+    "youth-right-arm",
+    "youth-left-arm",
+    "youth-hands",
+    "shared-bowl"
+  ],
+  "note": "原创历史人物意象；服饰和容貌不是历史复原。"
+}

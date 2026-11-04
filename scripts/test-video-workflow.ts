@@ -4189,6 +4189,101 @@ test('publishing settings persist with the reviewed metadata and reject invalid 
   }
 })
 
+test('template planning preserves plain paragraphs, wrapped lines and Unicode without requiring headings', () => {
+  const { db, state } = visualFixture()
+  try {
+    const paragraphs = [
+      '这是没有章节标题的正文。'.repeat(12),
+      '这是一行正文\n下一行仍然属于正文，不能因标题识别而丢失。',
+      '🌸'.repeat(100),
+    ]
+    stageValue(state, 'copy')!.text = paragraphs.join('\r\n\r\n')
+    for (const template of ['technical', 'editorial', 'product', 'history']) {
+      const result = templateStoryboard(state, { template })
+      validatePayload('storyboard', result)
+      assert.equal(result.scenes.map((scene) => scene.body).join(''), paragraphs.join(''))
+      assert.ok(result.scenes.every((scene) => Array.from(scene.title).length <= 32))
+      assert.ok(result.scenes.every((scene) => Array.from(scene.body).length <= 90))
+    }
+  } finally {
+    db.close()
+  }
+})
+
+test('template storyboard generation persists a reviewable revision for unstructured copy', async () => {
+  const { db, repository, project } = fixture()
+  const root = mkdtempSync(join(tmpdir(), 'workflow-template-paragraphs-'))
+  const service = new VideoWorkflowService(root, db, () => {
+    throw new Error('Template planning must not invoke voice synthesis')
+  })
+  try {
+    const text = '这是完整正文，并没有单独设置章节标题。'.repeat(20)
+    let state = project
+    for (const stage of ['brief', 'copy'] as const) {
+      state = repository.save(
+        state.id,
+        stage,
+        stage === 'brief' ? { text: '竖版完整内容', duration: 60, format: 'portrait' } : { text },
+        state.revision,
+        randomUUID(),
+      )
+      state = repository.approve(
+        state.id,
+        stage,
+        state.stages[stage]!.id,
+        state.revision,
+        randomUUID(),
+      )
+    }
+    const job = await service.generate({
+      projectId: state.id,
+      stage: 'storyboard',
+      executor: 'template',
+      expectedRevision: state.revision,
+      requestId: randomUUID(),
+      settings: { mode: 'template', template: 'technical' },
+    })
+    for (let attempt = 0; attempt < 100 && repository.job(job.id)?.state === 'running'; attempt++)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.equal(repository.job(job.id)?.state, 'succeeded', repository.job(job.id)?.error ?? '')
+    const revision = repository.get(state.id).stages.storyboard!
+    assert.equal(revision.status, 'review')
+    assert.equal(revision.payload.format, 'portrait')
+    assert.equal(revision.payload.scenes.map((scene) => scene.body).join(''), text)
+  } finally {
+    await service.dispose()
+    db.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('template planning keeps heading context across blank paragraphs and preserves long headings', () => {
+  const { db, state } = visualFixture()
+  try {
+    const title = '详细解释一个不能因为长度超限而丢失任何关键信息的章节标题'.repeat(2)
+    stageValue(state, 'copy')!.text =
+      `## 核心观点\n\n第一段正文\n\n第二段正文\n###### ${title}\n后续内容\n# 总结\n结尾内容`
+    const result = templateStoryboard(state, { template: 'technical' })
+    validatePayload('storyboard', result)
+    assert.deepEqual(
+      result.scenes.slice(0, 2).map((scene) => scene.title),
+      ['核心观点', '核心观点'],
+    )
+    assert.equal(
+      result.scenes.map((scene) => scene.body).join(''),
+      `第一段正文第二段正文${title}\n后续内容结尾内容`,
+    )
+    assert.equal(result.scenes.at(-1)!.title, '总结')
+    assert.ok(result.scenes.every((scene) => Array.from(scene.title).length <= 32))
+    stageValue(state, 'copy')!.text = '# 只有标题'
+    assert.equal(templateStoryboard(state, {}).scenes[0].body, '只有标题')
+    stageValue(state, 'copy')!.text = '完整段落。'.repeat(1200)
+    assert.throws(() => templateStoryboard(state, {}), /超过 60 镜/)
+  } finally {
+    db.close()
+  }
+})
+
 test('template planning splits long paragraphs into distinct layouts without dropping text', () => {
   const { db, repository, project } = fixture()
   project.stages.copy = {

@@ -56,19 +56,33 @@ export function templateStoryboard(
   project: VideoProject,
   settings: Partial<StoryboardPayload>,
 ): StoryboardPayload {
-  const copy = stageValue(project, 'copy')!.text
-  const sections = copy.split(/\n\s*\n|(?=^#{1,3}\s)/m).filter((part) => part.trim())
+  const copy = stageValue(project, 'copy')!.text.replace(/\r\n?/g, '\n')
+  const sections = copy.split(/(?=^ {0,3}#{1,6}[ \t]+)/m).filter((part) => part.trim())
   const layouts = sceneLayoutsForTemplate(settings.template ?? 'technical')
   const fragments = sections.flatMap((part) => {
-    const lines = part.trim().split('\n'),
-      title = lines[0].replace(/^#+\s*/, '')
-    if (Array.from(title).length > 32)
-      throw new Error('模板分镜标题超过 32 字，请精简章节标题或改用 Agent 规划分镜')
-    const characters = Array.from(lines.slice(1).join('\n') || part)
-    return Array.from({ length: Math.ceil(characters.length / 90) }, (_, index) => ({
-      title,
-      body: characters.slice(index * 90, (index + 1) * 90).join(''),
-    }))
+    const lines = part.trim().split('\n')
+    const heading = /^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(lines[0])?.[1]
+    const content = heading ? lines.slice(1).join('\n').trim() : part.trim()
+    const body =
+      heading && (!content || Array.from(heading).length > 32)
+        ? [heading, content].filter(Boolean).join('\n')
+        : content
+    return body
+      .split(/\n[ \t]*\n+/)
+      .filter((paragraph) => paragraph.trim())
+      .flatMap((paragraph) => {
+        const label = heading ?? paragraph.split(/[\n。！？!?]/)[0]
+        const titleCharacters = Array.from(label.trim().replace(/[ \t]+/g, ' '))
+        const title =
+          titleCharacters.length > 32
+            ? titleCharacters.slice(0, 31).join('') + '…'
+            : titleCharacters.join('')
+        const characters = Array.from(paragraph)
+        return Array.from({ length: Math.ceil(characters.length / 90) }, (_, index) => ({
+          title: title || '内容说明',
+          body: characters.slice(index * 90, (index + 1) * 90).join(''),
+        }))
+      })
   })
   if (fragments.length > 60)
     throw new Error('文案拆分后超过 60 镜，请先精简文案或由 Agent 规划分镜')

@@ -89,6 +89,8 @@ workspace instead of a loose collection of tabs and services.
 - Audio asset library
 - HTML presentation asset management
 
+Visual-template storyboard planning recognizes Markdown headings (levels 1–6), keeps their context across paragraphs, and accepts plain text without headings. Display titles stay within 32 Unicode characters; long headings remain intact in scene bodies. Paragraphs split into scenes of up to 90 characters without dropping text, with a maximum of 60 scenes. Generated storyboards still require review.
+
 ### Insights
 
 - RSS subscriptions and article reading

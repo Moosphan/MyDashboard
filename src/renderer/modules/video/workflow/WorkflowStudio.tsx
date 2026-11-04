@@ -35,6 +35,29 @@ import { StageWorkspace } from './StageWorkspace'
 import { WorkflowDialog } from './WorkflowDialog'
 import { useWorkflowHistory, useWorkflowHistoryRestore } from './useWorkflowHistory'
 
+function WorkflowProjectCover({ project }: { project: VideoProjectSummary }) {
+  const [failedSource, setFailedSource] = useState('')
+  const source = project.cover ? mediaUrl(project.id, project.cover) : ''
+  return (
+    <div className="workflow-project-thumb">
+      {source && failedSource !== source ? (
+        <img
+          src={source}
+          alt="视频封面"
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailedSource(source)}
+        />
+      ) : (
+        <div className="workflow-project-placeholder">
+          <span>{source ? '封面加载失败' : '暂无封面'}</span>
+          <small>{project.format === 'portrait' ? '9:16' : '16:9'} · VIDEO PROJECT</small>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function WorkflowStudio({
   onVoiceover,
   onSettings,
@@ -429,22 +452,10 @@ export function WorkflowStudio({
             <div className="workflow-project-list">
               {projects.map((project) => {
                 const current = project.nextStage
-                const cover = project.cover
                 return (
                   <Card key={project.id} className="workflow-project-card">
                     <div className="workflow-project-row">
-                      <div className="workflow-project-thumb">
-                        {cover ? (
-                          <img src={mediaUrl(project.id, cover)} alt="成片封面" />
-                        ) : (
-                          <div className="workflow-project-placeholder" aria-hidden="true">
-                            <span>{project.placeholderTitle ?? project.title}</span>
-                            <small>
-                              {project.format === 'portrait' ? '9:16' : '16:9'} · VIDEO PROJECT
-                            </small>
-                          </div>
-                        )}
-                      </div>
+                      <WorkflowProjectCover project={project} />
                       <div className="workflow-project-info">
                         <div className="workflow-facts">
                           <span>{project.imported ? '外部成片' : '视频创作'}</span>

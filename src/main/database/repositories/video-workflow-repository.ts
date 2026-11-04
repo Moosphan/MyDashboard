@@ -230,7 +230,8 @@ export class VideoWorkflowRepository {
       SELECT p.*, p.rowid AS sort_order,
         json_object(${VIDEO_STAGES.map((stage) => `'${stage}',(SELECT status FROM video_workflow_revisions WHERE project_id=p.id AND stage='${stage}' ORDER BY rowid DESC LIMIT 1)`).join(',')}) AS statuses,
         EXISTS(SELECT 1 FROM video_workflow_jobs j WHERE j.project_id=p.id AND j.state='running') AS running,
-        (SELECT json_object('imported',json_extract(payload,'$.imported') IS NOT NULL,'width',json_extract(payload,'$.width'),'height',json_extract(payload,'$.height'),'duration',json_extract(payload,'$.duration'),'cover',json_extract(payload,'$.cover')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='render' ORDER BY rowid DESC LIMIT 1) AS render,
+        (SELECT json_object('id',id,'imported',json_extract(payload,'$.imported') IS NOT NULL,'width',json_extract(payload,'$.width'),'height',json_extract(payload,'$.height'),'duration',json_extract(payload,'$.duration'),'cover',json_extract(payload,'$.cover')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='render' ORDER BY rowid DESC LIMIT 1) AS render,
+        (SELECT json_object('file',json_extract(payload,'$.platforms.bilibili.cover.file'),'sourceRenderId',json_extract(payload,'$.platforms.bilibili.cover.sourceRenderId')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='publish' ORDER BY rowid DESC LIMIT 1) AS publication_cover,
         (SELECT json_extract(payload,'$.cover') FROM video_workflow_revisions WHERE project_id=p.id AND stage='roughcut' ORDER BY rowid DESC LIMIT 1) AS rough_cover,
         (SELECT json_extract(payload,'$.duration') FROM video_workflow_revisions WHERE project_id=p.id AND stage='audio' ORDER BY rowid DESC LIMIT 1) AS audio_duration,
         (SELECT json_object('text',json_extract(payload,'$.text'),'duration',json_extract(payload,'$.duration'),'format',json_extract(payload,'$.format')) FROM video_workflow_revisions WHERE project_id=p.id AND stage='brief' ORDER BY rowid DESC LIMIT 1) AS brief,
@@ -244,6 +245,7 @@ export class VideoWorkflowRepository {
       statuses: string
       running: number
       render: string | null
+      publication_cover: string | null
       rough_cover: string | null
       audio_duration: number | null
       brief: string | null
@@ -255,11 +257,16 @@ export class VideoWorkflowRepository {
         Object.entries(JSON.parse(row.statuses ?? '{}')).filter(([, status]) => status !== null),
       ) as VideoProjectSummary['stages']
       const render = JSON.parse(row.render ?? 'null') as {
+        id: string
         imported: boolean
         width: number
         height: number
         duration: number
         cover?: WorkflowFile
+      } | null
+      const publicationCover = JSON.parse(row.publication_cover ?? 'null') as {
+        file?: WorkflowFile
+        sourceRenderId?: string
       } | null
       const brief = JSON.parse(row.brief ?? 'null')
       const copy = JSON.parse(row.copy ?? 'null')
@@ -291,7 +298,13 @@ export class VideoWorkflowRepository {
         duration: render?.duration ?? row.audio_duration ?? brief?.duration ?? undefined,
         width: render?.width,
         height: render?.height,
-        cover: render?.cover ?? JSON.parse(row.rough_cover ?? 'null') ?? undefined,
+        cover:
+          (render && publicationCover?.sourceRenderId === render.id
+            ? publicationCover.file
+            : undefined) ??
+          render?.cover ??
+          JSON.parse(row.rough_cover ?? 'null') ??
+          undefined,
         placeholderTitle: storyboard?.title ?? undefined,
         running: Boolean(row.running),
       }

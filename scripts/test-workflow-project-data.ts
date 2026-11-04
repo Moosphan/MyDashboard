@@ -157,6 +157,27 @@ test('compact detail preserves frozen render references while history pages omit
   }
 })
 
+test('project summaries prefer the current publication cover and fall back after a new render', () => {
+  const { db, repository } = fixture()
+  try {
+    const project = repository.create('Synthetic cover selection')
+    const insert = db.prepare(
+      'INSERT INTO video_workflow_revisions(id,project_id,stage,version,payload,dependencies,status,note,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+    )
+    const renderId = randomUUID()
+    const frame = { id: 'render-frame' }
+    const cover = { file: { id: 'publication-cover' }, sourceRenderId: renderId }
+    insert.run(renderId, project.id, 'render', 1, JSON.stringify({ cover: frame }), '', 'approved', '', '2026-11-01')
+    insert.run(randomUUID(), project.id, 'publish', 1, JSON.stringify({ platforms: { bilibili: { cover } } }), '', 'review', '', '2026-11-02')
+    assert.deepEqual(repository.summary(project.id)?.cover, cover.file)
+    insert.run(randomUUID(), project.id, 'render', 2, JSON.stringify({ cover: frame }), '', 'review', '', '2026-11-03')
+    assert.deepEqual(repository.summary(project.id)?.cover, frame)
+    assert.equal(repository.summary(repository.create('No cover').id)?.cover, undefined)
+  } finally {
+    db.close()
+  }
+})
+
 test('summary preserves import, archive, duration and latest stage semantics', () => {
   const { db, repository } = fixture()
   try {

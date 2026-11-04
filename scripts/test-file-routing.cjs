@@ -67,6 +67,13 @@ app.whenReady().then(async () => {
     console.log('PASS file cold start renders dashboard without navigation or HTTP server')
     await route('Writing', '/writing', 'Writing Studio')
     await route('Video', '/video', '新建视频项目')
+    await wait('document.querySelector(".workflow-project-thumb img")?.naturalWidth>0', 'project cover loaded')
+    assert.equal(await evaluate('document.querySelector(".workflow-project-thumb img").getAttribute("src")'), `video-workflow://${seededProject.id}/${seededProject.stages.render.payload.cover.id}`)
+    await evaluate('document.querySelector(".workflow-project-thumb img").dispatchEvent(new Event("error"))')
+    await wait('document.querySelector(".workflow-project-placeholder span")?.textContent==="封面加载失败"')
+    assert.ok(!await evaluate(`document.querySelector('.workflow-project-thumb').textContent.includes(${JSON.stringify(seededProject.title)})`))
+    const emptyProject = await evaluate('window.electronAPI.invoke("workflow:create", "Synthetic project without cover")')
+    assert.equal(emptyProject.success, true)
     const media = seededProject.stages.render.payload.file
     assert.ok(media)
     const mediaSource = `video-workflow://${seededProject.id}/${media.id}`
@@ -91,6 +98,11 @@ app.whenReady().then(async () => {
     assert.equal(await evaluate('document.querySelector(\'img[alt="MyDashboard logo"]\').naturalWidth>0'), true)
     assert.ok(await evaluate('document.styleSheets.length>0 && getComputedStyle(document.querySelector("aside")).display==="flex"'))
     assert.ok(await evaluate('document.fonts.load(\'20px "Material Symbols Outlined"\').then(fonts=>fonts.length>0)'))
+    await click('Video')
+    await wait('document.querySelectorAll(".workflow-project-row").length===2')
+    await wait('document.querySelector(".workflow-project-thumb img")?.naturalWidth>0')
+    assert.equal(await evaluate('document.querySelector(".workflow-project-placeholder span").textContent'), '暂无封面')
+    assert.equal(await evaluate('document.querySelector(".workflow-project-placeholder").textContent.includes("Synthetic")'), false)
     const screenDirectory = join(fixtureRoot, 'screens')
     mkdirSync(screenDirectory)
     for (const theme of ['light', 'dark']) {

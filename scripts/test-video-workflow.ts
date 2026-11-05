@@ -30,7 +30,9 @@ import { workflowCommand } from '../src/main/services/video-workflow/process'
 import { publicIPv4 } from '../src/main/services/video-workflow/references'
 import {
   parseAgentJson,
+  parseDeepSeekJson,
   runAgent,
+  selectWorkflowAgent,
   WorkflowRuntimeManager,
 } from '../src/main/services/video-workflow/cli'
 import {
@@ -1141,7 +1143,27 @@ test('explicit MG requests invoke the motion Agent before roughcut rendering and
       await new Promise((resolve) => setTimeout(resolve, 20))
     assert.match(repository.job(incomplete.id)!.error ?? '', /必须覆盖所有分镜/)
     assert.equal(repository.get(project.id).stages.roughcut, undefined)
-    service.runtime.set({ codexPath: '', claudePath: '' })
+    const deepseek = join(root, 'motion-deepseek')
+    writeFileSync(
+      deepseek,
+      `#!/usr/bin/env node\nprocess.stdin.resume();process.stdin.on('end',()=>{for(const event of [{type:'session',sessionId:'test'},{type:'status',phase:'turn_end',reason:{kind:'completed'}},{type:'final',text:JSON.stringify({requiresUpstream:true,reason:'DeepSeek 已处理当前动效要求'})}])process.stdout.write(JSON.stringify(event)+'\\n')});\n`,
+    )
+    chmodSync(deepseek, 0o700)
+    service.runtime.set({ deepseekPath: deepseek })
+    const selected = await service.generate({
+      ...request,
+      requestId: randomUUID(),
+      agentExecutor: 'deepseek',
+    })
+    for (
+      let attempt = 0;
+      attempt < 100 && repository.job(selected.id)!.state === 'running';
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    assert.match(repository.job(selected.id)!.error ?? '', /DeepSeek 已处理当前动效要求/)
+    assert.equal(repository.get(project.id).stages.roughcut, undefined)
+    service.runtime.set({ codexPath: '', claudePath: '', deepseekPath: '' })
     await assert.rejects(
       service.generate({ ...request, requestId: randomUUID() }),
       /MG.*Codex.*Claude/,
@@ -3781,6 +3803,160 @@ test('agent JSON parsing supports Codex plain output and Claude envelopes, rejec
     text: 'hello',
   })
   assert.throws(() => parseAgentJson('Here is your script: hello'), /JSON/)
+})
+
+test('DeepSeek runtime configuration preserves legacy defaults and explicit agent selection', () => {
+  const root = mkdtempSync(join(tmpdir(), 'workflow-deepseek-runtime-'))
+  try {
+    const manager = new WorkflowRuntimeManager(root)
+    const executable = join(root, 'dsh executable')
+    writeFileSync(executable, '')
+    manager.set({ codexPath: '', claudePath: '', deepseekPath: executable })
+    const restored = new WorkflowRuntimeManager(root).get()
+    assert.equal(restored.deepseekPath, executable)
+    assert.equal(selectWorkflowAgent(restored), 'deepseek')
+    assert.equal(
+      selectWorkflowAgent({ ...restored, codexPath: executable }, 'deepseek'),
+      'deepseek',
+    )
+    assert.throws(() => selectWorkflowAgent(restored, 'codex'), /配置.*Codex/)
+    assert.throws(() => manager.set({ deepseekPath: 'relative/dsh' }), /绝对路径/)
+    const legacy = { ...restored }
+    delete legacy.deepseekPath
+    writeFileSync(join(root, 'config/video-workflow.json'), JSON.stringify(legacy))
+    assert.equal(typeof manager.get().deepseekPath, 'string')
+    manager.set({ deepseekPath: '' })
+    assert.throws(() => selectWorkflowAgent(manager.get()), /Codex.*Claude.*DeepSeek/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('DeepSeek headless parsing requires a completed turn and terminal final JSON', () => {
+  const stream = (reason: unknown, text: string) =>
+    [
+      { type: 'session', sessionId: 'synthetic' },
+      { type: 'thinking', text: '{"text":"discard intermediate output"}' },
+      { type: 'status', phase: 'turn_end', reason },
+      { type: 'final', text },
+    ]
+      .map((event) => JSON.stringify(event))
+      .join('\n') + '\n'
+  assert.deepEqual(
+    parseDeepSeekJson(stream({ kind: 'completed' }, '```json\n{"text":"完成"}\n```')),
+    { text: '完成' },
+  )
+  for (const reason of [{ kind: 'aborted' }, { kind: 'error' }, undefined])
+    assert.throws(() => parseDeepSeekJson(stream(reason, '{"text":"旧结果"}')), /DeepSeek/)
+  assert.throws(
+    () => parseDeepSeekJson('{"type":"text","text":"{\\"text\\":\\"尚未完成\\"}"}\n'),
+    /DeepSeek/,
+  )
+  assert.throws(() => parseDeepSeekJson(stream({ kind: 'completed' }, '{"text":')), /JSON/)
+  assert.throws(
+    () =>
+      parseDeepSeekJson(
+        stream({ kind: 'completed' }, '{"text":"旧结果"}') +
+          '{"type":"error","message":"failed"}\n',
+      ),
+    /DeepSeek/,
+  )
+  assert.throws(
+    () => parseDeepSeekJson('not json\n' + stream({ kind: 'completed' }, '{"text":"完成"}')),
+    /DeepSeek/,
+  )
+})
+
+test('DeepSeek runtime checks support npm JavaScript entrypoints without executable permissions', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'workflow-deepseek-check-'))
+  try {
+    const executable = join(root, 'dsh entry.cjs')
+    writeFileSync(executable, "process.stdout.write('dsh 0.2.1-rc.5\\n')")
+    const manager = new WorkflowRuntimeManager(root)
+    manager.set({
+      nodePath: process.env.WORKFLOW_TEST_NODE ?? new WorkflowRuntimeManager(root).get().nodePath,
+      deepseekPath: executable,
+      codexPath: '',
+      claudePath: '',
+      catbusPath: '',
+      hyperframesPath: '',
+      ffmpegPath: '',
+      ffprobePath: '',
+    })
+    const checks = await manager.check(root)
+    const deepseek = checks.find((check) => check.key === 'deepseekPath')
+    assert.equal(deepseek?.ok, true, deepseek?.detail)
+    assert.match(deepseek.detail, /dsh 0\.2\.1-rc\.5/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('DeepSeek adapter sends stdin through official headless flags and preserves process failure', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'workflow-deepseek-adapter-'))
+  try {
+    const executable = join(root, 'dsh test executable')
+    const capture = join(root, 'capture.json')
+    const answer = '{"text":"DeepSeek 完成"}'
+    const stream =
+      [
+        { type: 'session', sessionId: 'synthetic' },
+        { type: 'status', phase: 'turn_end', reason: { kind: 'completed' } },
+        { type: 'final', text: answer },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n'
+    writeFileSync(
+      executable,
+      `#!/usr/bin/env node\nconst fs=require('node:fs');let prompt='';process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{const args=process.argv.slice(2);fs.writeFileSync(${JSON.stringify(capture)},JSON.stringify({args,prompt,patch:fs.readFileSync(args[args.indexOf('--patch')+1],'utf8')}));process.stdout.write(${JSON.stringify(stream)});});\n`,
+    )
+    chmodSync(executable, 0o700)
+    const runtime = {
+      ...new WorkflowRuntimeManager(root).get(),
+      deepseekPath: executable,
+      claudePath: '',
+    }
+    const prompt = '标题包含 $()、` 和中文，不应进入命令参数'
+    assert.deepEqual(
+      await runAgent('deepseek', runtime, root, prompt, new AbortController().signal),
+      { text: 'DeepSeek 完成' },
+    )
+    const invocation = JSON.parse(readFileSync(capture, 'utf8'))
+    assert.deepEqual(invocation.args.slice(0, 2), ['--profile', 'headless'])
+    assert.deepEqual(invocation.args.slice(-2), ['--json', '-'])
+    assert.ok(invocation.args.indexOf('--patch') < invocation.args.indexOf('--json'))
+    assert.ok(!invocation.args.some((argument: string) => argument.includes(prompt)))
+    assert.ok(invocation.prompt.includes(prompt))
+    assert.match(invocation.patch, /read-only/)
+    assert.match(invocation.patch, /never/)
+    writeFileSync(
+      executable,
+      `#!/usr/bin/env node\nprocess.stdin.resume();process.stdin.on('end',()=>{process.stdout.write(${JSON.stringify(stream)});process.stderr.write('DEEPSEEK_API_KEY=sk-syntheticsecret123456789');process.exit(1)});\n`,
+    )
+    await assert.rejects(
+      runAgent('deepseek', runtime, root, prompt, new AbortController().signal),
+      (error) => {
+        assert.match((error as Error).message, /退出码 1/)
+        assert.ok(!(error as Error).message.includes('sk-syntheticsecret123456789'))
+        return true
+      },
+    )
+    writeFileSync(
+      executable,
+      '#!/usr/bin/env node\nprocess.stdin.resume();setInterval(()=>{},1000)\n',
+    )
+    const controller = new AbortController()
+    const pending = runAgent('deepseek', runtime, root, prompt, controller.signal)
+    const cancelled = assert.rejects(pending, /取消/)
+    controller.abort()
+    await cancelled
+    await assert.rejects(
+      runAgent('deepseek', runtime, root, prompt, new AbortController().signal, { timeout: 50 }),
+      /超时/,
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('history template is reusable offline and preserves escaped content in every layout', () => {

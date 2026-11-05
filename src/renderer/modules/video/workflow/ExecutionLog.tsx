@@ -1,6 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { type VideoStage, type WorkflowJob } from '@shared/video-workflow'
+import {
+  isWorkflowAgent,
+  WORKFLOW_AGENT_LABELS,
+  type VideoStage,
+  type WorkflowJob,
+} from '@shared/video-workflow'
 
 const taskNames: Record<VideoStage, string> = {
   brief: '整理创作简报',
@@ -28,8 +33,7 @@ function executorName(job: WorkflowJob) {
   if (job.operation?.action === 'reuse-audio') return '沿用已保存配音'
   if (job.operation?.action === 'reuse-narration') return '沿用已保存口播'
   if (job.executor === 'manual-edit') return '人工编辑'
-  if (job.executor === 'codex') return 'Codex CLI'
-  if (job.executor === 'claude') return 'Claude Code CLI'
+  if (isWorkflowAgent(job.executor)) return WORKFLOW_AGENT_LABELS[job.executor]
   if (job.executor === 'manual-audio') return '音频导入'
   if (job.executor !== 'template') return job.executor || '—'
   if (job.stage === 'audio') return '配音引擎'

@@ -9,6 +9,8 @@ import {
   canReuseAudio,
   VIDEO_STAGES,
   VIDEO_STAGE_LABELS,
+  WORKFLOW_AGENT_LABELS,
+  WORKFLOW_AGENT_OPTIONS,
   stageUnlocked,
   stageValue,
   projectVideoFormat,
@@ -30,6 +32,7 @@ import { StoryboardEditor } from './StoryboardEditor'
 import { AudioPanel, PublishingPanel, RenderPanel } from './MediaPanels'
 import { WorkflowDialog } from './WorkflowDialog'
 import { ExecutionLog } from './ExecutionLog'
+import { useWorkflowAgent } from './useWorkflowAgent'
 
 const stageDescriptions: Record<VideoStage, string> = {
   brief: '定义主题、目标观众、核心观点与目标时长。',
@@ -67,7 +70,7 @@ export function StageWorkspace({
     [note, setNote] = useState(''),
     [impact, setImpact] = useState(false),
     [activeScene, setActiveScene] = useState(0)
-  const [executor, setExecutor] = useState('codex')
+  const [executor, setExecutor] = useWorkflowAgent()
   const [copyFeedback, setCopyFeedback] = useState('')
   const [publishPlatform, setPublishPlatform] = useState<VideoPlatform>('bilibili')
   const [publishFeedback, setPublishFeedback] = useState({ bilibili: '', douyin: '' })
@@ -156,6 +159,7 @@ export function StageWorkspace({
     stage,
     expectedRevision: project.revision,
     requestId: crypto.randomUUID(),
+    agentExecutor: executor,
     executor: storyboardModification
       ? executor
       : (stage === 'storyboard' &&
@@ -278,10 +282,7 @@ export function StageWorkspace({
         label="本地执行器"
         value={executor}
         onChange={setExecutor}
-        options={[
-          { value: 'codex', label: 'Codex CLI' },
-          { value: 'claude', label: 'Claude Code CLI' },
-        ]}
+        options={WORKFLOW_AGENT_OPTIONS}
       />
       <div className="workflow-actions">
         <Button
@@ -536,7 +537,7 @@ export function StageWorkspace({
                     <p className="workflow-muted" data-copy-sources>
                       生成依据：创作简报 v{project.stages.brief?.version ?? '—'} · 目标{' '}
                       {stageValue(project, 'brief')?.duration ?? '—'} 秒 ·{' '}
-                      {executor === 'codex' ? 'Codex CLI' : 'Claude Code CLI'}
+                      {WORKFLOW_AGENT_LABELS[executor]}
                     </p>
                     <VoiceTextArea
                       label="文案创作要求 / 修改建议（选填）"
@@ -865,9 +866,7 @@ export function StageWorkspace({
                         : stage === 'storyboard' &&
                             (draft.payload as StagePayloads['storyboard']).mode === 'template'
                           ? '视觉模板'
-                          : executor === 'codex'
-                            ? 'Codex CLI / 人工导入'
-                            : 'Claude Code CLI / 人工导入'}
+                          : `${WORKFLOW_AGENT_LABELS[executor]} / 人工导入`}
                 </strong>
               </div>
               <div className="workflow-inspector-item">

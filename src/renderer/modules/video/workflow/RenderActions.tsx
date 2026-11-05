@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   MOTION_TRANSITIONS,
+  WORKFLOW_AGENT_OPTIONS,
   stageValue,
   stageUnlocked,
   type VideoProject,
@@ -10,6 +11,7 @@ import { VoiceInput, VoiceRadioGroup, VoiceTextArea } from '../components/voiceo
 import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
 import { WorkflowDialog } from './WorkflowDialog'
 import { workflowCall } from './useWorkflow'
+import { useWorkflowAgent } from './useWorkflowAgent'
 
 export function RenderActions({
   project,
@@ -30,7 +32,7 @@ export function RenderActions({
 }) {
   const [feedback, setFeedback] = useState('')
   const [scope, setScope] = useState('scene')
-  const [executor, setExecutor] = useState('codex')
+  const [executor, setExecutor] = useWorkflowAgent()
   const [templateOpen, setTemplateOpen] = useState(false)
   const [name, setName] = useState(project.title.slice(0, 75) + ' · 风格')
   const [description, setDescription] = useState('')
@@ -173,10 +175,7 @@ export function RenderActions({
                   label="本地执行器"
                   value={executor}
                   onChange={setExecutor}
-                  options={[
-                    { value: 'codex', label: 'Codex CLI' },
-                    { value: 'claude', label: 'Claude Code' },
-                  ]}
+                  options={WORKFLOW_AGENT_OPTIONS}
                 />
               </div>
               <p className="workflow-muted">

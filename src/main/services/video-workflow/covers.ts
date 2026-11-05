@@ -9,6 +9,8 @@ import {
   type VideoProject,
   type WorkflowRuntime,
   type WorkflowFile,
+  type WorkflowAgent,
+  WORKFLOW_AGENT_LABELS,
 } from '../../../shared/video-workflow'
 import { WorkflowFiles } from './files'
 import { runAgent } from './cli'
@@ -102,7 +104,7 @@ export async function verifyCoverImages(project: VideoProject, files: WorkflowFi
 export async function generatePublicationCover(input: {
   project: VideoProject
   options: CoverGeneration
-  executor: 'codex' | 'claude'
+  executor: WorkflowAgent
   runtime: WorkflowRuntime
   cwd: string
   files: WorkflowFiles
@@ -119,7 +121,7 @@ export async function generatePublicationCover(input: {
       const source = readFileSync(await files.verify(project.id, previousDesign), 'utf8')
       prompt += `\n当前已选封面的双比例设计源代码（只作设计参考，按本次建议修改）：${source.slice(0, 80000)}`
     }
-    phase(`等待 ${executor === 'codex' ? 'Codex' : 'Claude Code'} 设计双比例封面`)
+    phase(`等待 ${WORKFLOW_AGENT_LABELS[executor]} 设计双比例封面`)
     const result = (await runAgent(executor, runtime, cwd, prompt, signal)) as Record<
       string,
       unknown

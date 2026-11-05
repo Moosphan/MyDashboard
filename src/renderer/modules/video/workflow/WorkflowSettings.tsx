@@ -36,6 +36,7 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
     catbusPath: 'Catbus CLI 0.2.1（可执行文件或 dist/cli/main.js）',
     codexPath: 'Codex CLI',
     claudePath: 'Claude Code CLI',
+    deepseekPath: 'DeepSeek Harness（dsh 可执行文件或 lib/bin.js）',
     hyperframesPath: 'HyperFrames 0.8.181（可执行文件或 bin/hyperframes.mjs）',
     ffmpegPath: 'FFmpeg',
     ffprobePath: 'FFprobe',
@@ -83,6 +84,11 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
                   placeholder="/absolute/path/to/executable"
                 />
               ))}
+            <p className="workflow-muted">
+              DeepSeek 使用官方 Harness 的 headless 模式（已适配 0.2.1-rc.5），复用其模型和 API
+              配置；需 Node.js 24.9+。headless 默认读取启动环境或 Harness 主目录 .env 中的
+              DEEPSEEK_API_KEY，不直接使用网页登录。可在各阶段“本地执行器”切换，选择会在本机保留。
+            </p>
             <p className="workflow-muted">
               Image2 使用 gpt-image-2，复用本机 baoyu-imagine 的 API 配置和密钥，可能产生图片 API
               费用。 未配置时可使用 AI 代码生成封面，无需图片 API。

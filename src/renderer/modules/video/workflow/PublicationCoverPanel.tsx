@@ -274,7 +274,7 @@ export function PublicationCoverPanel({
           <p className="workflow-muted">
             {method === 'image2'
               ? 'GPT Image 2 · 使用本机图片 API，可能产生费用。'
-              : 'Codex / Claude · 两种比例分别独立渲染，沿用视频内容与风格。'}
+              : '使用当前所选 Agent CLI · 两种比例分别独立渲染，沿用视频内容与风格。'}
           </p>
           <VoiceTextArea
             label="封面修改建议（选填）"

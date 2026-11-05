@@ -387,11 +387,27 @@ export interface WorkflowHistoryPage {
   items: WorkflowRevisionSummary[]
   nextCursor: number | null
 }
+export const WORKFLOW_AGENT_LABELS = {
+  codex: 'Codex CLI',
+  claude: 'Claude Code CLI',
+  deepseek: 'DeepSeek CLI',
+} as const
+export type WorkflowAgent = keyof typeof WORKFLOW_AGENT_LABELS
+export function isWorkflowAgent(value: unknown): value is WorkflowAgent {
+  return typeof value === 'string' && Object.hasOwn(WORKFLOW_AGENT_LABELS, value)
+}
+export const WORKFLOW_AGENT_OPTIONS = Object.entries(WORKFLOW_AGENT_LABELS).map(
+  ([value, label]) => ({
+    value,
+    label,
+  }),
+)
 export interface WorkflowRuntime {
   nodePath: string
   catbusPath?: string
   codexPath: string
   claudePath: string
+  deepseekPath?: string
   hyperframesPath: string
   ffmpegPath: string
   ffprobePath: string

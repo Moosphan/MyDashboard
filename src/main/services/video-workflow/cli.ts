@@ -9,10 +9,15 @@ import {
 } from 'node:fs'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import { homedir } from 'node:os'
-import type { WorkflowRuntime } from '../../../shared/video-workflow'
+import {
+  WORKFLOW_AGENT_LABELS,
+  type WorkflowAgent,
+  type WorkflowRuntime,
+} from '../../../shared/video-workflow'
 import { workflowCommand } from './process'
 import { BilibiliCatbus } from './catbus'
 import { drawingSkillContext } from './drawing-skills'
+import { parseDeepSeekJson as parseDeepSeekStream, runDeepSeek } from './deepseek'
 
 function findExecutable(name: string) {
   const versions = join(homedir(), '.nvm', 'versions', 'node')
@@ -41,6 +46,24 @@ export class WorkflowRuntimeManager {
       catbusPath: findExecutable('catbus'),
       codexPath: findExecutable('codex'),
       claudePath: findExecutable('claude'),
+      deepseekPath:
+        [
+          ...(process.platform === 'win32'
+            ? [
+                join(
+                  process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'),
+                  'npm',
+                  'node_modules',
+                  '@deepseek-ai',
+                  'dsh',
+                  'lib',
+                  'bin.js',
+                ),
+              ]
+            : []),
+          findExecutable('dsh'),
+          join(homedir(), '.local', 'bin', 'dsh'),
+        ].find((path) => path && existsSync(path)) ?? '',
       hyperframesPath: findExecutable('hyperframes'),
       ffmpegPath: findExecutable('ffmpeg'),
       ffprobePath: findExecutable('ffprobe'),
@@ -88,16 +111,20 @@ export class WorkflowRuntimeManager {
           'nodePath',
           'codexPath',
           'claudePath',
+          'deepseekPath',
           'hyperframesPath',
           'ffmpegPath',
           'ffprobePath',
         ] as const
       ).map(async (key) => {
         try {
+          const script =
+            config[key]?.endsWith('.mjs') ||
+            (key === 'deepseekPath' && /\.[cm]?js$/i.test(config[key] ?? ''))
           const output = await workflowCommand(
-            config[key].endsWith('.mjs') ? config.nodePath : config[key],
+            script ? config.nodePath : (config[key] ?? ''),
             [
-              ...(config[key].endsWith('.mjs') ? [config[key]] : []),
+              ...(script ? [config[key]!] : []),
               key === 'ffmpegPath' || key === 'ffprobePath' ? '-version' : '--version',
             ],
             { cwd, timeout: 15000, nodePath: config.nodePath },
@@ -117,6 +144,20 @@ export class WorkflowRuntimeManager {
     return checks
   }
 }
+export function selectWorkflowAgent(
+  runtime: WorkflowRuntime,
+  requested?: WorkflowAgent,
+): WorkflowAgent {
+  const available = (agent: WorkflowAgent) => runtime[`${agent}Path`]
+  if (requested) {
+    if (!available(requested))
+      throw new Error(`请先在执行环境配置 ${WORKFLOW_AGENT_LABELS[requested]}`)
+    return requested
+  }
+  const agent = (Object.keys(WORKFLOW_AGENT_LABELS) as WorkflowAgent[]).find(available)
+  if (!agent) throw new Error('请先在执行环境配置 Codex CLI、Claude Code CLI 或 DeepSeek CLI')
+  return agent
+}
 export function parseAgentJson(output: string): unknown {
   let text = output.trim()
   try {
@@ -134,8 +175,10 @@ export function parseAgentJson(output: string): unknown {
     throw new Error('Agent 未返回有效 JSON；请重试，或使用导出任务后人工导入')
   }
 }
+export const parseDeepSeekJson = (output: string): unknown =>
+  parseDeepSeekStream(output, parseAgentJson)
 export async function runAgent(
-  executor: 'codex' | 'claude',
+  executor: WorkflowAgent,
   runtime: WorkflowRuntime,
   cwd: string,
   prompt: string,
@@ -160,13 +203,15 @@ export async function runAgent(
   const started = Date.now()
   const progress = () =>
     options.onProgress?.(
-      `${executor === 'codex' ? 'Codex' : 'Claude Code'} 创作中（已用 ${Math.floor((Date.now() - started) / 60000)} 分钟，最长 ${minutes} 分钟）；生成后需人工审核`,
+      `${WORKFLOW_AGENT_LABELS[executor]} 创作中（已用 ${Math.floor((Date.now() - started) / 60000)} 分钟，最长 ${minutes} 分钟）；生成后需人工审核`,
     )
   const timer = options.onProgress ? setInterval(progress, 15000) : undefined
   try {
     progress()
     if (drawingContext)
       options.onProgress?.('已加载 chinese-ink-elements 绘画技能及人物、笔墨、山水、器物与质检参考')
+    if (executor === 'deepseek')
+      return parseDeepSeekJson(await runDeepSeek(runtime, cwd, taskPrompt, signal, timeout))
     if (executor === 'codex') {
       const integrations: unknown = JSON.parse(
         await workflowCommand(

@@ -34,10 +34,13 @@ import {
   type WorkflowRevision,
   validateRenderMusic,
   type RenderMusic,
+  type WorkflowAgent,
+  isWorkflowAgent,
+  WORKFLOW_AGENT_LABELS,
 } from '../../../shared/video-workflow'
 import type { VoiceoverService } from '../voiceover/voiceover-service'
 import { WorkflowFiles } from './files'
-import { WorkflowRuntimeManager, runAgent } from './cli'
+import { WorkflowRuntimeManager, runAgent, selectWorkflowAgent } from './cli'
 import {
   agentPrompt,
   safeStoryboardDocument,
@@ -71,7 +74,8 @@ export interface WorkflowGeneration {
   stage: VideoStage
   expectedRevision: number
   requestId: string
-  executor: 'codex' | 'claude' | 'template'
+  executor: WorkflowAgent | 'template'
+  agentExecutor?: WorkflowAgent
   settings?: Partial<StoryboardPayload>
   sceneId?: string
   voice?: WorkflowVoice
@@ -403,7 +407,8 @@ export class VideoWorkflowService {
       !['copy', 'storyboard', 'narration', 'audio', 'roughcut', 'render', 'publish'].includes(
         input.stage,
       ) ||
-      !['codex', 'claude', 'template'].includes(input.executor)
+      (!isWorkflowAgent(input.executor) && input.executor !== 'template') ||
+      (input.agentExecutor !== undefined && !isWorkflowAgent(input.agentExecutor))
     )
       throw new Error('未知生成任务')
     if (
@@ -429,9 +434,7 @@ export class VideoWorkflowService {
       (input.settings ?? storyboard)?.motionPolicy?.enabled
     ) {
       const runtime = this.runtime.get()
-      if (!runtime.codexPath && !runtime.claudePath)
-        throw new Error('自动 MG 需要配置 Codex CLI 或 Claude Code，再生成分镜候选')
-      input = { ...input, executor: runtime.codexPath ? 'codex' : 'claude' }
+      input = { ...input, executor: selectWorkflowAgent(runtime, input.agentExecutor) }
     }
     if (
       input.reuseNarration !== undefined &&
@@ -499,7 +502,7 @@ export class VideoWorkflowService {
       throw new Error('请分别提交分镜修改意见和动效修改计划')
     if (
       input.storyboardModification &&
-      (!['codex', 'claude'].includes(input.executor) ||
+      (!isWorkflowAgent(input.executor) ||
         input.sceneId !== input.storyboardModification.sceneId ||
         typeof input.storyboardModification.feedback !== 'string' ||
         !input.storyboardModification.feedback.trim() ||
@@ -511,7 +514,7 @@ export class VideoWorkflowService {
       throw new Error('请检查分镜修改意见和目标分镜')
     if (
       input.modification &&
-      (!stageValue(project, 'roughcut') || !['codex', 'claude'].includes(input.executor))
+      (!stageValue(project, 'roughcut') || !isWorkflowAgent(input.executor))
     )
       throw new Error('请先生成粗剪，并选择本地 Agent')
     if (
@@ -546,10 +549,14 @@ export class VideoWorkflowService {
     const initialMotion = needsInitialMotion && !preparedMotion
     if (initialMotion) {
       const runtime = this.runtime.get()
-      if (!runtime.codexPath && !runtime.claudePath)
-        throw new Error(
-          '已要求 MG 动效，请先在执行环境配置 Codex CLI 或 Claude Code；不会使用默认动效替代创作要求',
+      try {
+        selectWorkflowAgent(
+          runtime,
+          isWorkflowAgent(input.executor) ? input.executor : input.agentExecutor,
         )
+      } catch (error) {
+        throw new Error(`已要求 MG 动效，${(error as Error).message}；不会使用默认动效替代创作要求`)
+      }
     }
     const job = this.repository.startJob(
       project.id,
@@ -599,7 +606,7 @@ export class VideoWorkflowService {
         } else if (input.modification) {
           phase('分析修改意见，规划逐镜元素动效')
           const raw = (await runAgent(
-            input.executor as 'codex' | 'claude',
+            input.executor as WorkflowAgent,
             runtime,
             cwd,
             motionPrompt(
@@ -649,7 +656,7 @@ export class VideoWorkflowService {
           const generated = await generatePublicationCover({
             project,
             options: cover,
-            executor: input.executor as 'codex' | 'claude',
+            executor: input.executor as WorkflowAgent,
             runtime,
             cwd,
             files: this.files,
@@ -672,10 +679,10 @@ export class VideoWorkflowService {
             controller.signal.throwIfAborted()
           }
           phase(
-            `等待 ${input.executor === 'codex' ? 'Codex' : 'Claude Code'} 生成${publication.platform === 'bilibili' ? ' Bilibili ' : '抖音'}发布资料与投稿设置`,
+            `等待 ${WORKFLOW_AGENT_LABELS[input.executor as WorkflowAgent]} 生成${publication.platform === 'bilibili' ? ' Bilibili ' : '抖音'}发布资料与投稿设置`,
           )
           const metadata = await runAgent(
-            input.executor as 'codex' | 'claude',
+            input.executor as WorkflowAgent,
             runtime,
             cwd,
             publicationPrompt(project, publication, categories),
@@ -768,7 +775,10 @@ export class VideoWorkflowService {
                 ? '执行创作简报、文案和最新分镜中的 MG 动效要求'
                 : '复用已选择模板的动效风格'
               const raw = (await runAgent(
-                runtime.codexPath ? 'codex' : 'claude',
+                selectWorkflowAgent(
+                  runtime,
+                  isWorkflowAgent(input.executor) ? input.executor : input.agentExecutor,
+                ),
                 runtime,
                 cwd,
                 motionPrompt(
@@ -849,10 +859,10 @@ export class VideoWorkflowService {
               references += `\n来源：${url}\n${html}`
             }
             phase(
-              `等待 ${input.executor === 'codex' ? 'Codex' : 'Claude Code'} 生成；生成后需人工审核`,
+              `等待 ${WORKFLOW_AGENT_LABELS[input.executor as WorkflowAgent]} 生成；生成后需人工审核`,
             )
             payload = await runAgent(
-              input.executor as 'codex' | 'claude',
+              input.executor as WorkflowAgent,
               runtime,
               cwd,
               input.stage === 'copy'

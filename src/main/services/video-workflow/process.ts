@@ -100,7 +100,7 @@ export function workflowCommand(
           /(?:codex\s+is\s+at\s+capacity|stream disconnected before completion[^\n]*capacity)/i.test(
             errors,
           )
-            ? '\nCodex 服务暂时繁忙，本次生成没有返回结果；请稍后重试，或在执行环境切换 Claude Code CLI。'
+            ? '\nCodex 服务暂时繁忙，本次生成没有返回结果；请稍后重试，或切换 Claude Code CLI / DeepSeek CLI。'
             : ''
         const guidance =
           process.platform === 'darwin' && signal === 'SIGKILL'

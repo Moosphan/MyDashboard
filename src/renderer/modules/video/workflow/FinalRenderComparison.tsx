@@ -1,7 +1,12 @@
 import { useRef, useState } from 'react'
 import { ArrowsRightLeftIcon } from '@heroicons/react/24/outline'
 import { Button } from '@/components/ui/button'
-import type { RenderPayload, VideoProject, WorkflowRevision } from '@shared/video-workflow'
+import {
+  VIDEO_RENDER_ENGINES,
+  type RenderPayload,
+  type VideoProject,
+  type WorkflowRevision,
+} from '@shared/video-workflow'
 import { compareFinalRender } from '@shared/video-render-comparison'
 import { WorkflowDialog } from './WorkflowDialog'
 
@@ -22,6 +27,8 @@ function qualityLabel(render?: RenderPayload) {
 function checkLabel(render?: RenderPayload) {
   try {
     const check = JSON.parse(render?.checks ?? '')
+    if (check.ok === true && check.engine === 'remotion')
+      return '通过 · Remotion 帧渲染与音画规格校验；未执行 HyperFrames 布局抽检'
     if (check.ok === true && Number.isInteger(check.samples) && check.samples > 0)
       return `通过 · ${check.samples} 个浏览器布局样本`
   } catch {
@@ -58,6 +65,11 @@ export function FinalRenderComparison({
       ? `${render.width} × ${render.height} · ${render.renderProfile?.fps ? `${render.renderProfile.fps} fps` : '帧率未记录'}`
       : '来源缺失'
   const rows = [
+    [
+      '合成引擎',
+      before ? VIDEO_RENDER_ENGINES[before.renderEngine ?? 'hyperframes'] : '来源缺失',
+      VIDEO_RENDER_ENGINES[output.renderEngine ?? 'hyperframes'],
+    ],
     ['编码质量', before ? qualityLabel(before) : '来源缺失', qualityLabel(output)],
     ['输出规格', dimensions(before), dimensions(output)],
     [

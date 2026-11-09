@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   isWorkflowAgent,
+  VIDEO_RENDER_ENGINES,
   WORKFLOW_AGENT_LABELS,
   type VideoStage,
   type WorkflowJob,
@@ -32,12 +33,13 @@ function executorName(job: WorkflowJob) {
   if (job.operation?.action === 'reuse-roughcut') return '沿用已生成视频'
   if (job.operation?.action === 'reuse-audio') return '沿用已保存配音'
   if (job.operation?.action === 'reuse-narration') return '沿用已保存口播'
+  if (job.renderEngine && job.kind !== 'motion-plan') return VIDEO_RENDER_ENGINES[job.renderEngine]
   if (job.executor === 'manual-edit') return '人工编辑'
   if (isWorkflowAgent(job.executor)) return WORKFLOW_AGENT_LABELS[job.executor]
   if (job.executor === 'manual-audio') return '音频导入'
   if (job.executor !== 'template') return job.executor || '—'
   if (job.stage === 'audio') return '配音引擎'
-  if (job.stage === 'roughcut' || job.stage === 'render') return 'HyperFrames'
+  if (job.stage === 'roughcut' || job.stage === 'render') return '合成引擎未记录'
   return '视觉模板'
 }
 

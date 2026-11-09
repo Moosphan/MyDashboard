@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button'
 import {
   MOTION_TRANSITIONS,
   WORKFLOW_AGENT_OPTIONS,
+  VIDEO_RENDER_ENGINES,
   stageValue,
   stageUnlocked,
   type VideoProject,
@@ -12,6 +13,7 @@ import { VoiceSelect } from '../components/voiceover/VoiceEngineFields'
 import { WorkflowDialog } from './WorkflowDialog'
 import { workflowCall } from './useWorkflow'
 import { useWorkflowAgent } from './useWorkflowAgent'
+import { useRenderEngine } from './useRenderEngine'
 
 export function RenderActions({
   project,
@@ -33,6 +35,10 @@ export function RenderActions({
   const [feedback, setFeedback] = useState('')
   const [scope, setScope] = useState('scene')
   const [executor, setExecutor] = useWorkflowAgent()
+  const [renderEngine] = useRenderEngine(project)
+  const native = renderEngine === 'remotion'
+  const sourceEngine =
+    stageValue(project, final ? 'render' : 'roughcut')?.renderEngine ?? 'hyperframes'
   const [templateOpen, setTemplateOpen] = useState(false)
   const [name, setName] = useState(project.title.slice(0, 75) + ' · 风格')
   const [description, setDescription] = useState('')
@@ -96,6 +102,7 @@ export function RenderActions({
           expectedRevision: project.revision,
           requestId: crypto.randomUUID(),
           executor,
+          renderEngine,
           modification: {
             feedback,
             at: time,
@@ -108,7 +115,7 @@ export function RenderActions({
     <div className="workflow-section workflow-divider">
       <div className="workflow-toolbar">
         <p className="workflow-muted">
-          工程源码与视频分别保存，可导出副本供 HyperFrames Studio 编辑。
+          工程源码与视频分别保存，可导出副本供 {VIDEO_RENDER_ENGINES[sourceEngine]} Studio 编辑。
         </p>
         <div className="workflow-actions">
           <Button
@@ -152,7 +159,8 @@ export function RenderActions({
               id="workflow-motion-plan-summary"
               className="text-body-sm font-semibold cursor-pointer"
             >
-              提出修改 · 元素动效与转场{plan ? ' · 计划待确认' : ''}
+              提出修改 · {native ? '原生镜头与画面' : '元素动效与转场'}
+              {plan ? ' · 计划待确认' : ''}
             </summary>
             <div className="workflow-section mt-3">
               {planError && (
@@ -182,7 +190,9 @@ export function RenderActions({
                 定位 {time.toFixed(1)} 秒 ·{' '}
                 {scope === 'scene' ? (sceneTitle ?? '当前分镜') : '所有分镜'}
                 。基于预览视频的分镜与配音，保持文案与总时长。
-                可修改已有元素的入场、位移、缩放、旋转、透明度和节奏；新增元素、换文字或素材需回分镜阶段。
+                {native
+                  ? '可重新构图、设计镜内切镜、连续运动和程序化画面。保留事实、口播及已登记素材；改写文案或配音需回对应阶段。'
+                  : '可修改已有元素的入场、位移、缩放、旋转、透明度和节奏；新增元素、换文字或素材需回分镜阶段。'}
                 {scope === 'scene'
                   ? ' 仅修改当前镜；希望调整每一镜及镜间转场时请选择整片。'
                   : ' 可同时规划各镜元素动画与镜间转场。'}
@@ -201,7 +211,11 @@ export function RenderActions({
                     return
                   }
                 }}
-                placeholder="例如：标题依次入场，角色轻弹出现后缓慢浮动，时间线节点依次展开；保持口播不变。"
+                placeholder={
+                  native
+                    ? '例如：跟随一个任务进入队列，拉远展示积压，再切近景突出等待时间；保持口播不变。'
+                    : '例如：标题依次入场，角色轻弹出现后缓慢浮动，时间线节点依次展开；保持口播不变。'
+                }
               />
               <div className="workflow-actions">
                 <Button
@@ -251,7 +265,10 @@ export function RenderActions({
                             )?.title
                           }
                         </strong>
-                        <span className="workflow-muted"> · {scene.effects.length} 项动效</span>
+                        <span className="workflow-muted">
+                          {' '}
+                          · {plan.native ? '原生镜头设计' : `${scene.effects.length} 项动效`}
+                        </span>
                         {scene.transition && (
                           <p className="workflow-muted">
                             与上一镜交接：{MOTION_TRANSITIONS[scene.transition.type]} ·{' '}
@@ -282,6 +299,7 @@ export function RenderActions({
                               expectedRevision: project.revision,
                               requestId: crypto.randomUUID(),
                               executor: 'template',
+                              renderEngine,
                               motionPlanJobId: latestPlan!.id,
                             }),
                           '正在生成新版粗剪；旧版本保留，新版需要重新审核',

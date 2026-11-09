@@ -89,6 +89,20 @@ workspace instead of a loose collection of tabs and services.
 - Audio asset library
 - HTML presentation asset management
 
+The existing workflow supports **HyperFrames** and **Remotion** rendering. Select **合成引擎** in the roughcut stage; the choice is remembered per project. Confirmed motion edits use the selected engine, and final rendering and background music use the engine recorded in the approved roughcut. Switching engines creates a new roughcut for review; existing videos and source revisions remain available. Old projects default to HyperFrames.
+
+New Remotion roughcuts ask the selected Agent to author native React visual modules (`visuals.tsx`, `scene-N.tsx`, and optional helper components). Approved storyboard content, visual direction, original embedded assets and measured narration timing guide the film; HTML layouts and bounded WAAPI effects no longer constrain native visuals. Camera moves, cuts within a scene, SVG/Canvas graphics and frame-driven animation are authored in source. Browser dependencies installed alongside the configured Remotion runtime are detected and pinned; missing dependencies or assets are reported instead of silently substituting a simpler film. The host preserves narration, captions, explicit MG exclusions and total duration. Natural-language edits still produce a plan for confirmation, and single-scene edits preserve other source modules. Final rendering reuses frozen source without calling the Agent. Legacy HTML-backed projects remain renderable. Exported projects include source, assets, `package.json` and Studio/render commands. Generated code is validated for syntax, imports and file paths; these checks are not an OS security sandbox.
+
+Install the optional Remotion CLI separately from Electron. On macOS:
+
+```sh
+npm install --prefix "$HOME/Library/Application Support/my-dashboard/tools/remotion" --save-exact @remotion/cli@4.0.541 react@18.3.1 react-dom@18.3.1
+```
+
+This location is detected automatically. Alternatively, configure an existing `@remotion/cli/remotion-cli.js` in **执行环境**, together with Node.js, FFmpeg and FFprobe. Chrome / Chromium can be selected explicitly; leaving the browser field empty lets Remotion obtain its own browser on first use. Remotion does not require HyperFrames to be installed. The CLI runs with one rendering worker to limit background memory pressure. Remotion has its own [license](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md); it is not covered by MyDashboard's license.
+
+Regression commands: `pnpm test:video-workflow`, `pnpm test:remotion:native`, `pnpm test:remotion:ui`, and `WORKFLOW_REMOTION_PATH=/absolute/path/to/remotion-cli.js pnpm test:remotion:render` / `pnpm test:remotion:native:render`. The render commands produce synthetic horizontal and vertical videos using the local CLI and browser.
+
 Visual-template storyboard planning recognizes Markdown headings (levels 1–6), keeps their context across paragraphs, and accepts plain text without headings. Display titles stay within 32 Unicode characters; long headings remain intact in scene bodies. Paragraphs split into scenes of up to 90 characters without dropping text, with a maximum of 60 scenes. Generated storyboards still require review.
 
 Video workflow generation supports **Codex CLI**, **Claude Code CLI**, and the official **[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)** (`dsh`). Choose **本地执行器** in a workflow stage or the motion modification panel. The choice is remembered on this computer, shared between stages, and used by AI copy, storyboards, narration scripts, motion plans, code covers, and publishing metadata. Existing rendering, voice synthesis, review, and publishing engines continue to handle their own work. Failed tasks preserve previous versions; switching providers is explicit and never triggers an automatic retry.

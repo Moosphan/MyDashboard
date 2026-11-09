@@ -110,6 +110,7 @@ export interface StoryScene {
   layout: SceneLayout
   html?: string
   requirements?: string
+  visualDirection?: string
   motion?: StoryboardSceneMotion
   materialFallback?: { acceptedAt: string; blockers: string[] }
 }
@@ -174,6 +175,7 @@ export interface RenderMusic {
   playbackRate: number
 }
 export interface RenderPayload {
+  renderEngine?: VideoRenderEngine
   imported?: { filename: string; description: string }
   file: WorkflowFile
   duration: number
@@ -191,6 +193,11 @@ export interface RenderPayload {
   sourceNarration?: string
   sourceRoughcut?: string
   renderProfile?: { quality: 'looks' | 'delivery'; fps: 30 }
+}
+export const VIDEO_RENDER_ENGINES = { hyperframes: 'HyperFrames', remotion: 'Remotion' } as const
+export type VideoRenderEngine = keyof typeof VIDEO_RENDER_ENGINES
+export function isVideoRenderEngine(value: unknown): value is VideoRenderEngine {
+  return typeof value === 'string' && Object.hasOwn(VIDEO_RENDER_ENGINES, value)
 }
 export interface MotionFrame {
   opacity?: number
@@ -223,6 +230,7 @@ export interface MotionTransition {
   duration: number
 }
 export interface MotionPlan {
+  native?: { instructions: string }
   summary: string
   feedback: string
   at: number
@@ -331,6 +339,7 @@ export interface WorkflowJob {
   requestId: string
   expectedRevision: number
   executor: string
+  renderEngine?: VideoRenderEngine
   state: 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'stale'
   phase: string
   error: string | null
@@ -409,6 +418,8 @@ export interface WorkflowRuntime {
   claudePath: string
   deepseekPath?: string
   hyperframesPath: string
+  remotionPath?: string
+  remotionBrowserPath?: string
   ffmpegPath: string
   ffprobePath: string
   image2Path?: string
@@ -620,6 +631,9 @@ export function validatePayload<Stage extends VideoStage>(
         ...(scene.requirements
           ? { requirements: text(scene.requirements, '分镜修改要求', 30000) }
           : {}),
+        ...(scene.visualDirection
+          ? { visualDirection: text(scene.visualDirection, '动态镜头设计', 12000) }
+          : {}),
         ...(scene.motion ? { motion: validateStoryboardSceneMotion(id, scene.motion) } : {}),
         ...(scene.materialFallback
           ? { materialFallback: validateMaterialFallback(scene.materialFallback, scene.motion) }
@@ -699,6 +713,8 @@ export function validatePayload<Stage extends VideoStage>(
       ...(input.voice ? { voice: input.voice as WorkflowVoice } : {}),
     }
   } else if (stage === 'roughcut' || stage === 'render') {
+    if (input.renderEngine !== undefined && !isVideoRenderEngine(input.renderEngine))
+      throw new Error('未知视频合成引擎')
     const imported = input.imported === undefined ? undefined : record(input.imported)
     if (imported) {
       if (
@@ -718,7 +734,8 @@ export function validatePayload<Stage extends VideoStage>(
         input.sourceRoughcut ||
         input.sourceStoryboard ||
         input.sourceAudio ||
-        input.sourceNarration
+        input.sourceNarration ||
+        input.renderEngine
       )
         throw new Error('外部成片规格无效或混入合成工程')
       const video = file(input.file),
@@ -760,11 +777,16 @@ export function validatePayload<Stage extends VideoStage>(
       input.compositionNames.some(
         (name) =>
           typeof name !== 'string' ||
-          !/^[a-z0-9-]+\.(html|png|wav|mp3|m4a|ogg|flac|json)$/.test(name),
+          !/^[a-z0-9-]+\.(html|png|jpg|jpeg|webp|svg|wav|mp3|m4a|ogg|flac|mp4|woff|woff2|json|tsx)$/.test(
+            name,
+          ),
       )
     )
       throw new Error('无效冻结工程文件名')
     output = {
+      ...(input.renderEngine !== undefined
+        ? { renderEngine: input.renderEngine as VideoRenderEngine }
+        : {}),
       file: file(input.file),
       cover: file(input.cover),
       duration: seconds(input.duration),
@@ -895,6 +917,8 @@ export function validateMotionPlan(
   options: { allowEmpty?: boolean } = {},
 ): MotionPlan {
   const input = record(value)
+  const native = input.native === undefined ? undefined : record(input.native)
+  const instructions = native ? text(native.instructions, '原生镜头创作说明', 20000) : undefined
   if (
     !Array.isArray(input.scenes) ||
     (!input.scenes.length && !options.allowEmpty) ||
@@ -910,7 +934,7 @@ export function validateMotionPlan(
     seen.add(String(scene.sceneId))
     if (
       !Array.isArray(scene.effects) ||
-      (!scene.effects.length && !options.allowEmpty) ||
+      (!scene.effects.length && !options.allowEmpty && !native) ||
       scene.effects.length > 80
     )
       throw new Error('每镜需要 1–80 项动效')
@@ -1038,6 +1062,7 @@ export function validateMotionPlan(
     throw new Error('单镜修改只能包含指定分镜')
   return {
     summary: text(input.summary, '修改计划', 3000),
+    ...(instructions ? { native: { instructions } } : {}),
     feedback: text(input.feedback, '修改意见', 5000),
     at: input.at,
     ...(sceneId ? { sceneId } : {}),

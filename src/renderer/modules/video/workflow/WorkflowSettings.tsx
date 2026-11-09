@@ -38,6 +38,8 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
     claudePath: 'Claude Code CLI',
     deepseekPath: 'DeepSeek Harness（dsh 可执行文件或 lib/bin.js）',
     hyperframesPath: 'HyperFrames 0.8.181（可执行文件或 bin/hyperframes.mjs）',
+    remotionPath: 'Remotion 4.0.541（@remotion/cli/remotion-cli.js）',
+    remotionBrowserPath: 'Remotion 浏览器（可选，Chrome / Chromium 可执行文件）',
     ffmpegPath: 'FFmpeg',
     ffprobePath: 'FFprobe',
     bunPath: 'Bun（Image2 图片生成运行时）',
@@ -84,6 +86,10 @@ export function WorkflowSettings({ open, onClose }: { open: boolean; onClose: ()
                   placeholder="/absolute/path/to/executable"
                 />
               ))}
+            <p className="workflow-muted">
+              粗剪可选择 HyperFrames 或 Remotion，正式成片沿用已审核粗剪的引擎。Remotion 使用独立
+              CLI 依赖，不需要配置 HyperFrames；浏览器留空时由 Remotion 下载 Chromium。
+            </p>
             <p className="workflow-muted">
               DeepSeek 使用官方 Harness 的 headless 模式（已适配 0.2.1-rc.5），复用其模型和 API
               配置；需 Node.js 24.9+。headless 默认读取启动环境或 Harness 主目录 .env 中的

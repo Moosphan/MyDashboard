@@ -37,7 +37,7 @@ function findExecutable(name: string) {
 }
 export class WorkflowRuntimeManager {
   private path: string
-  constructor(root: string) {
+  constructor(private root: string) {
     this.path = join(root, 'config', 'video-workflow.json')
   }
   get(): WorkflowRuntime {
@@ -65,6 +65,17 @@ export class WorkflowRuntimeManager {
           join(homedir(), '.local', 'bin', 'dsh'),
         ].find((path) => path && existsSync(path)) ?? '',
       hyperframesPath: findExecutable('hyperframes'),
+      remotionPath:
+        findExecutable('remotion') ||
+        [join(this.root, 'tools/remotion/node_modules/@remotion/cli/remotion-cli.js')].find(
+          existsSync,
+        ) ||
+        '',
+      remotionBrowserPath:
+        [
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+          findExecutable('chromium'),
+        ].find((path) => path && existsSync(path)) ?? '',
       ffmpegPath: findExecutable('ffmpeg'),
       ffprobePath: findExecutable('ffprobe'),
       bunPath:
@@ -113,6 +124,7 @@ export class WorkflowRuntimeManager {
           'claudePath',
           'deepseekPath',
           'hyperframesPath',
+          'remotionPath',
           'ffmpegPath',
           'ffprobePath',
         ] as const
@@ -120,6 +132,7 @@ export class WorkflowRuntimeManager {
         try {
           const script =
             config[key]?.endsWith('.mjs') ||
+            (key === 'remotionPath' && /\.[cm]?js$/i.test(config[key] ?? '')) ||
             (key === 'deepseekPath' && /\.[cm]?js$/i.test(config[key] ?? ''))
           const output = await workflowCommand(
             script ? config.nodePath : (config[key] ?? ''),

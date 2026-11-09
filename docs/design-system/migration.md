@@ -196,3 +196,9 @@
 `VIDEO-WORKFLOW-001` 应用内定时发布（2026-10-29 用户授权并确认错过不补发）：`ScheduledPublishing.tsx` 与 `BilibiliPublishingPanel.tsx` 沿用原生 details、VoiceInput、Button、WorkflowDialog 和既有主题，在原立即发布动作后添加默认收起的定时块。保留原主栏、审核栏和动作顺序；确认显示时间/时区、账号和版本，错误留在弹窗，取消等待计划无需改变审核。无新依赖、图标或全局样式；负责人为项目维护者，退出里程碑仍为 Video 工作流 HeroUI 3.2.6 生产迁移。日期字段及折叠块属于该局部兼容例外，未宣称完成 HeroUI 迁移。状态、键盘、主题和 Electron 证据见 [定时发布验证](video-workflow-scheduled-publishing-verification.md)。
 
 `VIDEO-WORKFLOW-001` 视频项目数据加载优化（Issue #5）：项目列表使用独立摘要，选中后读取详情；历史版本按需分页，选择历史版本后读取内容及冻结来源。保持现有信息顺序、桌面密度、主题与动作位置；分页沿用现有 Button，错误沿用既有告警样式，无新依赖、图标或全局样式。负责人和 HeroUI 迁移退出里程碑沿用 VIDEO-WORKFLOW-001。合成 Electron 回归覆盖列表、打开、创建、导入、历史选择、明暗主题、1440/1024 视口、等效缩放和键盘；design:check、design:build 与应用构建通过。工作流回归 74/74；历史摘要体积在增加 60 个合成 HTML 修订后仍为 351 字节。全量类型检查仍存在既有非工作流错误，未将其视为通过。
+
+`VIDEO-WORKFLOW-001` 合成引擎标注修复（2026-11-09 用户截图）：审核栏空成片状态沿用粗剪引擎，ExecutionLog 使用任务冻结引擎；旧成功记录经对应保存请求指纹恢复，无法核实的历史任务明确未记录。仅修改现有标签数据来源，无新控件、样式或布局。负责人和退出里程碑沿用本例外；回归记录见 [原生 Remotion 验证](native-remotion-verification.md)。
+
+`VIDEO-WORKFLOW-001` 原生 Remotion（2026-11-09 用户授权）：RenderActions 在原修改区区分原生镜头与 HTML 元素动效，复用当前控件、主题、信息顺序、按钮及人工确认；未新增布局、样式、图标或 renderer 依赖。原生源码及 TypeScript 解析只位于主进程/独立渲染工具。负责人和退出里程碑沿用本例外。验证及实际边界见 [原生 Remotion 验证](native-remotion-verification.md)。
+
+`VIDEO-WORKFLOW-001` Remotion 合成引擎（2026-11-08 用户确认）：现有粗剪动作区增加 HyperFrames / Remotion 选择，沿用 VoiceSelect 和本机项目选择记忆；VoiceSelect 只补传运行期间 disabled。正式成片与配乐沿用已审核粗剪引擎，审核信息、对比与导出展示真实来源。执行环境原列表增加 CLI 和可选浏览器，保持既有控件、主题、预览、右栏及底部操作。无新增样式、图标、生产 React 依赖或 HeroUI 迁移。负责人及退出里程碑沿用该例外。工作流 85/85、真实官方 CLI 横竖版粗剪/成片、合成 Electron 交互、design:check / design:build 和构建重启验证见 [Remotion 验证](remotion-workflow-verification.md)；其他模块既有类型错误未改动。

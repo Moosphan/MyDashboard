@@ -4,7 +4,10 @@ import { runInNewContext } from 'node:vm'
 import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
 import { runMigrations } from '../src/main/database/migrations'
-import { VideoWorkflowRepository } from '../src/main/database/repositories/video-workflow-repository'
+import {
+  fingerprint,
+  VideoWorkflowRepository,
+} from '../src/main/database/repositories/video-workflow-repository'
 import {
   validatePayload,
   splitNarration,
@@ -120,6 +123,114 @@ test('render music validates bounded trim, volume and playback rate settings', (
     { source: 'remote' },
   ])
     assert.throws(() => validateRenderMusic({ ...music, ...changes }))
+})
+
+test('render engine survives frozen revisions, rejects unknown engines and keeps legacy projects valid', () => {
+  const { db, render } = visualFixture()
+  const runtime = new WorkflowRuntimeManager(tmpdir()).get()
+  try {
+    const remotion = validatePayload('roughcut', {
+      ...render,
+      renderEngine: 'remotion',
+      compositionNames: ['remotion.tsx'],
+    })
+    assert.equal(remotion.renderEngine, 'remotion')
+    assert.equal(validatePayload('roughcut', render).renderEngine, undefined)
+    assert.throws(() => validatePayload('roughcut', { ...render, renderEngine: 'other' }), /引擎/)
+    assert.throws(
+      () => validatePayload('roughcut', { ...render, compositionNames: ['../../entry.tsx'] }),
+      /文件名/,
+    )
+    assert.doesNotThrow(() =>
+      assertRenderRuntime(
+        { ...runtime, hyperframesPath: '', remotionPath: '/tools/remotion-cli.js' },
+        'remotion',
+      ),
+    )
+    assert.throws(
+      () => assertRenderRuntime({ ...runtime, remotionPath: '' }, 'remotion'),
+      /Remotion/,
+    )
+  } finally {
+    db.close()
+  }
+})
+
+test('render jobs persist their engine independently of the generic executor', () => {
+  const { db, repository, state } = visualFixture()
+  try {
+    const job = repository.startJob(
+      state.id,
+      'roughcut',
+      state.revision,
+      randomUUID(),
+      'template',
+      '',
+      undefined,
+      'remotion',
+    )
+    assert.equal(repository.job(job.id)!.renderEngine, 'remotion')
+    assert.equal(
+      repository.get(state.id).jobs.find((item) => item.id === job.id)!.renderEngine,
+      'remotion',
+    )
+    assert.equal(job.executor, 'template')
+  } finally {
+    db.close()
+  }
+})
+
+test('legacy render jobs recover engines only from the exact saved result', () => {
+  const db = new Database(':memory:')
+  try {
+    db.exec(`
+      CREATE TABLE _migrations (version INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE video_workflow_jobs (id TEXT PRIMARY KEY, project_id TEXT, stage TEXT, state TEXT);
+      CREATE TABLE video_workflow_requests (request_id TEXT, project_id TEXT, fingerprint TEXT);
+      CREATE TABLE video_workflow_revisions (project_id TEXT, stage TEXT, payload TEXT);
+    `)
+    for (let version = 1; version <= 39; version++)
+      db.prepare('INSERT INTO _migrations VALUES (?, ?)').run(version, 'baseline')
+    for (const [id, engine] of [
+      ['native', 'remotion'],
+      ['legacy', undefined],
+    ] as const) {
+      const payload = { renderEngine: engine, file: { id } }
+      db.prepare('INSERT INTO video_workflow_jobs VALUES (?, ?, ?, ?)').run(
+        id,
+        'project',
+        'render',
+        'succeeded',
+      )
+      db.prepare('INSERT INTO video_workflow_revisions VALUES (?, ?, ?)').run(
+        'project',
+        'render',
+        JSON.stringify(payload),
+      )
+      db.prepare('INSERT INTO video_workflow_requests VALUES (?, ?, ?)').run(
+        `job:${id}`,
+        'project',
+        fingerprint(['save', 'render', payload]),
+      )
+    }
+    db.prepare('INSERT INTO video_workflow_jobs VALUES (?, ?, ?, ?)').run(
+      'unknown',
+      'project',
+      'render',
+      'failed',
+    )
+    runMigrations(db)
+    assert.deepEqual(
+      db.prepare('SELECT id, render_engine FROM video_workflow_jobs ORDER BY id').all(),
+      [
+        { id: 'legacy', render_engine: 'hyperframes' },
+        { id: 'native', render_engine: 'remotion' },
+        { id: 'unknown', render_engine: null },
+      ],
+    )
+  } finally {
+    db.close()
+  }
 })
 
 test('HyperFrames document uses framework audio timing attributes for music', () => {

@@ -13,12 +13,21 @@ import {
   type WorkflowRuntime,
   type MotionPlan,
   type RenderMusic,
+  type VideoRenderEngine,
 } from '../../../shared/video-workflow'
+import {
+  renderRemotion,
+  REMOTION_FILES,
+  REMOTION_VERSION,
+  updateRemotionMusic,
+  writeRemotionComposition,
+} from './remotion'
 import { WorkflowFiles } from './files'
 import { escapeHtml, safeStoryboardDocument, sceneHtml } from './storyboard'
 import { workflowCommand } from './process'
 import { probeMedia, subtitleCues } from './audio'
 import { defaultMotion, prepareMotionScene, mergeMotion } from './motion'
+import { authorNativeComposition } from './remotion-authoring'
 
 type TransitionKeyframe = { opacity?: number; translate?: string; clipPath?: string }
 
@@ -282,19 +291,24 @@ export function assertHyperframesCheck(value: unknown) {
   )
     throw new Error('HyperFrames 检查未通过或未采集到实际浏览器样本，不能继续渲染')
 }
-export function assertRenderRuntime(runtime: WorkflowRuntime) {
+export function assertRenderRuntime(
+  runtime: WorkflowRuntime,
+  engine: VideoRenderEngine = 'hyperframes',
+) {
   const required: [keyof WorkflowRuntime, string][] = [
-    ['hyperframesPath', 'HyperFrames 0.8.181'],
+    engine === 'remotion'
+      ? ['remotionPath', `Remotion ${REMOTION_VERSION}`]
+      : ['hyperframesPath', 'HyperFrames 0.8.181'],
     ['ffmpegPath', 'FFmpeg'],
     ['ffprobePath', 'FFprobe'],
-    ...(runtime.hyperframesPath.endsWith('.mjs')
+    ...(engine === 'remotion' || runtime.hyperframesPath.endsWith('.mjs')
       ? [['nodePath', 'Node.js 22+'] as [keyof WorkflowRuntime, string]]
       : []),
   ]
   const missing = required.filter(([key]) => !runtime[key]?.trim()).map(([, label]) => label)
   if (missing.length)
     throw new Error(
-      `缺少 ${missing.join('、')} 路径。请打开右上角「执行环境」，选择已安装的程序后重试；HyperFrames 可使用 bin/hyperframes.mjs。`,
+      `缺少 ${missing.join('、')} 路径。请打开右上角「执行环境」，选择已安装的程序后重试；${engine === 'remotion' ? 'Remotion 可使用 @remotion/cli/remotion-cli.js' : 'HyperFrames 可使用 bin/hyperframes.mjs'}。`,
     )
 }
 async function hyperframes(
@@ -320,16 +334,25 @@ export async function renderWorkflow(input: {
   phase: (message: string) => void
   motion?: MotionPlan
   music?: RenderMusic
+  renderEngine?: VideoRenderEngine
+  createNative?: (prompt: string) => Promise<unknown>
 }): Promise<RenderPayload> {
   const { project, final, files, runtime, cwd, signal, phase, music } = input
   const frame = final
     ? stageValue(project, 'roughcut')!
     : videoFrame(stageValue(project, 'storyboard')?.format)
-  assertRenderRuntime(runtime)
+  const engine = final
+    ? (stageValue(project, 'roughcut')!.renderEngine ?? 'hyperframes')
+    : (input.renderEngine ?? 'hyperframes')
+  if (final && input.renderEngine && input.renderEngine !== engine)
+    throw new Error('正式成片必须沿用粗剪的合成引擎；请先生成并审核对应引擎的粗剪')
+  assertRenderRuntime(runtime, engine)
   mkdirSync(cwd, { recursive: true })
-  const version = await hyperframes(runtime, ['--version'], cwd, signal, 15000)
-  if (!/\b0\.8\.181\b/.test(version))
-    throw new Error('首期需 HyperFrames 0.8.181；请配置该版本的可执行文件或 bin/hyperframes.mjs')
+  if (engine === 'hyperframes') {
+    const version = await hyperframes(runtime, ['--version'], cwd, signal, 15000)
+    if (!/\b0\.8\.181\b/.test(version))
+      throw new Error('首期需 HyperFrames 0.8.181；请配置该版本的可执行文件或 bin/hyperframes.mjs')
+  }
   let compositionFiles: WorkflowFile[] = [],
     compositionNames: string[] = [],
     cover: WorkflowFile,
@@ -367,15 +390,53 @@ export async function renderWorkflow(input: {
       const musicName = `music${extname(music.file.path).toLowerCase()}`
       copyFileSync(await files.verify(project.id, music.file), join(cwd, musicName))
       const index = compositionNames.indexOf('index.html')
-      if (index < 0) throw new Error('冻结 HyperFrames 工程缺少 index.html')
-      const document = addMusicToDocument(readFileSync(join(cwd, 'index.html'), 'utf8'), {
-        ...music,
-        file: { ...music.file, path: musicName },
-      })
-      writeFileSync(join(cwd, 'index.html'), document)
-      compositionFiles[index] = await files.import(project.id, join(cwd, 'index.html'))
+      if (engine !== 'remotion' && index < 0)
+        throw new Error('冻结 HyperFrames 工程缺少 index.html')
+      const appliedMusic = { ...music, file: { ...music.file, path: musicName } }
+      if (engine === 'remotion') {
+        const settingsIndex = compositionNames.indexOf('composition.json')
+        if (settingsIndex < 0) throw new Error('冻结 Remotion 工程缺少 composition.json')
+        updateRemotionMusic(cwd, appliedMusic)
+        compositionFiles[settingsIndex] = await files.import(
+          project.id,
+          join(cwd, 'composition.json'),
+        )
+      } else {
+        const document = addMusicToDocument(
+          readFileSync(join(cwd, 'index.html'), 'utf8'),
+          appliedMusic,
+        )
+        writeFileSync(join(cwd, 'index.html'), document)
+        compositionFiles[index] = await files.import(project.id, join(cwd, 'index.html'))
+      }
       compositionFiles.push(await files.import(project.id, join(cwd, musicName)))
       compositionNames.push(musicName)
+    }
+  } else if (engine === 'remotion' && input.createNative) {
+    compositionNames = await authorNativeComposition({
+      project,
+      files,
+      runtime,
+      cwd,
+      signal,
+      phase,
+      motion: input.motion,
+      create: input.createNative,
+      capture: (html, title) => captureStoryboard(html, signal, title, frame),
+    })
+    for (const name of compositionNames)
+      compositionFiles.push(await files.import(project.id, join(cwd, name)))
+    cover = compositionFiles[compositionNames.indexOf('reference-0.png')]
+    if (!cover) throw new Error('原生 Remotion 工程缺少封面参考')
+    motion = input.motion
+    if (music) {
+      const name = basename(music.file.path)
+      copyFileSync(await files.verify(project.id, music.file), join(cwd, name))
+      updateRemotionMusic(cwd, { ...music, file: { ...music.file, path: name } })
+      const index = compositionNames.indexOf('composition.json')
+      compositionFiles[index] = await files.import(project.id, join(cwd, 'composition.json'))
+      compositionNames.push(name)
+      compositionFiles.push(await files.import(project.id, join(cwd, name)))
     }
   } else {
     const storyboard = stageValue(project, 'storyboard')!,
@@ -458,27 +519,44 @@ export async function renderWorkflow(input: {
       compositionNames.push(name)
       compositionFiles.push(await files.import(project.id, join(cwd, name)))
     }
+    if (engine === 'remotion') {
+      writeRemotionComposition(cwd, targetDuration, frame, music)
+      for (const name of REMOTION_FILES) {
+        compositionNames.push(name)
+        compositionFiles.push(await files.import(project.id, join(cwd, name)))
+      }
+    }
   }
-  phase('HyperFrames 浏览器、布局与字幕检查')
-  const checked = await hyperframes(
-    runtime,
-    ['check', cwd, '--json', '--samples', '9'],
-    cwd,
-    signal,
-    180000,
-  )
-  const report = JSON.parse(checked)
-  assertHyperframesCheck(report)
+  let report: { layout: { samples: unknown[] }; lint?: { warnings?: unknown[] } } = {
+    layout: { samples: [] },
+  }
+  if (engine === 'hyperframes') {
+    phase('HyperFrames 浏览器、布局与字幕检查')
+    const checked = await hyperframes(
+      runtime,
+      ['check', cwd, '--json', '--samples', '9'],
+      cwd,
+      signal,
+      180000,
+    )
+    report = JSON.parse(checked)
+    assertHyperframesCheck(report)
+  }
   const hasMotion = motion?.scenes.some(
     (scene) => scene.effects.length > 0 || (scene.transition && scene.transition.type !== 'cut'),
   )
   const checks = JSON.stringify({
-    version: '0.8.181',
+    engine,
+    version: engine === 'remotion' ? REMOTION_VERSION : '0.8.181',
     ok: true,
     samples: report.layout.samples.length,
     warnings: report.lint?.warnings ?? [],
-    staticKeyframes: !hasMotion,
-    motionEngine: hasMotion ? 'waapi' : undefined,
+    staticKeyframes: compositionNames.includes('visuals.tsx') ? false : !hasMotion,
+    motionEngine: compositionNames.includes('visuals.tsx')
+      ? 'remotion-native'
+      : hasMotion
+        ? 'waapi'
+        : undefined,
   })
   const output = join(cwd, final ? 'final.mp4' : 'roughcut.mp4')
   const renderProfile = {
@@ -486,22 +564,24 @@ export async function renderWorkflow(input: {
     fps: 30 as const,
   }
   phase(`${final ? '渲染最终成片' : '渲染粗剪'} · ${frame.width}×${frame.height} / 30 fps`)
-  await hyperframes(
-    runtime,
-    [
-      'render',
+  if (engine === 'remotion') await renderRemotion(runtime, cwd, signal, final, phase)
+  else
+    await hyperframes(
+      runtime,
+      [
+        'render',
+        cwd,
+        '--output',
+        output,
+        '--quality',
+        renderProfile.quality,
+        '--fps',
+        String(renderProfile.fps),
+      ],
       cwd,
-      '--output',
-      output,
-      '--quality',
-      renderProfile.quality,
-      '--fps',
-      String(renderProfile.fps),
-    ],
-    cwd,
-    signal,
-    3600000,
-  )
+      signal,
+      3600000,
+    )
   const probed = await probeMedia(runtime, output, cwd, signal),
     video = probed.streams.find((stream) => stream.codec_type === 'video')
   if (
@@ -516,7 +596,29 @@ export async function renderWorkflow(input: {
     ) > 0.15
   )
     throw new Error('输出视频的画幅或音画时长不符合要求')
+  if (!final && compositionNames.includes('visuals.tsx')) {
+    const coverPath = join(cwd, 'native-cover.png')
+    await workflowCommand(
+      runtime.ffmpegPath,
+      [
+        '-nostdin',
+        '-v',
+        'error',
+        '-y',
+        '-ss',
+        String(Math.min(0.5, probed.duration / 2)),
+        '-i',
+        output,
+        '-frames:v',
+        '1',
+        coverPath,
+      ],
+      { cwd, signal, timeout: 30000 },
+    )
+    cover = await files.import(project.id, coverPath)
+  }
   return {
+    renderEngine: engine,
     file: await files.import(project.id, output),
     duration: probed.duration,
     width: frame.width,

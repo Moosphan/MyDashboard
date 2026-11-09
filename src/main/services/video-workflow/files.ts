@@ -22,6 +22,7 @@ export async function fileHash(path: string) {
 const MIME: Record<string, string> = {
   '.html': 'text/html',
   '.json': 'application/json',
+  '.tsx': 'text/plain',
   '.txt': 'text/plain',
   '.srt': 'text/plain',
   '.wav': 'audio/wav',
@@ -31,6 +32,12 @@ const MIME: Record<string, string> = {
   '.flac': 'audio/flac',
   '.mp4': 'video/mp4',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
 }
 export class WorkflowFiles {
   constructor(

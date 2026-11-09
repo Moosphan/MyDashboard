@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { createHash } from 'node:crypto'
 
 interface Migration {
   version: number
@@ -1019,6 +1020,39 @@ const migrations: Migration[] = [
         CREATE UNIQUE INDEX idx_douyin_active ON video_douyin_submissions((1))
           WHERE state IN ('queued','uploading','submitting');
       `)
+    },
+  },
+  {
+    version: 40,
+    name: '040_workflow_job_render_engine',
+    up: (db) => {
+      db.exec('ALTER TABLE video_workflow_jobs ADD COLUMN render_engine TEXT')
+      const jobs = db
+        .prepare(
+          `
+        SELECT j.id, j.project_id, j.stage, r.fingerprint
+        FROM video_workflow_jobs j JOIN video_workflow_requests r
+          ON r.request_id = 'job:' || j.id AND r.project_id = j.project_id
+        WHERE j.stage IN ('roughcut', 'render') AND j.state = 'succeeded'
+      `,
+        )
+        .all() as { id: string; project_id: string; stage: string; fingerprint: string }[]
+      const revisions = db.prepare(
+        'SELECT payload FROM video_workflow_revisions WHERE project_id=? AND stage=?',
+      )
+      const update = db.prepare('UPDATE video_workflow_jobs SET render_engine=? WHERE id=?')
+      for (const job of jobs) {
+        for (const row of revisions.all(job.project_id, job.stage) as { payload: string }[]) {
+          const payload = JSON.parse(row.payload)
+          const hash = createHash('sha256')
+            .update(JSON.stringify(['save', job.stage, payload]))
+            .digest('hex')
+          if (hash !== job.fingerprint) continue
+          const engine = payload.renderEngine ?? 'hyperframes'
+          if (engine === 'hyperframes' || engine === 'remotion') update.run(engine, job.id)
+          break
+        }
+      }
     },
   },
 ]

@@ -11,6 +11,7 @@ import {
   VIDEO_STAGE_LABELS,
   WORKFLOW_AGENT_LABELS,
   WORKFLOW_AGENT_OPTIONS,
+  VIDEO_RENDER_ENGINES,
   stageUnlocked,
   stageValue,
   projectVideoFormat,
@@ -33,6 +34,7 @@ import { AudioPanel, PublishingPanel, RenderPanel } from './MediaPanels'
 import { WorkflowDialog } from './WorkflowDialog'
 import { ExecutionLog } from './ExecutionLog'
 import { useWorkflowAgent } from './useWorkflowAgent'
+import { useRenderEngine } from './useRenderEngine'
 
 const stageDescriptions: Record<VideoStage, string> = {
   brief: '定义主题、目标观众、核心观点与目标时长。',
@@ -86,10 +88,17 @@ export function StageWorkspace({
     null,
   )
   const approveButton = useRef<HTMLButtonElement>(null)
+  const [renderEngine, setRenderEngine] = useRenderEngine(project)
   const saveButton = useRef<HTMLButtonElement>(null)
   const revision = project.stages[stage],
     unlocked = stageUnlocked(project, stage),
     running = project.jobs.find((job) => job.state === 'running')
+  const rendered = stageValue(project, stage === 'render' ? 'render' : 'roughcut')
+  const reviewRenderEngine = rendered
+    ? (rendered.renderEngine ?? 'hyperframes')
+    : stage === 'render'
+      ? (stageValue(project, 'roughcut')?.renderEngine ?? 'hyperframes')
+      : renderEngine
   const pendingMotionPlan =
     stage === 'roughcut' &&
     project.jobs.some(
@@ -160,6 +169,7 @@ export function StageWorkspace({
     expectedRevision: project.revision,
     requestId: crypto.randomUUID(),
     agentExecutor: executor,
+    ...(stage === 'roughcut' ? { renderEngine } : {}),
     executor: storyboardModification
       ? executor
       : (stage === 'storyboard' &&
@@ -858,7 +868,7 @@ export function StageWorkspace({
                 <span>生成方式</span>
                 <strong>
                   {['roughcut', 'render'].includes(stage)
-                    ? 'HyperFrames'
+                    ? VIDEO_RENDER_ENGINES[reviewRenderEngine]
                     : stage === 'audio'
                       ? '配音引擎 / 音频导入'
                       : stage === 'brief'
@@ -939,7 +949,6 @@ export function StageWorkspace({
               {['copy', 'storyboard', 'narration', 'publish'].includes(stage) && generationControls}
               {stage === 'audio' && (
                 <fieldset disabled={!unlocked || busy} className="workflow-section">
-                  {' '}
                   <div className="flex gap-3 flex-wrap">
                     <Button size="sm" disabled={Boolean(running)} onClick={() => generate()}>
                       生成逐镜配音
@@ -957,14 +966,37 @@ export function StageWorkspace({
               )}
               {(stage === 'roughcut' || stage === 'render') && (
                 <fieldset disabled={!unlocked || busy} className="workflow-section">
-                  {' '}
+                  {stage === 'roughcut' ? (
+                    <VoiceSelect
+                      label="合成引擎"
+                      value={renderEngine}
+                      onChange={setRenderEngine}
+                      disabled={Boolean(running)}
+                      options={Object.entries(VIDEO_RENDER_ENGINES).map(([value, label]) => ({
+                        value,
+                        label,
+                      }))}
+                    />
+                  ) : (
+                    <p className="workflow-muted">
+                      合成引擎：
+                      {
+                        VIDEO_RENDER_ENGINES[
+                          stageValue(project, 'roughcut')?.renderEngine ?? 'hyperframes'
+                        ]
+                      }{' '}
+                      · 沿用已审核粗剪工程。切换引擎请返回粗剪重新合成并审核。
+                    </p>
+                  )}
                   <Button
                     size="sm"
                     className="justify-self-start"
                     disabled={Boolean(running) || pendingMotionPlan}
                     onClick={() => generate()}
                   >
-                    {stage === 'render' ? '渲染最终成片' : '合成 HyperFrames 粗剪'}
+                    {stage === 'render'
+                      ? '渲染最终成片'
+                      : `合成 ${VIDEO_RENDER_ENGINES[renderEngine]} 粗剪`}
                   </Button>
                   {stage === 'roughcut' && pendingMotionPlan && (
                     <p className="workflow-muted" role="status">

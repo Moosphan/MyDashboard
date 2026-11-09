@@ -36,6 +36,8 @@ import {
   type RenderMusic,
   type WorkflowAgent,
   isWorkflowAgent,
+  isVideoRenderEngine,
+  type VideoRenderEngine,
   WORKFLOW_AGENT_LABELS,
 } from '../../../shared/video-workflow'
 import type { VoiceoverService } from '../voiceover/voiceover-service'
@@ -68,6 +70,8 @@ import { coverOptions, generatePublicationCover, verifyCoverImages } from './cov
 import { downloadOpenverseMusic, searchOpenverse } from './music'
 import type { MusicSearchResult } from '../../../shared/video-workflow'
 import { importFinishedVideo } from './import-video'
+import { REMOTION_PUBLIC_FILE } from './remotion'
+import { nativeRevisionPrompt } from './remotion-native'
 
 export interface WorkflowGeneration {
   projectId: string
@@ -88,6 +92,7 @@ export interface WorkflowGeneration {
   audioTrackId?: string
   reuseNarration?: boolean
   music?: RenderMusic
+  renderEngine?: VideoRenderEngine
 }
 function retainedRequirements(previous: string | undefined, feedback: string | undefined) {
   if (
@@ -418,6 +423,21 @@ export class VideoWorkflowService {
     )
       throw new Error('该步骤需要 CLI 或人工导入')
     const project = this.repository.get(input.projectId)
+    if (
+      input.renderEngine !== undefined &&
+      (!['roughcut', 'render'].includes(input.stage) || !isVideoRenderEngine(input.renderEngine))
+    )
+      throw new Error('请选择有效的视频合成引擎')
+    if (input.stage === 'roughcut' || input.stage === 'render') {
+      const sourceEngine = stageValue(project, 'roughcut')?.renderEngine ?? 'hyperframes'
+      if (input.stage === 'render' && input.renderEngine && input.renderEngine !== sourceEngine)
+        throw new Error('正式成片必须沿用粗剪的合成引擎；请先生成并审核对应引擎的粗剪')
+      input = {
+        ...input,
+        renderEngine:
+          input.stage === 'render' ? sourceEngine : (input.renderEngine ?? sourceEngine),
+      }
+    }
     if (isImportedVideo(project) && input.stage !== 'publish')
       throw new Error('外部成片项目仅支持发布资料和封面生成')
     const music = input.music === undefined ? undefined : validateRenderMusic(input.music)
@@ -532,6 +552,8 @@ export class VideoWorkflowService {
     const motion = input.motionPlanJobId
       ? this.repository.motionPlan(project.id, input.motionPlanJobId, input.expectedRevision)
       : undefined
+    if (motion && Boolean(motion.native) !== (input.renderEngine === 'remotion'))
+      throw new Error('修改计划与合成引擎不一致，请使用对应引擎重新生成计划')
     if (
       input.modification &&
       motionStoryboard?.motionPolicy &&
@@ -542,6 +564,7 @@ export class VideoWorkflowService {
       throw new Error('MG 已关闭或目标分镜已排除，请先调整分镜创作设置再修改动效')
     const needsInitialMotion =
       input.stage === 'roughcut' &&
+      input.renderEngine !== 'remotion' &&
       !motion &&
       !input.modification &&
       shouldGenerateInitialMotion(project)
@@ -584,6 +607,7 @@ export class VideoWorkflowService {
                 sourceVersion: project.stages[input.stage]?.version,
               }
             : undefined,
+      input.renderEngine,
     )
     if (job.state !== 'running' || this.running.has(job.id)) return job
     if (input.modification) this.repository.markMotionJob(job.id)
@@ -605,11 +629,12 @@ export class VideoWorkflowService {
           payload = existingNarration
         } else if (input.modification) {
           phase('分析修改意见，规划逐镜元素动效')
+          const native = input.renderEngine === 'remotion'
           const raw = (await runAgent(
             input.executor as WorkflowAgent,
             runtime,
             cwd,
-            motionPrompt(
+            (native ? nativeRevisionPrompt : motionPrompt)(
               motionProject,
               input.modification.feedback,
               input.modification.at,
@@ -625,6 +650,8 @@ export class VideoWorkflowService {
             { ...raw, ...input.modification },
             motionScenes(motionProject),
           )
+          if (native && !plan.native)
+            throw new Error('Remotion 修改计划缺少原生镜头创作说明，请重新生成')
           const scenes = stageValue(motionProject, 'storyboard')!
           if (plan.scenes.some((scene) => !sceneMotionEnabled(scenes, scene.sceneId)))
             throw new Error('修改计划包含已排除的分镜，请重新生成计划')
@@ -634,7 +661,7 @@ export class VideoWorkflowService {
               scenes.scenes.filter((scene) => sceneMotionEnabled(scenes, scene.id)).length
           )
             throw new Error('整片修改计划必须逐镜覆盖所有未排除分镜，请重新生成')
-          for (const scene of plan.scenes) {
+          for (const scene of native ? [] : plan.scenes) {
             phase('校验动效目标与分镜时长')
             const source = scenes.scenes.find((item) => item.id === scene.sceneId)!
             const prepared = await prepareMotionScene(
@@ -758,6 +785,7 @@ export class VideoWorkflowService {
           const templateId = stageValue(project, 'storyboard')?.styleTemplateId
           if (
             !renderMotion &&
+            input.renderEngine !== 'remotion' &&
             !stageValue(project, 'storyboard')?.motionPolicy &&
             input.stage === 'roughcut' &&
             (initialMotion || (!stageValue(project, 'roughcut') && templateId))
@@ -812,6 +840,23 @@ export class VideoWorkflowService {
             phase,
             motion: renderMotion,
             music,
+            renderEngine: input.renderEngine,
+            ...(input.renderEngine === 'remotion' && input.stage === 'roughcut'
+              ? {
+                  createNative: (prompt: string) =>
+                    runAgent(
+                      selectWorkflowAgent(
+                        runtime,
+                        isWorkflowAgent(input.executor) ? input.executor : input.agentExecutor,
+                      ),
+                      runtime,
+                      cwd,
+                      prompt,
+                      controller.signal,
+                      { onProgress: phase },
+                    ),
+                }
+              : {}),
           })
         } else {
           const rawSettings =
@@ -1132,13 +1177,22 @@ export class VideoWorkflowService {
           await this.files.verify(projectId, file),
           join(directory, safe.compositionNames[index]),
         )
-      writeFileSync(
-        join(directory, 'hyperframes.json'),
-        JSON.stringify({ name: basename(directory) }, null, 2),
-      )
+      if (safe.renderEngine === 'remotion') {
+        const publicDirectory = join(directory, 'public')
+        mkdirSync(publicDirectory)
+        for (const name of safe.compositionNames)
+          if (REMOTION_PUBLIC_FILE.test(name))
+            copyFileSync(join(directory, name), join(publicDirectory, name))
+      } else
+        writeFileSync(
+          join(directory, 'hyperframes.json'),
+          JSON.stringify({ name: basename(directory) }, null, 2),
+        )
       writeFileSync(
         join(directory, 'README.txt'),
-        '该目录是可编辑工程副本，不会修改 MyDashboard 已审核版本。使用已配置的 HyperFrames 0.8.181 运行 preview --background 打开 Studio；编辑后可在 Studio 导出或通过 render 导出。工程修改需要重新审核，当前不自动回导。',
+        safe.renderEngine === 'remotion'
+          ? '该目录是可编辑 Remotion 工程副本，不会修改 MyDashboard 已审核版本。在此目录运行 npm install，再运行 npm run studio 编辑预览或 npm run render 输出视频。原生工程视觉入口为 visuals.tsx，逐镜源码为 scene-N.tsx；历史工程使用 public/index.html。媒体位于 public，时间轴配置位于 composition.json，配音与字幕由 remotion.tsx 管理。使用官方 Remotion 4.0.541，适用条件参见 https://www.remotion.dev/license 。工程修改需要重新审核，当前不自动回导。'
+          : '该目录是可编辑工程副本，不会修改 MyDashboard 已审核版本。使用已配置的 HyperFrames 0.8.181 运行 preview --background 打开 Studio；编辑后可在 Studio 导出或通过 render 导出。工程修改需要重新审核，当前不自动回导。',
       )
       return directory
     } catch (error) {

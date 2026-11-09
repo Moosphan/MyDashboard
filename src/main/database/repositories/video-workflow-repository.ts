@@ -27,6 +27,8 @@ import {
   type WorkflowHistoryPage,
   inferVideoFormat,
   audioSourceRevisions,
+  isVideoRenderEngine,
+  type VideoRenderEngine,
 } from '../../../shared/video-workflow'
 
 function sceneChanges(
@@ -108,6 +110,7 @@ interface JobRow {
   request_id: string
   expected_revision: number
   executor: string
+  render_engine: VideoRenderEngine | null
   input_fingerprint: string
   state: WorkflowJob['state']
   phase: string
@@ -747,7 +750,13 @@ export class VideoWorkflowRepository {
     executor: string,
     inputFingerprint = '',
     operation?: WorkflowOperation,
+    renderEngine?: VideoRenderEngine,
   ): WorkflowJob {
+    if (
+      renderEngine !== undefined &&
+      (!['roughcut', 'render'].includes(stage) || !isVideoRenderEngine(renderEngine))
+    )
+      throw new Error('任务合成引擎无效')
     return this.db.transaction(() => {
       const previous = this.db
         .prepare('SELECT * FROM video_workflow_jobs WHERE request_id=?')
@@ -757,6 +766,7 @@ export class VideoWorkflowRepository {
           previous.project_id !== id ||
           previous.stage !== stage ||
           previous.executor !== executor ||
+          (previous.render_engine ?? undefined) !== renderEngine ||
           previous.input_fingerprint !== inputFingerprint
         )
           throw new Error('请求 ID 已用于其他任务')
@@ -770,7 +780,7 @@ export class VideoWorkflowRepository {
         now = new Date().toISOString()
       this.db
         .prepare(
-          'INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,error,created_at,updated_at,operation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+          'INSERT INTO video_workflow_jobs(id,project_id,stage,request_id,expected_revision,executor,input_fingerprint,state,phase,error,created_at,updated_at,operation,render_engine) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         )
         .run(
           jobId,
@@ -786,6 +796,7 @@ export class VideoWorkflowRepository {
           now,
           now,
           operation ? JSON.stringify(operation) : null,
+          renderEngine ?? null,
         )
       return this.job(jobId)!
     })()
@@ -798,6 +809,7 @@ export class VideoWorkflowRepository {
       requestId: row.request_id,
       expectedRevision: row.expected_revision,
       executor: row.executor,
+      ...(row.render_engine ? { renderEngine: row.render_engine } : {}),
       state: row.state,
       phase: row.phase,
       error: row.error,
